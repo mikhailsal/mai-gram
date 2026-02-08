@@ -7,7 +7,7 @@ todos:
     status: completed
   - id: phase-1-foundation
     content: "Phase 1: Project skeleton, DB models, config, pyproject.toml"
-    status: pending
+    status: completed
   - id: phase-2-llm
     content: "Phase 2: OpenRouter LLM client with provider abstraction"
     status: pending
