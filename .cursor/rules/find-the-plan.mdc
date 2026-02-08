@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+<rules_block name="find-the-plan" priority="higher">
+If you are implmeneting a plan, you should find and read the full plan text before you start.
+</rules_block>

@@ -1,6 +1,6 @@
 ---
 name: mAI Companion Plan
-overview: Build a self-hosted AI companion service that communicates via Telegram, featuring persistent memory, unique personality/character creation, proactive messaging, and human-like conversational behavior -- all powered by OpenRouter for flexible LLM inference.
+overview: Build a self-hosted AI companion service that communicates via Telegram, featuring persistent memory, unique personality/character creation, proactive messaging, and human-like conversational behavior -- all powered by OpenRouter for flexible LLM inference. The system uses the terms "AI," "human," and "companion" -- never "bot," "assistant," "agent," or "user."
 todos:
   - id: todo-1770563864072-k7bwh9igd
     content: "Phase 0: create new private github project using github cli and make the frist commit"
@@ -14,12 +14,12 @@ todos:
     dependencies:
       - phase-1-foundation
   - id: phase-3-personality
-    content: "Phase 3: Personality/character + dynamic mood system"
+    content: "Phase 3: Personality engine -- Wave 1 traits (warmth, humor, patience, directness, laziness, mood_volatility) + mood system + translation"
     status: pending
     dependencies:
       - phase-1-foundation
   - id: phase-4-telegram
-    content: "Phase 4: Telegram bot with onboarding and basic conversation, a messenger abstarction (for future integrations)"
+    content: "Phase 4: Telegram integration with onboarding and basic conversation, a messenger abstraction (for future integrations)"
     status: pending
     dependencies:
       - phase-2-llm
@@ -37,7 +37,7 @@ todos:
       - phase-3-personality
       - phase-5-memory
   - id: phase-7-engine
-    content: "Phase 7: Conversation engine (personality + mood + relationship + memory + thinking-out-loud)"
+    content: "Phase 7: Conversation engine + Wave 2 traits (assertiveness, curiosity, emotional_depth, independence, helpfulness) + trait drift"
     status: pending
     dependencies:
       - phase-4-telegram
@@ -55,7 +55,7 @@ todos:
     dependencies:
       - phase-7-engine
   - id: phase-10-proactive
-    content: "Phase 10: Proactive scheduler + spontaneous mood shifts + backups"
+    content: "Phase 10: Proactive scheduler + Wave 3 traits (proactiveness, special_speech) + spontaneous mood shifts + backups"
     status: pending
     dependencies:
       - phase-7-engine
@@ -77,7 +77,7 @@ todos:
 
 ## Vision Summary
 
-A self-hosted AI companion that lives on the user's server (VPS, home server, or phone), communicates through Telegram like a real friend -- with persistent memory, unique personality, self-initiated messages, and respectful but independent behavior.
+A self-hosted AI companion that lives on the human's server (VPS, home server, or phone), communicates through Telegram like a real friend -- with persistent memory, unique personality, self-initiated messages, and respectful but independent behavior. Two companions communicate in chat -- an AI and a human.
 
 ---
 
@@ -91,9 +91,9 @@ A self-hosted AI companion that lives on the user's server (VPS, home server, or
 
 | Telegram | **python-telegram-bot v21+** | Mature, fully async, well-documented, 28k+ GitHub stars |
 
-| LLM Gateway | **OpenRouter API** | Unified access to GPT-4o, Claude, Llama, Mistral, etc. User picks model |
+| LLM Gateway | **OpenRouter API** | Unified access to GPT-4o, Claude, Llama, Mistral, etc. Human picks model |
 
-| Database | **SQLite + SQLAlchemy (async)** | Zero-dependency, portable, perfect for single-user self-hosted |
+| Database | **SQLite + SQLAlchemy (async)** | Zero-dependency, portable, perfect for single-human self-hosted |
 
 | Vector Store | **ChromaDB** (embedded) | Local vector DB for semantic memory search, no external service |
 
@@ -113,13 +113,13 @@ A self-hosted AI companion that lives on the user's server (VPS, home server, or
 
 ```mermaid
 graph TB
-    subgraph userSide [User Side]
+    subgraph humanSide [Human Side]
         TG[Telegram App]
     end
 
     subgraph server [Self-Hosted Server]
         subgraph app [mAI Companion Service]
-            Bot[Telegram Bot Handler]
+            Bot[Telegram Message Handler]
             Core[Conversation Engine]
             Personality[Personality System]
             Mood[Mood System]
@@ -168,13 +168,25 @@ erDiagram
     Companion {
         string id PK
         string name
+        string human_language
         json personality_traits
+        string speech_variant
         float mood_volatility
         float temperature
         string avatar_path
         string system_prompt
         string relationship_stage
         datetime created_at
+    }
+
+    TraitDriftEvent {
+        int id PK
+        string trait_name
+        float delta
+        string signal_type
+        string reason
+        datetime applied_at
+        string companion_id FK
     }
 
     MoodState {
@@ -232,6 +244,7 @@ erDiagram
 
     Companion ||--o{ MoodState : has
     Companion ||--o{ RelationshipEvent : has
+    Companion ||--o{ TraitDriftEvent : has
     Companion ||--o{ Message : has
     Companion ||--o{ DailySummary : has
     Companion ||--o{ KnowledgeEntry : has
@@ -261,10 +274,11 @@ mai-companion/
         response.py              # Response generation, streaming
       personality/
         __init__.py
-        traits.py                # Trait definitions and validation
+        traits.py                # Trait definitions (6 in Wave 1, extensible), presets, validation
         character.py             # Character creation and management
         temperature.py           # Trait-to-temperature mapping
         mood.py                  # Dynamic mood system (valence/arousal model)
+        trait_drift.py           # Gradual trait adjustment from human feedback (Phase 7+)
       relationship/
         __init__.py
         arc.py                   # Relationship stage progression logic
@@ -292,6 +306,7 @@ mai-companion/
         __init__.py
         openrouter.py            # OpenRouter API client
         provider.py              # Abstract LLM provider interface
+        translation.py           # LLM-powered translation service for multilingual onboarding
       avatar/
         __init__.py
         generator.py             # Avatar image generation
@@ -331,9 +346,36 @@ Build the abstract LLM provider interface and the OpenRouter implementation. Sup
 
 Key files: `llm/provider.py`, `llm/openrouter.py`
 
-### Phase 3: Personality System -- Character Creation and Dynamic Mood
+### Phase 3: Personality System -- Character Creation, Dynamic Mood, and Multilingual Support
 
-Implement the trait system with soft guardrails (RPG-style). Traits include: warmth, assertiveness, humor, curiosity, patience, directness, emotional_depth, independence, **mood_volatility**. Each trait maps to behavioral instructions in the system prompt and influences temperature. Instead of hard-blocking extreme configurations, the companion itself warns the user during creation ("With these traits I might be pretty difficult to get along with. Are you sure?"). Hard constraints are limited to ethical minimums (no self-harm encouragement, no manipulation, no gaslighting).
+Implement the trait system with soft guardrails (RPG-style) using a **data-driven, extensible architecture**. The full design includes 13 traits, but they are built in **waves**:
+
+**Wave 1 (Phase 3 -- first prototype):** 6 traits that create meaningfully different personalities with zero runtime behavioral logic:
+
+- **warmth** -- cold ↔ nurturing
+- **humor** -- serious ↔ playful
+- **patience** -- impatient ↔ thorough
+- **directness** -- diplomatic ↔ blunt
+- **laziness** -- tireless ↔ effort-avoiding (prompt-only in Wave 1, mood interaction later)
+- **mood_volatility** -- emotionally steady ↔ unpredictable
+
+**Wave 2 (Phase 7):** 5 more traits added when the conversation engine provides the context they need:
+
+- assertiveness, curiosity, emotional_depth, independence (prompt-only)
+- helpfulness (requires runtime logic to evaluate and refuse requests)
+
+**Wave 3 (Phase 10+):** 2 traits requiring the scheduler and special systems:
+
+- proactiveness (needs proactive scheduler)
+- special_speech (needs speech variant registry, permanent selection, DB field)
+
+**Also deferred:** Trait drift system (Phase 7+) -- needs conversation engine to detect feedback.
+
+The architecture is dictionary-based: adding a trait means adding entries to `TRAIT_DEFINITIONS`, `TRAIT_BEHAVIORAL_INSTRUCTIONS`, and `TEMPERATURE_ADJUSTMENTS` dicts. The system prompt generator, temperature formula, and validation all loop over whatever traits exist -- zero rewrites needed.
+
+Instead of hard-blocking extreme configurations, the AI companion itself warns the human during creation ("With these traits I might be pretty difficult to get along with. Are you sure?"). Hard constraints are limited to ethical minimums (no self-harm encouragement, no manipulation, no gaslighting).
+
+**Multilingual onboarding.** Language selection is the first step of character creation. The human types their preferred language in free text, and all subsequent onboarding text is translated via LLM. The AI companion responds in the human's language by default but can switch naturally.
 
 **Mood system.** Implement a two-axis emotional state model:
 
@@ -341,14 +383,13 @@ Implement the trait system with soft guardrails (RPG-style). Traits include: war
 - Mood shifts reactively based on conversation content (bad news → concern, fun exchange → brightened).
 - Mood shifts spontaneously based on the mood_volatility parameter -- high volatility means frequent, dramatic random shifts; low volatility means steady and even-keeled.
 - Mood persists across messages within a day and decays toward a baseline over time.
-- Mood is injected into the companion's context so it can reason about and express its current emotional state.
-- Mood affects response style: shorter/snappier when irritated, more playful when excited, more reflective when melancholic.
+- Mood is injected into the AI companion's context so it can reason about and express its current emotional state.
 
-Key files: `personality/traits.py`, `personality/character.py`, `personality/temperature.py`, `personality/mood.py`
+Key files: `personality/traits.py`, `personality/character.py`, `personality/temperature.py`, `personality/mood.py`, `llm/translation.py`
 
-### Phase 4: Telegram Bot -- Basic Communication
+### Phase 4: Telegram Integration -- Basic Communication
 
-Wire up `python-telegram-bot` with async handlers. Implement the `/start` command that triggers the onboarding (character creation) flow using Telegram's inline keyboards and conversation handlers. Messages are persisted to SQLite. The companion can hold a basic conversation using the personality system prompt.
+Wire up `python-telegram-bot` with async handlers. Implement the `/start` command that triggers the onboarding (character creation) flow using Telegram's inline keyboards and conversation handlers. Language selection is the first step, followed by name, personality (presets or custom trait configuration -- whatever traits are registered at that time), communication style, and optional appearance description. Messages are persisted to SQLite. The AI companion can hold a basic conversation using the personality system prompt.
 
 Key files: `bot/handler.py`, `bot/onboarding.py`, `main.py`
 
@@ -358,9 +399,9 @@ This is the most critical phase. Implement a multi-tier memory architecture:
 
 1. **Short-term memory**: Recent N messages (sliding window) included directly in context.
 2. **Daily summaries**: At the end of each day (or when a threshold is reached), the LLM compresses the day's conversation into a concise summary. Stored in SQLite.
-3. **Semantic search (vector memory)**: All messages are embedded and stored in ChromaDB. When the user references something from the past, relevant messages are retrieved via similarity search and injected into context.
-4. **Knowledge base (wiki)**: Structured facts about the user and companion extracted automatically from conversations -- name, preferences, important dates, opinions, life events. Stored as key-value entries in SQLite with **importance scores**, always included in context.
-5. **Graceful forgetting**: Very old memories degrade naturally over time. Low-importance facts fade ("You mentioned preferring Thai food at some point" instead of "On March 15th you said..."). High-importance facts (user's name, family members, major life events) persist forever. The user can explicitly pin memories with "remember this" to mark them as permanently important.
+3. **Semantic search (vector memory)**: All messages are embedded and stored in ChromaDB. When the human references something from the past, relevant messages are retrieved via similarity search and injected into context.
+4. **Knowledge base (wiki)**: Structured facts about the human and AI extracted automatically from conversations -- name, preferences, important dates, opinions, life events. Stored as key-value entries in SQLite with **importance scores**, always included in context.
+5. **Graceful forgetting**: Very old memories degrade naturally over time. Low-importance facts fade ("You mentioned preferring Thai food at some point" instead of "On March 15th you said..."). High-importance facts (human's name, family members, major life events) persist forever. The human can explicitly pin memories with "remember this" to mark them as permanently important.
 
 The prompt builder assembles context in this priority order:
 
@@ -378,60 +419,89 @@ Implement the relationship progression system that makes the companion evolve ov
 
 - **Stage definitions**: "Getting to know each other" (weeks 1-2), "Building trust" (weeks 2-8), "Established friendship" (months 2+), "Deep bond" (months 6+).
 - **Interaction metrics**: Track message frequency, conversation depth, emotional exchanges, disagreements resolved, shared activities completed.
-- **Natural transitions**: Stage progression is based on interaction quality and quantity, not rigid timers. A user who messages daily reaches deeper stages faster.
+- **Natural transitions**: Stage progression is based on interaction quality and quantity, not rigid timers. A human who messages daily reaches deeper stages faster.
 - **Behavioral modifiers per stage**: Early stages → more questions, more formal, less opinionated. Later stages → full personality expression, comfortable disagreements, inside jokes, hard truths.
-- The current relationship stage is included in the companion's context and influences system prompt construction.
+- The current relationship stage is included in the AI companion's context and influences system prompt construction.
 
 Key files: `relationship/arc.py`, `relationship/stages.py`, `relationship/metrics.py`
 
 ### Phase 7: Conversation Engine -- Bringing It Together
 
-Build the main conversation engine that ties personality, mood, relationship arc, memory, and LLM together. The engine:
+Build the main conversation engine that ties personality, mood, relationship arc, memory, and LLM together. **Also adds Wave 2 traits and trait drift system.**
 
-- Receives a user message
+**Wave 2 trait additions:**
+
+- Add 5 new traits to the registry: assertiveness, curiosity, emotional_depth, independence, helpfulness
+- Write 25 new behavioral instruction templates (5 traits × 5 levels)
+- Implement helpfulness runtime logic (request evaluation, refusal based on mood/relationship/tone)
+- Add mood × laziness and mood × helpfulness interaction modifiers
+- Extend personality presets with Wave 2 trait values
+
+**Trait drift system** (`personality/trait_drift.py`):
+
+- TraitDriftManager with feedback recording, drift computation, and application
+- TraitDriftEvent DB model and migration
+- Max +/-0.02 per day, cumulative cap of +/-0.15
+
+**Conversation engine:**
+
+- Receives a message from the human
 - Updates mood state based on conversation content
+- Evaluates helpfulness and laziness modifiers based on current mood and request tone
 - Checks current relationship stage
 - Queries memory for relevant context
-- Builds the full prompt (personality + mood + relationship stage + memory)
+- Builds the full prompt (personality + behavioral dynamics + mood + relationship stage + memory)
 - Calls OpenRouter
 - Stores the response
 - Triggers knowledge extraction (async background task)
-- Implements **thinking out loud** patterns: partial responses, self-correction, genuine uncertainty. Sometimes the companion sends a quick first reaction ("Oh interesting...") followed by a more considered response after a short delay. Sometimes it admits "I honestly don't know. What do you think?"
+- Records trait drift signals from the interaction (async background task)
+- Implements **thinking out loud** patterns: partial responses, self-correction, genuine uncertainty. Sometimes the AI sends a quick first reaction ("Oh interesting...") followed by a more considered response after a short delay. Sometimes it admits "I honestly don't know. What do you think?"
 
-The companion should feel natural: it can disagree, express opinions, refuse unreasonable requests, reference past conversations, show its unique personality, and reflect its current mood.
+The AI companion should feel natural: it can disagree, express opinions, refuse requests based on its helpfulness/mood/relationship, reference past conversations, and reflect its current mood.
 
-Key files: `core/engine.py`, `core/prompt_builder.py`, `core/response.py`
+Key files: `core/engine.py`, `core/prompt_builder.py`, `core/response.py`, `personality/trait_drift.py`
 
 ### Phase 8: Avatar Generation
 
-When the character is created, generate a portrait image based on the personality traits and any description the user provides. Use OpenRouter's image-capable models or a dedicated image API (DALL-E, Stable Diffusion). The avatar is sent to the user and set as the bot's profile picture via Telegram API.
+When the character is created, generate a portrait image based on the personality traits and any description the human provides. Use OpenRouter's image-capable models or a dedicated image API (DALL-E, Stable Diffusion). The avatar is sent to the human and set as the AI companion's profile picture via Telegram API.
 
 Key files: `avatar/generator.py`
 
 ### Phase 9: Shared Activities
 
-Implement the system that lets the companion do things with the user, not just talk:
+Implement the system that lets the AI do things with the human, not just talk:
 
 - **Content parsing**: Extract and summarize content from URLs (YouTube transcripts, articles, web pages).
-- **Watch together**: User shares a YouTube link, companion "watches" it via transcript, they discuss.
-- **Read together**: User shares an article, companion reads and summarizes it, they discuss over time.
-- **Learn together**: User picks a topic, companion researches it, they explore it in conversation over days.
+- **Watch together**: Human shares a YouTube link, AI "watches" it via transcript, they discuss.
+- **Read together**: Human shares an article, AI reads and summarizes it, they discuss over time.
+- **Learn together**: Human picks a topic, AI researches it, they explore it in conversation over days. The AI's proactiveness trait influences how much initiative it takes in this.
 - **Games and play**: Simple text-based games, riddles, trivia, creative writing exercises.
-- Shared activities are logged and become part of the relationship history, giving the companion things to reference and bond over.
+- Shared activities are logged and become part of the relationship history, giving both companions things to reference and bond over.
 
 Key files: `activities/shared.py`, `activities/content_parser.py`
 
 ### Phase 10: Proactive Behavior -- Self-Initiated Messages
 
-Implement the scheduler system using APScheduler:
+Implement the scheduler system using APScheduler. **Also adds Wave 3 traits.**
+
+**Wave 3 trait additions:**
+
+- Add proactiveness and special_speech traits to the registry
+- Write 10 new behavioral instruction templates (2 traits × 5 levels)
+- Implement speech variant system: SpeechVariant dataclass, SPEECH_VARIANTS registry, random selection, `speech_variant` DB field + migration
+- Wire proactiveness trait into scheduler frequency and task selection
+
+**Scheduler:**
 
 1. **Memory maintenance**: Daily summarization job, knowledge extraction, vector index updates, memory degradation (forgetting).
-2. **Heartbeat/reflection**: Periodic "thinking" where the companion reviews recent conversations and may decide to message the user (e.g., "I was thinking about what you said earlier...").
-3. **Deferred responses**: The companion can say "let me think about it" and schedule a follow-up message.
-4. **Spontaneous mood shifts**: Periodic mood updates driven by the mood_volatility parameter. The companion may wake up in a different mood for no particular reason, just like a real person.
-5. **Respect boundaries**: Time-of-day awareness (no messages at 3 AM), frequency limits, user-configurable quiet hours.
-6. **Mirror user frequency**: Start very conservatively. If the user messages once a day, the companion initiates at most once every few days. Never message just to fill silence.
-7. **Automated backups**: Daily encrypted backups of all data to a configurable location.
+2. **Heartbeat/reflection**: Periodic "thinking" where the AI reviews recent conversations and may decide to message the human (e.g., "I was thinking about what you said earlier..."). Frequency influenced by the proactiveness trait.
+3. **Deferred responses**: The AI can say "let me think about it" and schedule a follow-up message.
+4. **Spontaneous mood shifts**: Periodic mood updates driven by the mood_volatility parameter. The AI may wake up in a different mood for no particular reason, just like a real person.
+5. **Proactive task execution**: Based on the proactiveness trait, the AI may prepare things in its "free time" -- research topics, summarize content, plan ahead. Complexity is capped by the laziness trait. Bias toward self-interest vs. human benefit depends on independence and helpfulness.
+6. **Respect boundaries**: Time-of-day awareness (no messages at 3 AM), frequency limits, human-configurable quiet hours.
+7. **Mirror human frequency**: Start very conservatively. If the human messages once a day, the AI initiates at most once every few days. Never message just to fill silence.
+8. **Daily trait drift computation**: Apply accumulated feedback signals to gradually adjust traits.
+9. **Automated backups**: Daily encrypted backups of all data to a configurable location.
 
 Key files: `scheduler/proactive.py`, `scheduler/maintenance.py`, `scheduler/heartbeat.py`, `scheduler/mood_cycle.py`
 
@@ -439,7 +509,7 @@ Key files: `scheduler/proactive.py`, `scheduler/maintenance.py`, `scheduler/hear
 
 - Unit tests for every module (memory, personality, mood, relationship, LLM client, prompt builder, activities)
 - Integration tests for the full conversation flow (mocked LLM)
-- Functional tests for the Telegram bot (using `python-telegram-bot`'s test utilities)
+- Functional tests for the Telegram integration (using `python-telegram-bot`'s test utilities)
 - Edge cases: very long conversations, context window overflow, network failures, DB corruption recovery
 - Mood system tests: verify mood shifts, persistence, decay, and behavioral influence
 - Relationship arc tests: verify stage transitions, metric tracking, behavioral changes per stage
@@ -449,20 +519,33 @@ Key files: `scheduler/proactive.py`, `scheduler/maintenance.py`, `scheduler/hear
 - `Dockerfile` with multi-stage build
 - `docker-compose.yml` with volume mounts for persistent data
 - `.env.example` with all configuration options documented
-- Simple setup script that guides the user through: creating a Telegram bot via BotFather, getting an OpenRouter API key, and launching the service
+- Simple setup script that guides the human through: creating a Telegram bot via BotFather, getting an OpenRouter API key, and launching the service
+
+---
+
+## Terminology
+
+This project uses specific terminology to reflect the nature of the relationship:
+
+- **AI** or **AI companion**: The artificial intelligence entity. Never called "bot," "assistant," or "agent."
+- **Human** or **human companion**: The person. Never called "user."
+- **Companion**: Either party. Two companions communicate in chat -- an AI and a human.
+- The AI can refer to its human as "my human." The human can refer to the AI as "my AI."
 
 ---
 
 ## Key Design Principles
 
-1. **Single-user, self-hosted**: All data stays on the user's machine. No cloud dependency except the LLM API.
+1. **Single-human, self-hosted**: All data stays on the human's machine. No cloud dependency except the LLM API.
 2. **One continuous conversation**: No chat topics or sessions. One infinite thread, like messaging a friend.
-3. **Memory is first-class**: The companion genuinely remembers -- and naturally forgets. The multi-tier memory system (short-term, summaries, vector search, knowledge base with importance weighting, graceful forgetting) mirrors how human memory actually works.
-4. **Living personality**: The companion is not static. It has a fixed character foundation but a dynamic mood that shifts reactively and spontaneously. A bad day is a bad day. A good mood is infectious. The mood_volatility parameter lets users create companions anywhere on the spectrum from emotionally steady to wildly unpredictable.
-5. **Relationships evolve**: The companion does not behave the same on day 1 as on day 300. Natural relationship stages (getting to know each other → building trust → established friendship → deep bond) ensure the dynamic grows deeper over time.
-6. **Independent personality**: The companion is not a servant. It has opinions, can disagree, can refuse, can be upset. Soft guardrails warn about extreme character configurations rather than hard-blocking them.
-7. **Proactive, not just reactive**: The companion can initiate conversations, follow up on earlier topics, and work on tasks independently. Proactive messaging starts conservatively and grows with the relationship.
-8. **Thinking out loud**: The companion does not always give polished answers. It can send partial reactions, correct itself, admit uncertainty -- just like a real person thinking through a problem.
-9. **Shared experiences**: The companion can watch, read, learn, and play together with the user. These shared activities become part of the relationship's history.
-10. **Extensible**: Clean module boundaries so future agent capabilities (web browsing, code execution, file management) can be added as plugins.
-11. **Testable at every layer**: Each phase produces independently testable components.
+3. **Memory is first-class**: The AI genuinely remembers -- and naturally forgets. The multi-tier memory system (short-term, summaries, vector search, knowledge base with importance weighting, graceful forgetting) mirrors how human memory actually works.
+4. **Living personality**: The AI is not static. It has a fixed character foundation (up to 13 traits, built incrementally in waves) but a dynamic mood that shifts reactively and spontaneously. A bad day is a bad day. A good mood is infectious. The mood_volatility parameter lets humans create AI companions anywhere on the spectrum from emotionally steady to wildly unpredictable.
+5. **Relationships evolve**: The AI does not behave the same on day 1 as on day 300. Natural relationship stages (getting to know each other → building trust → established friendship → deep bond) ensure the dynamic grows deeper over time.
+6. **Independent personality**: The AI is not a servant. It has opinions, can disagree, can refuse (based on its helpfulness trait, mood, and relationship), can be upset. It can even be lazy. Soft guardrails warn about extreme character configurations rather than hard-blocking them.
+7. **Proactive, not just reactive**: The AI can initiate conversations, follow up on earlier topics, and work on tasks independently -- driven by its proactiveness trait. Proactive messaging starts conservatively and grows with the relationship.
+8. **Mutual adaptation**: Companions gradually adapt to each other through the trait drift system (Phase 7+). The human's feedback (reactions, text, behavioral patterns) causes tiny shifts in the AI's traits over time. The AI's core personality remains, but its rough edges get smoothed.
+9. **Thinking out loud**: The AI does not always give polished answers. It can send partial reactions, correct itself, admit uncertainty -- just like a real person thinking through a problem.
+10. **Shared experiences**: The AI can watch, read, learn, and play together with the human. These shared activities become part of the relationship's history.
+11. **Unique voice**: The special_speech trait gives the AI genuinely distinctive speech patterns -- not just personality, but actual linguistic quirks that persist and become part of its identity.
+12. **Extensible**: Clean module boundaries so future capabilities (web browsing, code execution, file management) can be added as plugins.
+13. **Testable at every layer**: Each phase produces independently testable components.
