@@ -52,6 +52,3 @@ htmlcov/
 
 # ruff
 .ruff_cache/
-
-# Cursor
-.cursor/
