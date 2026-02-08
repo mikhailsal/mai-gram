@@ -9,8 +9,8 @@ todos:
     content: "Phase 1: Project skeleton, DB models, config, pyproject.toml"
     status: completed
   - id: phase-2-llm
-    content: "Phase 2: OpenRouter LLM client with provider abstraction"
-    status: pending
+    content: "Phase 2: OpenRouter LLM client with provider abstraction (for other providers in the future)"
+    status: completed
     dependencies:
       - phase-1-foundation
   - id: phase-3-personality
@@ -19,7 +19,7 @@ todos:
     dependencies:
       - phase-1-foundation
   - id: phase-4-telegram
-    content: "Phase 4: Telegram bot with onboarding and basic conversation"
+    content: "Phase 4: Telegram bot with onboarding and basic conversation, a messenger abstarction (for future integrations)"
     status: pending
     dependencies:
       - phase-2-llm

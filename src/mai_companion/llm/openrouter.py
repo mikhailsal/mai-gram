@@ -1,0 +1,388 @@
+"""OpenRouter API client.
+
+Implements the ``LLMProvider`` interface using the OpenRouter service
+(https://openrouter.ai), which exposes an OpenAI-compatible
+``/chat/completions`` endpoint and routes requests to many models
+(GPT-4o, Claude, Llama, Mistral, …).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, AsyncIterator
+
+import httpx
+
+from mai_companion.llm.provider import (
+    ChatMessage,
+    LLMAuthenticationError,
+    LLMContextLengthError,
+    LLMError,
+    LLMModelNotFoundError,
+    LLMProviderError,
+    LLMRateLimitError,
+    LLMResponse,
+    StreamChunk,
+    TokenUsage,
+    LLMProvider,
+)
+
+logger = logging.getLogger(__name__)
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_TIMEOUT = 120.0  # seconds – generous for large generations
+
+
+class OpenRouterProvider(LLMProvider):
+    """LLM provider backed by the OpenRouter API.
+
+    Parameters
+    ----------
+    api_key:
+        OpenRouter API key.
+    default_model:
+        Model identifier used when ``model`` is not passed to individual calls
+        (e.g. ``"openai/gpt-4o"``).
+    base_url:
+        Override the API base URL (useful for tests / proxies).
+    http_referer:
+        Optional ``HTTP-Referer`` sent with every request (OpenRouter
+        recommends this for analytics).
+    app_title:
+        Optional ``X-Title`` header (displayed on the OpenRouter dashboard).
+    timeout:
+        Request timeout in seconds.
+    max_retries:
+        How many times to retry on transient 5xx / network errors.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        default_model: str = "openai/gpt-4o",
+        base_url: str = OPENROUTER_BASE_URL,
+        http_referer: str | None = None,
+        app_title: str = "mAI Companion",
+        timeout: float = DEFAULT_TIMEOUT,
+        max_retries: int = 2,
+    ) -> None:
+        if not api_key:
+            raise LLMAuthenticationError("OpenRouter API key must not be empty")
+
+        self._api_key = api_key
+        self._default_model = default_model
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._max_retries = max_retries
+
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if http_referer:
+            headers["HTTP-Referer"] = http_referer
+        if app_title:
+            headers["X-Title"] = app_title
+
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            headers=headers,
+            timeout=httpx.Timeout(timeout),
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @property
+    def default_model(self) -> str:
+        """Currently configured default model identifier."""
+        return self._default_model
+
+    async def generate(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        """Send a non-streaming chat-completion request."""
+        payload = self._build_payload(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+        )
+
+        data = await self._post_with_retry("/chat/completions", payload)
+
+        return self._parse_response(data)
+
+    async def generate_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream a chat-completion response as SSE chunks."""
+        payload = self._build_payload(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+
+        async for chunk in self._stream_with_retry("/chat/completions", payload):
+            yield chunk
+
+    async def count_tokens(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+    ) -> int:
+        """Estimate token count using a simple heuristic.
+
+        A rough rule of thumb for English text is ~4 characters per token.
+        We also account for the per-message overhead that the OpenAI
+        chat format adds (~4 tokens per message for role metadata).
+        """
+        total_chars = 0
+        for msg in messages:
+            # ~4 tokens of overhead per message (role, delimiters)
+            total_chars += 16  # 4 tokens × 4 chars/token
+            total_chars += len(msg.content)
+        return total_chars // 4
+
+    async def close(self) -> None:
+        """Shut down the underlying HTTP client."""
+        await self._client.aclose()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_payload(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None,
+        temperature: float,
+        max_tokens: int | None,
+        stream: bool,
+    ) -> dict[str, Any]:
+        """Build the JSON request body."""
+        payload: dict[str, Any] = {
+            "model": model or self._default_model,
+            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "stream": stream,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        return payload
+
+    # -- Non-streaming request with retry ---------------------------------
+
+    async def _post_with_retry(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """POST *path* with automatic retry on transient failures."""
+        last_exc: Exception | None = None
+
+        for attempt in range(1, self._max_retries + 2):  # +2 because range is exclusive
+            try:
+                response = await self._client.post(path, json=payload)
+                self._raise_for_status(response)
+                return response.json()  # type: ignore[no-any-return]
+            except (LLMRateLimitError, LLMProviderError) as exc:
+                last_exc = exc
+                if attempt <= self._max_retries:
+                    logger.warning(
+                        "OpenRouter request failed (attempt %d/%d): %s",
+                        attempt,
+                        self._max_retries + 1,
+                        exc,
+                    )
+                    continue
+                raise
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if attempt <= self._max_retries:
+                    logger.warning(
+                        "Network error (attempt %d/%d): %s",
+                        attempt,
+                        self._max_retries + 1,
+                        exc,
+                    )
+                    continue
+                raise LLMProviderError(f"Network error after {attempt} attempts: {exc}") from exc
+
+        # Should not be reached, but just in case
+        raise LLMProviderError(f"Request failed: {last_exc}") from last_exc  # pragma: no cover
+
+    # -- Streaming request with retry --------------------------------------
+
+    async def _stream_with_retry(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream SSE from *path* with automatic retry on transient failures."""
+        last_exc: Exception | None = None
+
+        for attempt in range(1, self._max_retries + 2):
+            try:
+                async for chunk in self._stream_sse(path, payload):
+                    yield chunk
+                return  # successful stream completed
+            except (LLMRateLimitError, LLMProviderError) as exc:
+                last_exc = exc
+                if attempt <= self._max_retries:
+                    logger.warning(
+                        "OpenRouter stream failed (attempt %d/%d): %s",
+                        attempt,
+                        self._max_retries + 1,
+                        exc,
+                    )
+                    continue
+                raise
+            except httpx.TransportError as exc:
+                last_exc = exc
+                if attempt <= self._max_retries:
+                    logger.warning(
+                        "Network error during stream (attempt %d/%d): %s",
+                        attempt,
+                        self._max_retries + 1,
+                        exc,
+                    )
+                    continue
+                raise LLMProviderError(
+                    f"Network error after {attempt} attempts: {exc}"
+                ) from exc
+
+        raise LLMProviderError(f"Stream failed: {last_exc}") from last_exc  # pragma: no cover
+
+    async def _stream_sse(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[StreamChunk]:
+        """Low-level SSE streaming."""
+        async with self._client.stream("POST", path, json=payload) as response:
+            # Check the initial HTTP status *before* consuming the body
+            self._raise_for_status(response)
+
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+
+                # OpenAI-compatible SSE format: "data: {...}" or "data: [DONE]"
+                if not line.startswith("data: "):
+                    continue
+
+                data_str = line[len("data: "):]
+
+                if data_str == "[DONE]":
+                    return
+
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    logger.debug("Skipping non-JSON SSE line: %s", data_str[:100])
+                    continue
+
+                # Handle inline error objects that some providers send
+                if "error" in data:
+                    error_msg = data["error"]
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    raise LLMProviderError(f"Stream error: {error_msg}")
+
+                choices = data.get("choices", [])
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta", {})
+                content = delta.get("content", "")
+                finish_reason = choices[0].get("finish_reason")
+
+                if content or finish_reason:
+                    yield StreamChunk(content=content or "", finish_reason=finish_reason)
+
+    # -- Response parsing --------------------------------------------------
+
+    @staticmethod
+    def _parse_response(data: dict[str, Any]) -> LLMResponse:
+        """Turn a raw JSON response dict into an ``LLMResponse``."""
+        # Handle error responses that came back with HTTP 200
+        if "error" in data:
+            error = data["error"]
+            msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            raise LLMProviderError(f"API error: {msg}")
+
+        choices = data.get("choices", [])
+        if not choices:
+            raise LLMProviderError("No choices in API response")
+
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+        finish_reason = choices[0].get("finish_reason", "")
+
+        usage_data = data.get("usage", {})
+        usage = TokenUsage(
+            prompt_tokens=usage_data.get("prompt_tokens", 0),
+            completion_tokens=usage_data.get("completion_tokens", 0),
+            total_tokens=usage_data.get("total_tokens", 0),
+        )
+
+        return LLMResponse(
+            content=content,
+            model=data.get("model", ""),
+            usage=usage,
+            finish_reason=finish_reason,
+        )
+
+    # -- HTTP status → typed exception mapping -----------------------------
+
+    @staticmethod
+    def _raise_for_status(response: httpx.Response) -> None:
+        """Translate HTTP error codes into typed ``LLMError`` subclasses."""
+        if response.is_success:
+            return
+
+        status = response.status_code
+
+        # Try to extract an error message from the body
+        try:
+            body = response.json()
+            error = body.get("error", {})
+            msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        except Exception:
+            msg = response.text[:500] if response.text else f"HTTP {status}"
+
+        if status == 401:
+            raise LLMAuthenticationError(f"Authentication failed: {msg}")
+        if status == 404:
+            raise LLMModelNotFoundError(f"Model not found: {msg}")
+        if status == 429:
+            retry_after_raw = response.headers.get("retry-after")
+            retry_after = float(retry_after_raw) if retry_after_raw else None
+            raise LLMRateLimitError(f"Rate limited: {msg}", retry_after=retry_after)
+        if status == 400 and "context" in msg.lower():
+            raise LLMContextLengthError(f"Context length exceeded: {msg}")
+        if status >= 500:
+            raise LLMProviderError(f"Server error ({status}): {msg}", status_code=status)
+
+        # Anything else
+        raise LLMProviderError(f"Request failed ({status}): {msg}", status_code=status)
