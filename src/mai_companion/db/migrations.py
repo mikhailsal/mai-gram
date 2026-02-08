@@ -39,7 +39,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 def register_migration(
@@ -75,6 +75,28 @@ async def _migrate_v1(conn: AsyncConnection) -> None:
     """
     # Nothing to do -- tables created by create_all
     logger.info("Schema v1: initial tables verified")
+
+
+@register_migration(2, "Add human_language to companions")
+async def _migrate_v2(conn: AsyncConnection) -> None:
+    """Version 2: add human_language column to companions table.
+
+    Part of Phase 3 -- personality system needs to know the human's
+    preferred language for multilingual onboarding and response generation.
+    """
+    # Check if column already exists (create_all may have added it)
+    result = await conn.execute(text("PRAGMA table_info(companions)"))
+    columns = {row[1] for row in result.fetchall()}
+    if "human_language" not in columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE companions ADD COLUMN human_language "
+                "VARCHAR(50) NOT NULL DEFAULT 'English'"
+            )
+        )
+        logger.info("Schema v2: added human_language column to companions")
+    else:
+        logger.info("Schema v2: human_language column already exists, skipping")
 
 
 # -- Migration runner --

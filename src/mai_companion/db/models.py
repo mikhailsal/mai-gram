@@ -46,6 +46,12 @@ class Companion(Base):
         default=lambda: str(uuid.uuid4()),
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    human_language: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="English",
+        doc="Human companion's preferred language for communication",
+    )
     personality_traits: Mapped[str] = mapped_column(
         Text,
         nullable=False,

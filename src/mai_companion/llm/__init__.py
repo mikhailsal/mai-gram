@@ -6,6 +6,7 @@ Public API:
     - ChatMessage, MessageRole: Message primitives
     - LLMResponse, StreamChunk, TokenUsage: Response types
     - LLMError and subclasses: Typed error hierarchy
+    - TranslationService: LLM-powered translation for multilingual support
 """
 
 from mai_companion.llm.openrouter import OpenRouterProvider
@@ -23,6 +24,7 @@ from mai_companion.llm.provider import (
     StreamChunk,
     TokenUsage,
 )
+from mai_companion.llm.translation import TranslationService
 
 __all__ = [
     "ChatMessage",
@@ -38,4 +40,5 @@ __all__ = [
     "OpenRouterProvider",
     "StreamChunk",
     "TokenUsage",
+    "TranslationService",
 ]
