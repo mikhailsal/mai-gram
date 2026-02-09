@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 from mai_companion.llm.translation import (
+    LanguageSpec,
     TranslationService,
     _parse_numbered_response,
     UI_ELEMENT_CONTEXTS,
@@ -27,15 +29,71 @@ def _make_mock_provider(response_content: str) -> AsyncMock:
 # Language detection
 # ---------------------------------------------------------------------------
 
+class TestLanguageSpec:
+    """Verify LanguageSpec dataclass."""
+
+    def test_str_without_style(self) -> None:
+        spec = LanguageSpec(language="Russian")
+        assert str(spec) == "Russian"
+        assert spec.full_spec == "Russian"
+
+    def test_str_with_style(self) -> None:
+        spec = LanguageSpec(language="Russian", style="pre-revolutionary orthography")
+        assert str(spec) == "Russian (pre-revolutionary orthography)"
+        assert spec.full_spec == "Russian (pre-revolutionary orthography)"
+
+    def test_default_style_is_none(self) -> None:
+        spec = LanguageSpec(language="English")
+        assert spec.style is None
+
+
 class TestDetectLanguage:
     """Verify language detection via LLM."""
 
-    async def test_detect_language(self) -> None:
+    async def test_detect_language_json_format(self) -> None:
+        """New JSON format with language and style."""
+        response = json.dumps({"language": "Russian", "style": None})
+        provider = _make_mock_provider(response)
+        service = TranslationService(llm_provider=provider)
+        result = await service.detect_language("русский")
+        assert result == "Russian"
+        assert service.get_language_style("Russian") is None
+        provider.generate.assert_called_once()
+
+    async def test_detect_language_with_style(self) -> None:
+        """Detect language with style specification."""
+        response = json.dumps({
+            "language": "Russian",
+            "style": "pre-revolutionary orthography"
+        })
+        provider = _make_mock_provider(response)
+        service = TranslationService(llm_provider=provider)
+        result = await service.detect_language("дореволюціонный русскій")
+        assert result == "Russian"
+        assert service.get_language_style("Russian") == "pre-revolutionary orthography"
+
+    async def test_detect_language_style_stored_case_insensitive(self) -> None:
+        """Style lookup is case-insensitive."""
+        response = json.dumps({
+            "language": "English",
+            "style": "like a 10-year-old child"
+        })
+        provider = _make_mock_provider(response)
+        service = TranslationService(llm_provider=provider)
+        await service.detect_language("English like a 10-year-old")
+        # Should work with any case
+        assert service.get_language_style("english") == "like a 10-year-old child"
+        assert service.get_language_style("ENGLISH") == "like a 10-year-old child"
+        assert service.get_language_style("English") == "like a 10-year-old child"
+
+    async def test_detect_language_fallback_non_json(self) -> None:
+        """Fallback for non-JSON responses (backward compatibility)."""
         provider = _make_mock_provider("Russian")
         service = TranslationService(llm_provider=provider)
         result = await service.detect_language("русский")
         assert result == "Russian"
-        provider.generate.assert_called_once()
+        # No style should be set
+        assert service.get_language_style("Russian") is None
 
     async def test_detect_language_strips_whitespace(self) -> None:
         provider = _make_mock_provider("  Spanish.  ")
@@ -44,11 +102,42 @@ class TestDetectLanguage:
         assert result == "Spanish"
 
     async def test_detect_language_uses_low_temperature(self) -> None:
-        provider = _make_mock_provider("English")
+        response = json.dumps({"language": "English", "style": None})
+        provider = _make_mock_provider(response)
         service = TranslationService(llm_provider=provider)
         await service.detect_language("english")
         call_kwargs = provider.generate.call_args
         assert call_kwargs.kwargs.get("temperature") == 0.0
+
+    async def test_detect_language_ignores_null_string_style(self) -> None:
+        """Style 'null' as string should be treated as None."""
+        response = json.dumps({"language": "German", "style": "null"})
+        provider = _make_mock_provider(response)
+        service = TranslationService(llm_provider=provider)
+        await service.detect_language("German")
+        assert service.get_language_style("German") is None
+
+
+class TestLanguageStyleManagement:
+    """Verify language style get/set methods."""
+
+    async def test_set_language_style(self) -> None:
+        provider = _make_mock_provider("")
+        service = TranslationService(llm_provider=provider)
+        service.set_language_style("Russian", "pre-revolutionary orthography")
+        assert service.get_language_style("Russian") == "pre-revolutionary orthography"
+
+    async def test_set_language_style_to_none(self) -> None:
+        provider = _make_mock_provider("")
+        service = TranslationService(llm_provider=provider)
+        service.set_language_style("Russian", "some style")
+        service.set_language_style("Russian", None)
+        assert service.get_language_style("Russian") is None
+
+    async def test_get_language_style_unset(self) -> None:
+        provider = _make_mock_provider("")
+        service = TranslationService(llm_provider=provider)
+        assert service.get_language_style("Unknown") is None
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +206,67 @@ class TestTranslate:
         # After clearing, should call LLM again
         await service.translate("Hello", "Spanish")
         assert provider.generate.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Translation with language style
+# ---------------------------------------------------------------------------
+
+class TestTranslateWithStyle:
+    """Verify translation with language style applied."""
+
+    async def test_style_included_in_prompt(self) -> None:
+        """When style is set, it should be included in the translation prompt."""
+        provider = _make_mock_provider("Привѣтъ, міръ!")
+        service = TranslationService(llm_provider=provider)
+        service.set_language_style("Russian", "pre-revolutionary orthography")
+
+        await service.translate("Hello, world!", "Russian")
+
+        # Check that the prompt includes the style instruction
+        call_args = provider.generate.call_args
+        messages = call_args.args[0]
+        system_prompt = messages[0].content
+        assert "pre-revolutionary orthography" in system_prompt
+
+    async def test_style_affects_cache_key(self) -> None:
+        """Same text with different styles should have different cache entries."""
+        provider = _make_mock_provider("Привет")
+        service = TranslationService(llm_provider=provider)
+
+        # First translation without style
+        await service.translate("Hello", "Russian")
+
+        # Set style and translate again
+        service.set_language_style("Russian", "pre-revolutionary orthography")
+        new_response = MagicMock()
+        new_response.content = "Привѣтъ"
+        provider.generate.return_value = new_response
+
+        result = await service.translate("Hello", "Russian")
+        assert result == "Привѣтъ"
+        # Should have called LLM twice (different cache keys)
+        assert provider.generate.call_count == 2
+
+    async def test_english_with_style_not_passthrough(self) -> None:
+        """English with a style should NOT be passthrough."""
+        provider = _make_mock_provider("yo wassup fam")
+        service = TranslationService(llm_provider=provider)
+        service.set_language_style("English", "Gen Z slang")
+
+        result = await service.translate("Hello, how are you?", "English")
+        assert result == "yo wassup fam"
+        # Should have called LLM because style is set
+        provider.generate.assert_called_once()
+
+    async def test_english_without_style_is_passthrough(self) -> None:
+        """English without style should be passthrough."""
+        provider = _make_mock_provider("")
+        service = TranslationService(llm_provider=provider)
+
+        result = await service.translate("Hello", "English")
+        assert result == "Hello"
+        provider.generate.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

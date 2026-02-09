@@ -441,7 +441,11 @@ class TelegramMessenger(Messenger):
         if msg:
             # Acknowledge the callback to remove the loading indicator
             if update.callback_query:
-                await update.callback_query.answer()
+                try:
+                    await update.callback_query.answer()
+                except Exception as e:
+                    # Network timeouts can happen - log and continue
+                    logger.warning("Failed to answer callback query: %s", e)
 
             for handler in self._callback_handlers:
                 await handler(msg)

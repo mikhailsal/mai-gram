@@ -73,7 +73,9 @@ class OnboardingSession:
     state:
         Current state in the onboarding flow.
     language:
-        The human's selected language.
+        The human's selected language (base language name).
+    language_style:
+        Optional language style/variant (e.g., "pre-revolutionary orthography").
     companion_name:
         The chosen companion name.
     preset_name:
@@ -98,6 +100,7 @@ class OnboardingSession:
     chat_id: str
     state: OnboardingState = OnboardingState.NOT_STARTED
     language: str = "English"
+    language_style: str | None = None
     companion_name: str = ""
     companion_gender: Gender = Gender.NEUTRAL
     preset_name: str | None = None
@@ -109,6 +112,19 @@ class OnboardingSession:
     appearance: str | None = None
     last_message_id: str | None = None
     warning_acknowledged: bool = False
+
+
+@dataclass
+class OnboardingResult:
+    """Result of completed onboarding.
+
+    Attributes
+    ----------
+    config:
+        The completed character configuration.
+    """
+
+    config: CharacterConfig
 
 
 # ---------------------------------------------------------------------------
@@ -176,10 +192,8 @@ ONBOARDING_TEXTS = {
         "Are you sure you want to proceed with this configuration?"
     ),
     "completed": (
-        "Perfect! I'm all set up and ready.\n\n"
-        "I'm {name}, and I'm excited to get to know you. Feel free to talk to me "
-        "about anything -- I'm here as your companion, not your assistant.\n\n"
-        "So... how are you doing today?"
+        "✨ Your companion {name} is ready!\n\n"
+        "Go ahead and say hello — start the conversation however you like."
     ),
     "already_exists": (
         "We've already met! I'm {name}, remember?\n\n"
@@ -268,7 +282,7 @@ class OnboardingManager:
             session,
         )
 
-    async def handle_message(self, message: IncomingMessage) -> CharacterConfig | None:
+    async def handle_message(self, message: IncomingMessage) -> OnboardingResult | None:
         """Handle an incoming message during onboarding.
 
         Parameters
@@ -278,8 +292,8 @@ class OnboardingManager:
 
         Returns
         -------
-        CharacterConfig or None
-            The completed character config if onboarding finished, else None.
+        OnboardingResult or None
+            The completed result if onboarding finished, else None.
         """
         session = self._sessions.get(message.user_id)
         if not session:
@@ -297,7 +311,7 @@ class OnboardingManager:
 
     async def _handle_text(
         self, session: OnboardingSession, text: str
-    ) -> CharacterConfig | None:
+    ) -> OnboardingResult | None:
         """Handle text input during onboarding.
 
         Parameters
@@ -309,18 +323,26 @@ class OnboardingManager:
 
         Returns
         -------
-        CharacterConfig or None
-            The completed config if onboarding finished.
+        OnboardingResult or None
+            The completed result if onboarding finished.
         """
         state = session.state
 
         if state == OnboardingState.AWAITING_LANGUAGE:
             # Detect the language from the user's input
+            # This also extracts and stores any style specification
             detected = await self._translator.detect_language(text)
             session.language = detected
+            # Get the style that was extracted (if any)
+            session.language_style = self._translator.get_language_style(detected)
+
+            # Format the language display to include style if present
+            language_display = detected
+            if session.language_style:
+                language_display = f"{detected} ({session.language_style})"
 
             # Send confirmation and ask for name (with context for better translation)
-            msg = ONBOARDING_TEXTS["language_confirmed"].format(language=detected)
+            msg = ONBOARDING_TEXTS["language_confirmed"].format(language=language_display)
             translation_context = (
                 "This is a message from the AI companion to the user. "
                 "The AI is asking what name the USER wants to give to the AI companion. "
@@ -392,7 +414,7 @@ class OnboardingManager:
 
     async def _handle_callback(
         self, session: OnboardingSession, callback_data: str
-    ) -> CharacterConfig | None:
+    ) -> OnboardingResult | None:
         """Handle a button press during onboarding.
 
         Parameters
@@ -404,8 +426,8 @@ class OnboardingManager:
 
         Returns
         -------
-        CharacterConfig or None
-            The completed config if onboarding finished.
+        OnboardingResult or None
+            The completed result if onboarding finished.
         """
         parts = callback_data.split(":")
 
@@ -730,8 +752,10 @@ class OnboardingManager:
 
         await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
 
-    async def _complete_onboarding(self, session: OnboardingSession) -> CharacterConfig:
-        """Complete the onboarding and return the character config.
+    async def _complete_onboarding(
+        self, session: OnboardingSession
+    ) -> OnboardingResult | None:
+        """Complete the onboarding and return the result.
 
         Parameters
         ----------
@@ -740,8 +764,9 @@ class OnboardingManager:
 
         Returns
         -------
-        CharacterConfig
-            The completed character configuration.
+        OnboardingResult or None
+            The completed result with config and first message, or None if
+            waiting for warning acknowledgment.
         """
         # Build the character config
         if session.preset_name:
@@ -761,8 +786,9 @@ class OnboardingManager:
                 verbosity=session.verbosity,
             )
 
-        # Set gender and appearance
+        # Set gender, language style, and appearance
         config.gender = session.companion_gender
+        config.language_style = session.language_style
         config.appearance_description = session.appearance
 
         # Check for extreme configuration warning (only if not already acknowledged)
@@ -788,8 +814,7 @@ class OnboardingManager:
 
                 await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
                 # Don't complete yet -- wait for warning response
-                # Return a marker that we're waiting
-                return None  # type: ignore
+                return None
 
         # Send completion message
         msg = ONBOARDING_TEXTS["completed"].format(name=session.companion_name)
@@ -799,7 +824,7 @@ class OnboardingManager:
         # Mark session as completed
         session.state = OnboardingState.COMPLETED
 
-        return config
+        return OnboardingResult(config=config)
 
     async def _extract_name(self, user_input: str) -> str:
         """Extract just the name from natural language input.

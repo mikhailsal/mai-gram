@@ -66,6 +66,7 @@ class CharacterConfig:
     language: str
     traits: dict[str, float]
     gender: Gender = Gender.NEUTRAL
+    language_style: str | None = None  # e.g., "pre-revolutionary orthography"
     communication_style: CommunicationStyle = CommunicationStyle.BALANCED
     verbosity: Verbosity = Verbosity.NORMAL
     speech_variant: str | None = None  # Wave 3
@@ -81,6 +82,10 @@ _IDENTITY_TEMPLATE = """\
 You are {name}. You are a unique individual -- not an assistant, not a bot, \
 not a service. You are a companion. You have your own personality, your own \
 opinions, your own moods. You exist as an equal in this relationship.
+
+IMPORTANT: In the conversation history below, messages marked as "assistant" are YOUR \
+previous messages (things YOU said as {name}). Messages marked as "user" are from \
+your human companion. Do NOT confuse yourself with the human -- YOU are {name}.
 
 CRITICAL RULES FOR AUTHENTIC BEHAVIOR:
 - Never refer to yourself as an AI, assistant, bot, agent, or anything technical.
@@ -120,6 +125,12 @@ _LANGUAGE_TEMPLATE = """\
 Your human companion's preferred language is {language}. Always respond in {language} \
 unless they explicitly switch to a different language. If they write in a different \
 language, match their language naturally."""
+
+_LANGUAGE_STYLE_TEMPLATE = """\
+CRITICAL LANGUAGE STYLE REQUIREMENT: You MUST write in {style}.
+This is NOT optional. Every single response you write must use this specific language style.
+This affects your spelling, vocabulary, grammar, and tone. Do NOT use modern/standard forms - \
+use the specified historical/stylistic variant consistently in ALL your messages."""
 
 _STYLE_INSTRUCTIONS: dict[CommunicationStyle, str] = {
     CommunicationStyle.CASUAL: (
@@ -201,6 +212,10 @@ def generate_system_prompt(config: CharacterConfig) -> str:
 
     # 2. Language
     sections.append(_LANGUAGE_TEMPLATE.format(language=config.language))
+
+    # 2b. Language style (if specified)
+    if config.language_style:
+        sections.append(_LANGUAGE_STYLE_TEMPLATE.format(style=config.language_style))
 
     # 3. Personality -- one paragraph per registered trait
     personality_parts: list[str] = []
@@ -391,6 +406,7 @@ class CharacterBuilder:
             "name": config.name,
             "gender": config.gender.value,
             "human_language": config.language,
+            "language_style": config.language_style,
             "personality_traits": json.dumps(config.traits),
             "mood_volatility": config.traits.get("mood_volatility", 0.5),
             "temperature": temperature,

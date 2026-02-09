@@ -58,6 +58,12 @@ class Companion(Base):
         default="English",
         doc="Human companion's preferred language for communication",
     )
+    language_style: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+        default=None,
+        doc="Language style/variant specification (e.g., 'pre-revolutionary orthography', 'like a 10-year-old child')",
+    )
     personality_traits: Mapped[str] = mapped_column(
         Text,
         nullable=False,

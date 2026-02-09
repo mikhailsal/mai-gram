@@ -39,7 +39,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def register_migration(
@@ -120,6 +120,29 @@ async def _migrate_v3(conn: AsyncConnection) -> None:
         logger.info("Schema v3: added gender column to companions")
     else:
         logger.info("Schema v3: gender column already exists, skipping")
+
+
+@register_migration(4, "Add language_style to companions")
+async def _migrate_v4(conn: AsyncConnection) -> None:
+    """Version 4: add language_style column to companions table.
+
+    Supports language style/variant specifications like 'pre-revolutionary orthography',
+    'like a 10-year-old child', 'British variant', etc. These affect how the AI
+    translates and responds in the human's language.
+    """
+    # Check if column already exists (create_all may have added it)
+    result = await conn.execute(text("PRAGMA table_info(companions)"))
+    columns = {row[1] for row in result.fetchall()}
+    if "language_style" not in columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE companions ADD COLUMN language_style "
+                "VARCHAR(200) DEFAULT NULL"
+            )
+        )
+        logger.info("Schema v4: added language_style column to companions")
+    else:
+        logger.info("Schema v4: language_style column already exists, skipping")
 
 
 # -- Migration runner --

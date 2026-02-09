@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from mai_companion.bot.middleware import MessageLogger, RateLimiter, RateLimitConfig
-from mai_companion.bot.onboarding import OnboardingManager, OnboardingState
+from mai_companion.bot.onboarding import OnboardingManager, OnboardingResult, OnboardingState
 from mai_companion.db.database import get_session
 from mai_companion.db.models import Companion, Message
 from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
@@ -264,9 +264,9 @@ class BotHandler:
 
         # Check if user is in onboarding
         if self._onboarding.is_onboarding(message.user_id):
-            config = await self._onboarding.handle_message(message)
-            if config:
-                await self._create_companion(message.chat_id, config)
+            result = await self._onboarding.handle_message(message)
+            if result:
+                await self._create_companion(message.chat_id, result.config)
                 self._onboarding.clear_session(message.user_id)
             return
 
@@ -285,9 +285,9 @@ class BotHandler:
 
         # Check if user is in onboarding
         if self._onboarding.is_onboarding(message.user_id):
-            config = await self._onboarding.handle_message(message)
-            if config:
-                await self._create_companion(message.chat_id, config)
+            result = await self._onboarding.handle_message(message)
+            if result:
+                await self._create_companion(message.chat_id, result.config)
                 self._onboarding.clear_session(message.user_id)
             return
 
@@ -401,7 +401,9 @@ class BotHandler:
         )
 
     async def _create_companion(
-        self, chat_id: str, config: CharacterConfig
+        self,
+        chat_id: str,
+        config: CharacterConfig,
     ) -> None:
         """Create a new companion from the completed onboarding.
 
@@ -436,6 +438,11 @@ class BotHandler:
                 label,
                 "initial baseline at companion creation",
             )
+
+            # NOTE: We don't save any initial messages here.
+            # The user will send the first message, and the companion will respond.
+            # This ensures proper message ordering: System → User → Assistant
+            # (which is required by chat completion APIs)
 
             await session.commit()
 
@@ -485,6 +492,9 @@ class BotHandler:
     ) -> Companion | None:
         """Get the companion for a chat.
 
+        Also sets up the language style in the translation service if
+        the companion has one configured.
+
         Parameters
         ----------
         session:
@@ -500,7 +510,16 @@ class BotHandler:
         result = await session.execute(
             select(Companion).where(Companion.id == chat_id)
         )
-        return result.scalar_one_or_none()
+        companion = result.scalar_one_or_none()
+
+        # Set up language style in translation service
+        if companion:
+            self._translation_service.set_language_style(
+                companion.human_language,
+                companion.language_style,
+            )
+
+        return companion
 
     async def _get_recent_messages(
         self, session, companion_id: str, *, limit: int = 30

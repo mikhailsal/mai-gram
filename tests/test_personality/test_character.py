@@ -232,6 +232,21 @@ class TestSystemPromptGeneration:
         # First paragraph is the header, then 6 trait paragraphs
         assert len(paragraphs) >= 6
 
+    def test_prompt_contains_language_style_when_set(self) -> None:
+        """Language style should be included in the prompt when specified."""
+        config = CharacterBuilder.from_preset("Татьяна", "caring_guide", language="Russian")
+        config.language_style = "pre-revolutionary orthography"
+        prompt = generate_system_prompt(config)
+        assert "pre-revolutionary orthography" in prompt
+        assert "CRITICAL LANGUAGE STYLE REQUIREMENT" in prompt
+
+    def test_prompt_no_language_style_section_when_none(self) -> None:
+        """Language style section should not appear when style is None."""
+        config = CharacterBuilder.from_preset("Luna", "caring_guide", language="Russian")
+        config.language_style = None
+        prompt = generate_system_prompt(config)
+        assert "CRITICAL LANGUAGE STYLE REQUIREMENT" not in prompt
+
 
 # ---------------------------------------------------------------------------
 # create_companion_record
@@ -267,3 +282,35 @@ class TestCreateCompanionRecord:
         config = CharacterBuilder.from_preset("Alex", "balanced_friend")
         record = CharacterBuilder.create_companion_record(config, temperature=0.65)
         assert record["gender"] == "neutral"
+
+    def test_includes_language_style_field(self) -> None:
+        config = CharacterBuilder.from_preset("Luna", "caring_guide", language="Russian")
+        config.language_style = "pre-revolutionary orthography"
+        record = CharacterBuilder.create_companion_record(config, temperature=0.65)
+        assert record["language_style"] == "pre-revolutionary orthography"
+
+    def test_language_style_defaults_to_none(self) -> None:
+        config = CharacterBuilder.from_preset("Alex", "balanced_friend")
+        record = CharacterBuilder.create_companion_record(config, temperature=0.65)
+        assert record["language_style"] is None
+
+
+class TestCharacterConfigLanguageStyle:
+    """Verify CharacterConfig language_style field."""
+
+    def test_language_style_default_is_none(self) -> None:
+        config = CharacterConfig(
+            name="Test",
+            language="English",
+            traits={"warmth": 0.5},
+        )
+        assert config.language_style is None
+
+    def test_language_style_can_be_set(self) -> None:
+        config = CharacterConfig(
+            name="Test",
+            language="Russian",
+            traits={"warmth": 0.5},
+            language_style="pre-revolutionary orthography",
+        )
+        assert config.language_style == "pre-revolutionary orthography"

@@ -6,6 +6,7 @@ import pytest
 
 from mai_companion.bot.onboarding import (
     OnboardingManager,
+    OnboardingResult,
     OnboardingSession,
     OnboardingState,
     ONBOARDING_TEXTS,
@@ -46,6 +47,19 @@ def mock_translation_service():
 def onboarding_manager(mock_messenger, mock_translation_service):
     """Create an onboarding manager with mocks."""
     return OnboardingManager(mock_messenger, mock_translation_service)
+
+
+class TestOnboardingResult:
+    """Tests for OnboardingResult dataclass."""
+
+    def test_result_creation(self):
+        """Test creating an onboarding result."""
+        from mai_companion.personality.character import CharacterBuilder
+
+        config = CharacterBuilder.from_preset("Luna", "caring_guide")
+        result = OnboardingResult(config=config)
+
+        assert result.config == config
 
 
 class TestOnboardingSession:
