@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from mai_companion.llm.translation import TranslationService, _parse_numbered_response
+from mai_companion.llm.translation import (
+    TranslationService,
+    _parse_numbered_response,
+    UI_ELEMENT_CONTEXTS,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -203,3 +207,147 @@ class TestParseNumberedResponse:
     def test_single_item(self) -> None:
         result = _parse_numbered_response("1. Hello", 1)
         assert result == ["Hello"]
+
+
+# ---------------------------------------------------------------------------
+# Translate with context
+# ---------------------------------------------------------------------------
+
+class TestTranslateWithContext:
+    """Verify translation with context parameter."""
+
+    async def test_translate_with_context(self) -> None:
+        provider = _make_mock_provider("Привет")
+        service = TranslationService(llm_provider=provider)
+        result = await service.translate(
+            "Hello", "Russian", context="greeting message"
+        )
+        assert result == "Привет"
+        # Should have called with context in the prompt
+        provider.generate.assert_called_once()
+
+    async def test_context_affects_cache_key(self) -> None:
+        provider = _make_mock_provider("Назад")
+        service = TranslationService(llm_provider=provider)
+
+        # First call without context
+        await service.translate("Back", "Russian")
+
+        # Change mock response
+        new_response = MagicMock()
+        new_response.content = "Назад (навигация)"
+        provider.generate.return_value = new_response
+
+        # Second call with context - should NOT use cache
+        result = await service.translate(
+            "Back", "Russian", context="navigation button"
+        )
+        assert result == "Назад (навигация)"
+        assert provider.generate.call_count == 2
+
+    async def test_same_context_uses_cache(self) -> None:
+        provider = _make_mock_provider("Назад")
+        service = TranslationService(llm_provider=provider)
+
+        await service.translate("Back", "Russian", context="navigation")
+        await service.translate("Back", "Russian", context="navigation")
+
+        # Should only call once due to caching
+        assert provider.generate.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# UI element translation
+# ---------------------------------------------------------------------------
+
+class TestTranslateUIBatch:
+    """Verify UI element batch translation with context."""
+
+    async def test_ui_batch_translate(self) -> None:
+        provider = _make_mock_provider("1. Назад\n2. Пропустить")
+        service = TranslationService(llm_provider=provider)
+        results = await service.translate_ui_batch(
+            ["Back", "Skip"], "Russian"
+        )
+        assert results == ["Назад", "Пропустить"]
+
+    async def test_ui_batch_english_passthrough(self) -> None:
+        provider = _make_mock_provider("")
+        service = TranslationService(llm_provider=provider)
+        results = await service.translate_ui_batch(
+            ["Back", "Skip"], "English"
+        )
+        assert results == ["Back", "Skip"]
+        provider.generate.assert_not_called()
+
+    async def test_ui_batch_empty_list(self) -> None:
+        provider = _make_mock_provider("")
+        service = TranslationService(llm_provider=provider)
+        results = await service.translate_ui_batch([], "Russian")
+        assert results == []
+        provider.generate.assert_not_called()
+
+    async def test_ui_batch_uses_separate_cache(self) -> None:
+        """UI batch uses 'ui_element' cache key, separate from regular translate."""
+        provider = _make_mock_provider("Назад")
+        service = TranslationService(llm_provider=provider)
+
+        # Regular translate
+        await service.translate("Back", "Russian")
+
+        # Change mock response
+        new_response = MagicMock()
+        new_response.content = "1. Назад (UI)"
+        provider.generate.return_value = new_response
+
+        # UI batch - should NOT use the regular cache
+        results = await service.translate_ui_batch(["Back"], "Russian")
+        assert results == ["Назад (UI)"]
+        assert provider.generate.call_count == 2
+
+    async def test_ui_batch_caches_results(self) -> None:
+        provider = _make_mock_provider("1. Назад\n2. Пропустить")
+        service = TranslationService(llm_provider=provider)
+
+        await service.translate_ui_batch(["Back", "Skip"], "Russian")
+        await service.translate_ui_batch(["Back", "Skip"], "Russian")
+
+        # Should only call LLM once
+        assert provider.generate.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# UI element contexts
+# ---------------------------------------------------------------------------
+
+class TestUIElementContexts:
+    """Verify UI element context definitions."""
+
+    def test_back_context_exists(self) -> None:
+        assert "Back" in UI_ELEMENT_CONTEXTS
+        context = UI_ELEMENT_CONTEXTS["Back"]
+        # Should mention it's NOT the body part
+        assert "NOT" in context or "not" in context.lower()
+        assert "spine" in context.lower() or "body" in context.lower()
+
+    def test_skip_context_exists(self) -> None:
+        assert "Skip" in UI_ELEMENT_CONTEXTS
+
+    def test_trait_levels_have_contexts(self) -> None:
+        levels = ["Very Low", "Low", "Medium", "High", "Very High"]
+        for level in levels:
+            assert level in UI_ELEMENT_CONTEXTS
+
+    def test_navigation_buttons_have_contexts(self) -> None:
+        buttons = ["Yes", "No", "Back", "Skip"]
+        for button in buttons:
+            assert button in UI_ELEMENT_CONTEXTS
+
+    def test_contexts_contain_examples(self) -> None:
+        """Most contexts should have example translations."""
+        contexts_with_examples = 0
+        for context in UI_ELEMENT_CONTEXTS.values():
+            if "Examples:" in context or "Chinese=" in context:
+                contexts_with_examples += 1
+        # At least half should have examples
+        assert contexts_with_examples >= len(UI_ELEMENT_CONTEXTS) // 2

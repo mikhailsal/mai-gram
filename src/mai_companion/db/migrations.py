@@ -39,7 +39,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def register_migration(
@@ -97,6 +97,29 @@ async def _migrate_v2(conn: AsyncConnection) -> None:
         logger.info("Schema v2: added human_language column to companions")
     else:
         logger.info("Schema v2: human_language column already exists, skipping")
+
+
+@register_migration(3, "Add gender to companions")
+async def _migrate_v3(conn: AsyncConnection) -> None:
+    """Version 3: add gender column to companions table.
+
+    Part of Phase 4 improvements -- companions now have a gender identity
+    inferred from their name, which affects how they use grammatical gender
+    in gendered languages like Russian, Spanish, French.
+    """
+    # Check if column already exists (create_all may have added it)
+    result = await conn.execute(text("PRAGMA table_info(companions)"))
+    columns = {row[1] for row in result.fetchall()}
+    if "gender" not in columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE companions ADD COLUMN gender "
+                "VARCHAR(20) NOT NULL DEFAULT 'neutral'"
+            )
+        )
+        logger.info("Schema v3: added gender column to companions")
+    else:
+        logger.info("Schema v3: gender column already exists, skipping")
 
 
 # -- Migration runner --

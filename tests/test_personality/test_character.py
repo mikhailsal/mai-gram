@@ -10,6 +10,7 @@ from mai_companion.personality.character import (
     CharacterBuilder,
     CharacterConfig,
     CommunicationStyle,
+    Gender,
     Verbosity,
     generate_system_prompt,
 )
@@ -17,6 +18,18 @@ from mai_companion.personality.character import (
 # ---------------------------------------------------------------------------
 # CharacterConfig
 # ---------------------------------------------------------------------------
+
+class TestGenderEnum:
+    """Verify Gender enum."""
+
+    def test_three_genders(self) -> None:
+        assert len(Gender) == 3
+
+    def test_gender_values(self) -> None:
+        assert Gender.MALE.value == "male"
+        assert Gender.FEMALE.value == "female"
+        assert Gender.NEUTRAL.value == "neutral"
+
 
 class TestCharacterConfig:
     """Verify CharacterConfig dataclass."""
@@ -32,6 +45,16 @@ class TestCharacterConfig:
         assert config.speech_variant is None
         assert config.appearance_description is None
         assert config.preset_name is None
+        assert config.gender == Gender.NEUTRAL
+
+    def test_gender_can_be_set(self) -> None:
+        config = CharacterConfig(
+            name="Test",
+            language="English",
+            traits={"warmth": 0.5},
+            gender=Gender.FEMALE,
+        )
+        assert config.gender == Gender.FEMALE
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +108,13 @@ class TestCharacterBuilder:
         configs = [CharacterBuilder.random_config("R") for _ in range(10)]
         warmth_values = [c.traits["warmth"] for c in configs]
         assert len(set(warmth_values)) > 1
+
+    def test_config_gender_can_be_set_after_creation(self) -> None:
+        """Gender is set on the config after creation (as done in onboarding)."""
+        config = CharacterBuilder.from_preset("Luna", "caring_guide")
+        assert config.gender == Gender.NEUTRAL  # default
+        config.gender = Gender.FEMALE
+        assert config.gender == Gender.FEMALE
 
     def test_get_presets(self) -> None:
         presets = CharacterBuilder.get_presets()
@@ -151,6 +181,24 @@ class TestSystemPromptGeneration:
         assert "## Ethical boundaries" in prompt
         assert "self-harm" in prompt
 
+    def test_prompt_contains_gender_instructions_male(self) -> None:
+        config = CharacterBuilder.from_preset("Max", "bold_challenger")
+        config.gender = Gender.MALE
+        prompt = generate_system_prompt(config)
+        assert "male" in prompt.lower() or "masculine" in prompt.lower()
+
+    def test_prompt_contains_gender_instructions_female(self) -> None:
+        config = CharacterBuilder.from_preset("Luna", "caring_guide")
+        config.gender = Gender.FEMALE
+        prompt = generate_system_prompt(config)
+        assert "female" in prompt.lower() or "feminine" in prompt.lower()
+
+    def test_prompt_contains_gender_instructions_neutral(self) -> None:
+        config = CharacterBuilder.from_preset("Alex", "balanced_friend")
+        config.gender = Gender.NEUTRAL
+        prompt = generate_system_prompt(config)
+        assert "neutral" in prompt.lower() or "gender-neutral" in prompt.lower()
+
     def test_prompt_contains_mood_placeholder(self) -> None:
         config = CharacterBuilder.from_preset("Luna", "caring_guide")
         prompt = generate_system_prompt(config)
@@ -208,3 +256,14 @@ class TestCreateCompanionRecord:
         assert len(traits) == 6
         # system_prompt should be non-empty
         assert len(record["system_prompt"]) > 100
+
+    def test_includes_gender_field(self) -> None:
+        config = CharacterBuilder.from_preset("Luna", "caring_guide")
+        config.gender = Gender.FEMALE
+        record = CharacterBuilder.create_companion_record(config, temperature=0.65)
+        assert record["gender"] == "female"
+
+    def test_gender_defaults_to_neutral(self) -> None:
+        config = CharacterBuilder.from_preset("Alex", "balanced_friend")
+        record = CharacterBuilder.create_companion_record(config, temperature=0.65)
+        assert record["gender"] == "neutral"

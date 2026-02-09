@@ -46,6 +46,12 @@ class Companion(Base):
         default=lambda: str(uuid.uuid4()),
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    gender: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="neutral",
+        doc="Companion's gender identity: 'male', 'female', or 'neutral'",
+    )
     human_language: Mapped[str] = mapped_column(
         String(50),
         nullable=False,

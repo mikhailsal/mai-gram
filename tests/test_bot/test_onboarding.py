@@ -30,8 +30,15 @@ def mock_translation_service():
     service = MagicMock()
     # By default, return the original text (simulate English)
     service.detect_language = AsyncMock(return_value="English")
-    service.translate = AsyncMock(side_effect=lambda text, lang: text)
-    service.translate_batch = AsyncMock(side_effect=lambda texts, lang: texts)
+    # Accept optional context parameter (added for UI translations)
+    service.translate = AsyncMock(side_effect=lambda text, lang, **kwargs: text)
+    service.translate_batch = AsyncMock(side_effect=lambda texts, lang, **kwargs: texts)
+    service.translate_ui_batch = AsyncMock(side_effect=lambda texts, lang, **kwargs: texts)
+    # Mock the LLM provider for gender inference
+    service.llm_provider = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = "female"
+    service.llm_provider.generate = AsyncMock(return_value=mock_response)
     return service
 
 
@@ -60,10 +67,12 @@ class TestOnboardingSession:
         """Test session default values."""
         session = OnboardingSession(user_id="u", chat_id="c")
 
-        assert session.communication_style == CommunicationStyle.BALANCED
-        assert session.verbosity == Verbosity.NORMAL
+        # Note: defaults changed to CASUAL/CONCISE for messenger-style conversations
+        assert session.communication_style == CommunicationStyle.CASUAL
+        assert session.verbosity == Verbosity.CONCISE
         assert session.appearance is None
         assert session.last_message_id is None
+        assert session.warning_acknowledged is False
 
 
 class TestOnboardingState:
@@ -211,55 +220,24 @@ class TestOnboardingManager:
         )
         await onboarding_manager.handle_message(msg)
 
-        # Should move to style selection
+        # Should skip style/verbosity and go directly to appearance
+        # (simplified flow for messenger-style conversations)
         session = onboarding_manager.get_session("user1")
-        assert session.state == OnboardingState.CHOOSING_STYLE
-
-    async def test_style_selection(self, onboarding_manager, mock_messenger):
-        """Test communication style selection."""
-        await onboarding_manager.start_onboarding("user1", "chat1")
-
-        session = onboarding_manager.get_session("user1")
-        session.state = OnboardingState.CHOOSING_STYLE
-        session.companion_name = "Aurora"
-
-        # Select casual style
-        msg = IncomingMessage(
-            platform="telegram",
-            chat_id="chat1",
-            user_id="user1",
-            message_id="1",
-            message_type=MessageType.CALLBACK,
-            callback_data="style:casual",
-        )
-        await onboarding_manager.handle_message(msg)
-
-        session = onboarding_manager.get_session("user1")
-        assert session.communication_style == CommunicationStyle.CASUAL
-        assert session.state == OnboardingState.CHOOSING_VERBOSITY
-
-    async def test_verbosity_selection(self, onboarding_manager, mock_messenger):
-        """Test verbosity selection."""
-        await onboarding_manager.start_onboarding("user1", "chat1")
-
-        session = onboarding_manager.get_session("user1")
-        session.state = OnboardingState.CHOOSING_VERBOSITY
-        session.companion_name = "Aurora"
-
-        # Select detailed verbosity
-        msg = IncomingMessage(
-            platform="telegram",
-            chat_id="chat1",
-            user_id="user1",
-            message_id="1",
-            message_type=MessageType.CALLBACK,
-            callback_data="verbosity:detailed",
-        )
-        await onboarding_manager.handle_message(msg)
-
-        session = onboarding_manager.get_session("user1")
-        assert session.verbosity == Verbosity.DETAILED
         assert session.state == OnboardingState.AWAITING_APPEARANCE
+
+    async def test_default_style_and_verbosity_used(self, onboarding_manager):
+        """Test that defaults are CASUAL and CONCISE for messenger-style conversations.
+
+        Note: Style and verbosity selection steps have been removed from the
+        onboarding flow. The companion now always uses CASUAL style and CONCISE
+        verbosity for an authentic messenger feel.
+        """
+        await onboarding_manager.start_onboarding("user1", "chat1")
+        session = onboarding_manager.get_session("user1")
+
+        # Verify the defaults match what we expect for messenger-style conversations
+        assert session.communication_style == CommunicationStyle.CASUAL
+        assert session.verbosity == Verbosity.CONCISE
 
     async def test_skip_appearance(self, onboarding_manager, mock_messenger):
         """Test skipping appearance description."""
@@ -351,6 +329,8 @@ class TestOnboardingTexts:
 
     def test_all_required_texts_exist(self):
         """Test that all required text templates exist."""
+        # Note: style_selection and verbosity_selection were removed
+        # as the flow now skips these steps for messenger-style conversations
         required_keys = [
             "welcome",
             "language_confirmed",
@@ -359,14 +339,22 @@ class TestOnboardingTexts:
             "preset_selected",
             "customize_intro",
             "trait_prompt",
-            "style_selection",
-            "verbosity_selection",
             "appearance_prompt",
             "confirmation",
             "extreme_warning",
             "completed",
             "already_exists",
+            "back_to_settings",  # Added for "go back" functionality
         ]
 
         for key in required_keys:
             assert key in ONBOARDING_TEXTS, f"Missing text template: {key}"
+
+    def test_back_to_settings_text_exists(self):
+        """Test that back_to_settings text is different from name_confirmed."""
+        # This is important because we don't want to confuse users
+        # when they go back to change settings
+        assert "back_to_settings" in ONBOARDING_TEXTS
+        assert ONBOARDING_TEXTS["back_to_settings"] != ONBOARDING_TEXTS["name_confirmed"]
+        assert "go back" in ONBOARDING_TEXTS["back_to_settings"].lower() or \
+               "adjust" in ONBOARDING_TEXTS["back_to_settings"].lower()

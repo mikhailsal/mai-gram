@@ -28,6 +28,7 @@ from mai_companion.personality.character import (
     CharacterBuilder,
     CharacterConfig,
     CommunicationStyle,
+    Gender,
     Verbosity,
 )
 from mai_companion.personality.traits import (
@@ -98,11 +99,13 @@ class OnboardingSession:
     state: OnboardingState = OnboardingState.NOT_STARTED
     language: str = "English"
     companion_name: str = ""
+    companion_gender: Gender = Gender.NEUTRAL
     preset_name: str | None = None
     custom_traits: dict[str, float] = field(default_factory=dict)
     current_trait_index: int = 0
-    communication_style: CommunicationStyle = CommunicationStyle.BALANCED
-    verbosity: Verbosity = Verbosity.NORMAL
+    # Always use casual + concise for authentic messenger feel
+    communication_style: CommunicationStyle = CommunicationStyle.CASUAL
+    verbosity: Verbosity = Verbosity.CONCISE
     appearance: str | None = None
     last_message_id: str | None = None
     warning_acknowledged: bool = False
@@ -121,10 +124,11 @@ ONBOARDING_TEXTS = {
     ),
     "language_confirmed": (
         "Great! I'll communicate with you in {language}.\n\n"
-        "Now, what would you like to call me? Give me a name that feels right to you."
+        "Now, what name would you like to give ME, your companion? "
+        "Just type the name you want to call me (for example: Luna, Alex, Kai)."
     ),
     "name_confirmed": (
-        "I like it! From now on, I'm {name}.\n\n"
+        "I like it! From now on, my name is {name}.\n\n"
         "Now let's shape my personality. You can choose a preset that matches "
         "the kind of companion you want, or customize individual traits.\n\n"
         "What would you prefer?"
@@ -147,23 +151,11 @@ ONBOARDING_TEXTS = {
         "Let's start with the first trait."
     ),
     "trait_prompt": (
-        "**{trait_name}**: {description}\n\n"
+        "{trait_name}: {description}\n\n"
         "Low: {low_label}\n"
         "High: {high_label}\n\n"
         "Current: {current_level}\n\n"
         "Choose a level:"
-    ),
-    "style_selection": (
-        "How would you like me to communicate?\n\n"
-        "• **Casual**: Relaxed, like texting a close friend\n"
-        "• **Balanced**: Natural, like a friendly colleague\n"
-        "• **Formal**: Polished and articulate"
-    ),
-    "verbosity_selection": (
-        "How detailed should my responses be?\n\n"
-        "• **Concise**: Short and to the point\n"
-        "• **Normal**: Natural length, elaborating when needed\n"
-        "• **Detailed**: Thorough and comprehensive"
     ),
     "appearance_prompt": (
         "Would you like to describe my appearance? This is optional, but it can "
@@ -173,11 +165,9 @@ ONBOARDING_TEXTS = {
     ),
     "confirmation": (
         "Here's a summary of who I'll be:\n\n"
-        "**Name**: {name}\n"
-        "**Language**: {language}\n"
-        "**Personality**: {personality}\n"
-        "**Style**: {style}\n"
-        "**Verbosity**: {verbosity}\n"
+        "Name: {name}\n"
+        "Language: {language}\n"
+        "Personality: {personality}\n"
         "{appearance_line}\n\n"
         "Ready to begin our journey together?"
     ),
@@ -194,6 +184,11 @@ ONBOARDING_TEXTS = {
     "already_exists": (
         "We've already met! I'm {name}, remember?\n\n"
         "If you want to start over with a new companion, use /reset."
+    ),
+    "back_to_settings": (
+        "No problem! Let's go back and adjust my settings.\n\n"
+        "What would you like to change? You can pick a different personality preset "
+        "or customize individual traits."
     ),
 }
 
@@ -324,14 +319,43 @@ class OnboardingManager:
             detected = await self._translator.detect_language(text)
             session.language = detected
 
-            # Send confirmation and ask for name
+            # Send confirmation and ask for name (with context for better translation)
             msg = ONBOARDING_TEXTS["language_confirmed"].format(language=detected)
-            translated = await self._translate(msg, session.language)
+            translation_context = (
+                "This is a message from the AI companion to the user. "
+                "The AI is asking what name the USER wants to give to the AI companion. "
+                "The AI is asking for ITS OWN name, not the user's name. "
+                "Make sure pronouns refer to the AI asking about itself."
+            )
+            translated = await self._translator.translate(
+                msg, session.language, context=translation_context
+            )
             await self._send_message(session.chat_id, translated, session)
             session.state = OnboardingState.AWAITING_NAME
 
         elif state == OnboardingState.AWAITING_NAME:
-            session.companion_name = text.strip()
+            # Extract just the name from natural language input
+            extracted_name = await self._extract_name(text.strip())
+
+            # Validate the name
+            is_valid, error_msg = self._validate_name(extracted_name)
+            if not is_valid:
+                # Send validation error and ask again
+                translated_error = await self._translate(error_msg, session.language)
+                await self._send_message(session.chat_id, translated_error, session)
+                return None
+
+            session.companion_name = extracted_name
+
+            # Infer gender from the name
+            session.companion_gender = await self._infer_gender(
+                extracted_name, session.language
+            )
+            logger.info(
+                "Name '%s' assigned gender '%s'",
+                extracted_name,
+                session.companion_gender.value,
+            )
 
             # Send confirmation and show personality options
             msg = ONBOARDING_TEXTS["name_confirmed"].format(name=session.companion_name)
@@ -341,9 +365,9 @@ class OnboardingManager:
                 [("🎭 Choose a Preset", "personality:presets")],
                 [("🎨 Customize Traits", "personality:custom")],
             ]
-            # Translate button labels
+            # Translate button labels using UI context
             if session.language.lower() != "english":
-                labels = await self._translator.translate_batch(
+                labels = await self._translator.translate_ui_batch(
                     ["Choose a Preset", "Customize Traits"],
                     session.language,
                 )
@@ -402,13 +426,24 @@ class OnboardingManager:
                     [("🎭 Choose a Preset", "personality:presets")],
                     [("🎨 Customize Traits", "personality:custom")],
                 ]
+                # Translate button labels using UI context
+                if session.language.lower() != "english":
+                    labels = await self._translator.translate_ui_batch(
+                        ["Choose a Preset", "Customize Traits"],
+                        session.language,
+                    )
+                    keyboard = [
+                        [(f"🎭 {labels[0]}", "personality:presets")],
+                        [(f"🎨 {labels[1]}", "personality:custom")],
+                    ]
                 await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
             else:
                 await self._select_preset(session, preset_name)
 
         elif parts[0] == "preset_confirm":
             if parts[1] == "yes":
-                await self._show_style_selection(session)
+                # Skip style/verbosity, go directly to appearance
+                await self._show_appearance_prompt(session)
             elif parts[1] == "no":
                 await self._show_presets(session)
 
@@ -420,15 +455,9 @@ class OnboardingManager:
             session.custom_traits[trait_name] = level.value
             await self._next_trait(session)
 
-        elif parts[0] == "style":
-            style = CommunicationStyle(parts[1])
-            session.communication_style = style
-            await self._show_verbosity_selection(session)
-
-        elif parts[0] == "verbosity":
-            verbosity = Verbosity(parts[1])
-            session.verbosity = verbosity
-            await self._show_appearance_prompt(session)
+        # Style and verbosity are now hardcoded to casual + concise
+        # (removed user selection per user request - real messenger conversations
+        # don't have formal/detailed modes)
 
         elif parts[0] == "appearance":
             if parts[1] == "skip":
@@ -439,14 +468,25 @@ class OnboardingManager:
             if parts[1] == "yes":
                 return await self._complete_onboarding(session)
             elif parts[1] == "no":
-                # Go back to personality selection
+                # Go back to personality selection - use a different message
+                # that indicates we're going BACK to change settings, not starting fresh
                 session.state = OnboardingState.CHOOSING_PERSONALITY
-                msg = ONBOARDING_TEXTS["name_confirmed"].format(name=session.companion_name)
+                msg = ONBOARDING_TEXTS["back_to_settings"]
                 translated = await self._translate(msg, session.language)
                 keyboard = [
                     [("🎭 Choose a Preset", "personality:presets")],
                     [("🎨 Customize Traits", "personality:custom")],
                 ]
+                # Translate button labels using UI context
+                if session.language.lower() != "english":
+                    labels = await self._translator.translate_ui_batch(
+                        ["Choose a Preset", "Customize Traits"],
+                        session.language,
+                    )
+                    keyboard = [
+                        [(f"🎭 {labels[0]}", "personality:presets")],
+                        [(f"🎨 {labels[1]}", "personality:custom")],
+                    ]
                 await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
 
         elif parts[0] == "warning":
@@ -461,10 +501,10 @@ class OnboardingManager:
 
     async def _show_presets(self, session: OnboardingSession) -> None:
         """Show the personality preset selection."""
-        # Build preset descriptions
+        # Build preset descriptions (no markdown)
         descriptions = []
         for key, preset in PRESETS.items():
-            descriptions.append(f"**{preset.name}**: {preset.tagline}")
+            descriptions.append(f"{preset.name}: {preset.tagline}")
 
         presets_text = "\n".join(descriptions)
         msg = ONBOARDING_TEXTS["preset_selection"].format(
@@ -472,11 +512,24 @@ class OnboardingManager:
         )
         translated = await self._translate(msg, session.language)
 
-        # Build keyboard with preset buttons
-        keyboard = []
-        for key, preset in PRESETS.items():
-            keyboard.append([(preset.name, f"preset:{key}")])
-        keyboard.append([("← Back", "preset:back")])
+        # Build keyboard with preset buttons - translate names if not English
+        preset_names = [preset.name for preset in PRESETS.values()]
+        if session.language.lower() != "english":
+            # Use translate_ui_batch for UI elements - it provides context
+            # to help the LLM understand meaning (e.g., "Back" = navigation, not spine)
+            translated_names = await self._translator.translate_ui_batch(
+                preset_names + ["Back"],
+                session.language,
+            )
+            keyboard = []
+            for i, key in enumerate(PRESETS.keys()):
+                keyboard.append([(translated_names[i], f"preset:{key}")])
+            keyboard.append([(f"← {translated_names[-1]}", "preset:back")])
+        else:
+            keyboard = []
+            for key, preset in PRESETS.items():
+                keyboard.append([(preset.name, f"preset:{key}")])
+            keyboard.append([("← Back", "preset:back")])
 
         await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
         session.state = OnboardingState.CHOOSING_PERSONALITY
@@ -502,7 +555,7 @@ class OnboardingManager:
             [("← No, show me others", "preset_confirm:no")],
         ]
         if session.language.lower() != "english":
-            labels = await self._translator.translate_batch(
+            labels = await self._translator.translate_ui_batch(
                 ["Yes, this is perfect", "No, show me others"],
                 session.language,
             )
@@ -529,8 +582,8 @@ class OnboardingManager:
         """Show the prompt for the current trait."""
         traits = list(TRAIT_DEFINITIONS.values())
         if session.current_trait_index >= len(traits):
-            # All traits done
-            await self._show_style_selection(session)
+            # All traits done - skip style/verbosity, go directly to appearance
+            await self._show_appearance_prompt(session)
             return
 
         trait_def = traits[session.current_trait_index]
@@ -546,12 +599,25 @@ class OnboardingManager:
         )
         translated = await self._translate(msg, session.language)
 
-        # Build level selection keyboard
-        keyboard = []
-        for level in TraitLevel:
-            button_text = f"{level.label} ({level.value:.1f})"
-            callback = f"trait:{trait_def.name.value}:{level.name}"
-            keyboard.append([(button_text, callback)])
+        # Build level selection keyboard - translate level labels
+        level_labels = [level.label for level in TraitLevel]
+        if session.language.lower() != "english":
+            # Use translate_ui_batch for proper context (Very Low, Low, etc.)
+            translated_labels = await self._translator.translate_ui_batch(
+                level_labels,
+                session.language,
+            )
+            keyboard = []
+            for i, level in enumerate(TraitLevel):
+                button_text = f"{translated_labels[i]} ({level.value:.1f})"
+                callback = f"trait:{trait_def.name.value}:{level.name}"
+                keyboard.append([(button_text, callback)])
+        else:
+            keyboard = []
+            for level in TraitLevel:
+                button_text = f"{level.label} ({level.value:.1f})"
+                callback = f"trait:{trait_def.name.value}:{level.name}"
+                keyboard.append([(button_text, callback)])
 
         await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
 
@@ -573,7 +639,7 @@ class OnboardingManager:
             [("🎩 Formal", "style:formal")],
         ]
         if session.language.lower() != "english":
-            labels = await self._translator.translate_batch(
+            labels = await self._translator.translate_ui_batch(
                 ["Casual", "Balanced", "Formal"],
                 session.language,
             )
@@ -598,7 +664,7 @@ class OnboardingManager:
             [("📚 Detailed", "verbosity:detailed")],
         ]
         if session.language.lower() != "english":
-            labels = await self._translator.translate_batch(
+            labels = await self._translator.translate_ui_batch(
                 ["Concise", "Normal", "Detailed"],
                 session.language,
             )
@@ -638,14 +704,12 @@ class OnboardingManager:
 
         appearance_line = ""
         if session.appearance:
-            appearance_line = f"**Appearance**: {session.appearance}"
+            appearance_line = f"Appearance: {session.appearance}"
 
         msg = ONBOARDING_TEXTS["confirmation"].format(
             name=session.companion_name,
             language=session.language,
             personality=personality_desc,
-            style=session.communication_style.value.title(),
-            verbosity=session.verbosity.value.title(),
             appearance_line=appearance_line,
         )
         translated = await self._translate(msg, session.language)
@@ -655,7 +719,7 @@ class OnboardingManager:
             [("← No, let me change something", "confirm:no")],
         ]
         if session.language.lower() != "english":
-            labels = await self._translator.translate_batch(
+            labels = await self._translator.translate_ui_batch(
                 ["Yes, let's begin!", "No, let me change something"],
                 session.language,
             )
@@ -697,6 +761,8 @@ class OnboardingManager:
                 verbosity=session.verbosity,
             )
 
+        # Set gender and appearance
+        config.gender = session.companion_gender
         config.appearance_description = session.appearance
 
         # Check for extreme configuration warning (only if not already acknowledged)
@@ -711,7 +777,7 @@ class OnboardingManager:
                     [("← No, let me adjust", "warning:back")],
                 ]
                 if session.language.lower() != "english":
-                    labels = await self._translator.translate_batch(
+                    labels = await self._translator.translate_ui_batch(
                         ["Yes, proceed anyway", "No, let me adjust"],
                         session.language,
                     )
@@ -734,6 +800,158 @@ class OnboardingManager:
         session.state = OnboardingState.COMPLETED
 
         return config
+
+    async def _extract_name(self, user_input: str) -> str:
+        """Extract just the name from natural language input.
+
+        The user might type "Call me Alex", "My name is Alex", "Alex",
+        "Тебя зовут Вася", etc. This method extracts just the name.
+
+        Parameters
+        ----------
+        user_input:
+            The user's raw input.
+
+        Returns
+        -------
+        str
+            The extracted name.
+        """
+        # If the input is short and looks like just a name, use it directly
+        words = user_input.split()
+        if len(words) == 1 and len(user_input) <= 30:
+            return user_input
+
+        # Use LLM to extract the name from natural language
+        from mai_companion.llm.provider import ChatMessage, MessageRole
+
+        prompt = (
+            "The user was asked to give a name to their AI companion. "
+            "They typed the following text. Extract ONLY the name from their input. "
+            "Respond with ONLY the name, nothing else. No quotes, no explanation.\n\n"
+            "Examples:\n"
+            "- 'Call me Alex' -> Alex\n"
+            "- 'Тебя зовут Вася' -> Вася\n"
+            "- 'I want to name you Luna' -> Luna\n"
+            "- 'Aurora' -> Aurora\n"
+        )
+
+        try:
+            response = await self._translator.llm_provider.generate(
+                [
+                    ChatMessage(role=MessageRole.SYSTEM, content=prompt),
+                    ChatMessage(role=MessageRole.USER, content=user_input),
+                ],
+                temperature=0.0,
+                max_tokens=30,
+            )
+            extracted = response.content.strip().strip('"').strip("'")
+            # Validate the extracted name is reasonable
+            if extracted and len(extracted) <= 50:
+                return extracted
+        except Exception:
+            logger.warning("Failed to extract name, using raw input")
+
+        # Fallback: return the original input
+        return user_input
+
+    def _validate_name(self, name: str) -> tuple[bool, str | None]:
+        """Validate a companion name.
+
+        Parameters
+        ----------
+        name:
+            The name to validate.
+
+        Returns
+        -------
+        tuple[bool, str | None]
+            (is_valid, error_message). If valid, error_message is None.
+        """
+        import re
+
+        # Check length
+        if not name or len(name.strip()) == 0:
+            return False, "Name cannot be empty. Please enter a name."
+
+        if len(name) > 50:
+            return False, "Name is too long. Please use 50 characters or fewer."
+
+        if len(name) < 2:
+            return False, "Name is too short. Please enter at least 2 characters."
+
+        # Check for invalid characters (allow letters, spaces, hyphens, apostrophes)
+        # This regex allows Unicode letters from any language
+        if re.search(r'[<>{}[\]\\|`~!@#$%^&*()+=;:"\d]', name):
+            return False, "Name contains invalid characters. Please use only letters."
+
+        return True, None
+
+    async def _infer_gender(self, name: str, language: str) -> Gender:
+        """Infer gender from a name using LLM.
+
+        If the gender cannot be determined from the name, randomly assign one.
+
+        Parameters
+        ----------
+        name:
+            The companion's name.
+        language:
+            The language context (helps with cultural name conventions).
+
+        Returns
+        -------
+        Gender
+            The inferred or randomly assigned gender.
+        """
+        import random
+
+        from mai_companion.llm.provider import ChatMessage, MessageRole
+
+        prompt = (
+            "You are a name gender classifier. Given a name and language context, "
+            "determine if the name is typically masculine, feminine, or ambiguous/neutral.\n\n"
+            "Rules:\n"
+            "- Respond with ONLY one word: 'male', 'female', or 'neutral'\n"
+            "- If the name is clearly masculine (e.g., Вася, John, Carlos, 太郎), respond 'male'\n"
+            "- If the name is clearly feminine (e.g., Маша, Luna, Maria, 花子), respond 'female'\n"
+            "- If the name is ambiguous, unisex, or you're unsure, respond 'neutral'\n"
+            "- Consider the language context for cultural naming conventions\n\n"
+            f"Language context: {language}\n"
+            f"Name: {name}"
+        )
+
+        try:
+            response = await self._translator.llm_provider.generate(
+                [
+                    ChatMessage(role=MessageRole.SYSTEM, content=prompt),
+                    ChatMessage(role=MessageRole.USER, content=name),
+                ],
+                temperature=0.0,
+                max_tokens=10,
+            )
+            result = response.content.strip().lower()
+
+            if result == "male":
+                logger.info("Inferred gender 'male' for name '%s'", name)
+                return Gender.MALE
+            elif result == "female":
+                logger.info("Inferred gender 'female' for name '%s'", name)
+                return Gender.FEMALE
+            else:
+                # Neutral or ambiguous - randomly assign
+                random_gender = random.choice([Gender.MALE, Gender.FEMALE])
+                logger.info(
+                    "Name '%s' is ambiguous, randomly assigned gender '%s'",
+                    name,
+                    random_gender.value,
+                )
+                return random_gender
+
+        except Exception as e:
+            logger.warning("Failed to infer gender for '%s': %s", name, e)
+            # Fallback: random assignment
+            return random.choice([Gender.MALE, Gender.FEMALE])
 
     async def _translate(self, text: str, language: str) -> str:
         """Translate text to the user's language.

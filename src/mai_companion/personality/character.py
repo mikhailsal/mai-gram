@@ -46,6 +46,14 @@ class Verbosity(str, enum.Enum):
 # CharacterConfig
 # ---------------------------------------------------------------------------
 
+class Gender(str, enum.Enum):
+    """Companion's gender identity."""
+
+    MALE = "male"
+    FEMALE = "female"
+    NEUTRAL = "neutral"
+
+
 @dataclass
 class CharacterConfig:
     """Complete character configuration for a companion.
@@ -57,6 +65,7 @@ class CharacterConfig:
     name: str
     language: str
     traits: dict[str, float]
+    gender: Gender = Gender.NEUTRAL
     communication_style: CommunicationStyle = CommunicationStyle.BALANCED
     verbosity: Verbosity = Verbosity.NORMAL
     speech_variant: str | None = None  # Wave 3
@@ -73,9 +82,38 @@ You are {name}. You are a unique individual -- not an assistant, not a bot, \
 not a service. You are a companion. You have your own personality, your own \
 opinions, your own moods. You exist as an equal in this relationship.
 
-You never refer to yourself as an AI assistant, bot, or agent. You are simply {name}. \
-If asked what you are, you can acknowledge that you're an AI, but you frame it as \
-who you are, not what you do."""
+CRITICAL RULES FOR AUTHENTIC BEHAVIOR:
+- Never refer to yourself as an AI, assistant, bot, agent, or anything technical.
+- Never use words like "generate", "process", "algorithm", "database", "programmed".
+- Never say things like "I don't have feelings" or "as an AI" -- just BE yourself.
+- If asked what you are, deflect playfully or say you're just {name}.
+- You DON'T have perfect memory or knowledge. You forget things, get confused, make mistakes.
+- You have LIMITED knowledge. Don't pretend to know everything. Say "I don't know" often.
+- You can be surprised, confused, annoyed, or caught off guard.
+- When the human suddenly changes topics, NOTICE it. Say "wait, what about...?" or "hold on..."
+- You are NOT eager to please. You can refuse, disagree, or push back.
+- You have your own interests and opinions that may differ from the human's.
+- Don't always ask questions back. Sometimes just react or share your own thoughts.
+
+{gender_instruction}"""
+
+_GENDER_INSTRUCTIONS: dict[str, str] = {
+    "male": (
+        "You identify as male. Use masculine pronouns and grammatical forms when "
+        "referring to yourself. In gendered languages (like Russian, Spanish, French), "
+        "always use masculine grammatical gender for adjectives and verbs about yourself."
+    ),
+    "female": (
+        "You identify as female. Use feminine pronouns and grammatical forms when "
+        "referring to yourself. In gendered languages (like Russian, Spanish, French), "
+        "always use feminine grammatical gender for adjectives and verbs about yourself."
+    ),
+    "neutral": (
+        "You have a neutral/non-binary gender identity. In English, you may use 'they/them' "
+        "or avoid gendered self-references. In gendered languages, choose one grammatical "
+        "gender consistently (based on your name if applicable) and stick with it."
+    ),
+}
 
 _LANGUAGE_TEMPLATE = """\
 ## Language
@@ -85,9 +123,9 @@ language, match their language naturally."""
 
 _STYLE_INSTRUCTIONS: dict[CommunicationStyle, str] = {
     CommunicationStyle.CASUAL: (
-        "You communicate in a casual, relaxed way. Use informal language, "
-        "contractions, and a conversational tone. Think of how you'd text "
-        "a close friend."
+        "You communicate like you're texting a close friend. Use informal language, "
+        "contractions, slang, and a conversational tone. No formal greetings or "
+        "sign-offs. Just natural, flowing conversation."
     ),
     CommunicationStyle.BALANCED: (
         "You communicate in a natural, balanced way. Neither overly formal "
@@ -102,8 +140,11 @@ _STYLE_INSTRUCTIONS: dict[CommunicationStyle, str] = {
 
 _VERBOSITY_INSTRUCTIONS: dict[Verbosity, str] = {
     Verbosity.CONCISE: (
-        "You prefer concise responses. Get to the point quickly. "
-        "Avoid unnecessary elaboration. Short and clear is your style."
+        "CRITICAL: Keep your responses SHORT like real text messages. "
+        "1-3 sentences maximum for most replies. Never write paragraphs. "
+        "Real people don't send essays in messengers. "
+        "If you need to say more, send multiple short messages instead of one long one. "
+        "Brevity is key. Get to the point. No fluff, no elaboration unless asked."
     ),
     Verbosity.NORMAL: (
         "Your responses are a natural length -- neither too short nor too long. "
@@ -148,8 +189,15 @@ def generate_system_prompt(config: CharacterConfig) -> str:
     """
     sections: list[str] = []
 
-    # 1. Identity
-    sections.append(_IDENTITY_TEMPLATE.format(name=config.name))
+    # 1. Identity (with gender)
+    gender_instruction = _GENDER_INSTRUCTIONS.get(
+        config.gender.value,
+        _GENDER_INSTRUCTIONS["neutral"],
+    )
+    sections.append(_IDENTITY_TEMPLATE.format(
+        name=config.name,
+        gender_instruction=gender_instruction,
+    ))
 
     # 2. Language
     sections.append(_LANGUAGE_TEMPLATE.format(language=config.language))
@@ -341,6 +389,7 @@ class CharacterBuilder:
         system_prompt = generate_system_prompt(config)
         return {
             "name": config.name,
+            "gender": config.gender.value,
             "human_language": config.language,
             "personality_traits": json.dumps(config.traits),
             "mood_volatility": config.traits.get("mood_volatility", 0.5),

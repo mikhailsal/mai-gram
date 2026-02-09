@@ -31,6 +31,17 @@ _TRANSLATE_PROMPT = (
     "Respond with ONLY the translated text."
 )
 
+_TRANSLATE_WITH_CONTEXT_PROMPT = (
+    "You are a professional translator. Translate the following text to {language}.\n\n"
+    "IMPORTANT CONTEXT: {context}\n\n"
+    "Rules:\n"
+    "- Preserve the original meaning, tone, and nuance precisely\n"
+    "- Do not add explanations or commentary\n"
+    "- For personality-related vocabulary, keep the nuance intact\n"
+    "- Pay close attention to who is speaking and who is being addressed\n"
+    "- Respond with ONLY the translated text"
+)
+
 _TRANSLATE_BATCH_PROMPT = (
     "You are a professional translator. Translate each of the following numbered "
     "texts to {language}. Preserve meaning, tone, and nuance precisely. "
@@ -38,6 +49,132 @@ _TRANSLATE_BATCH_PROMPT = (
     "Respond with ONLY the translations, one per line, numbered to match the input. "
     "Format: 1. <translation>\\n2. <translation>\\n..."
 )
+
+_TRANSLATE_BATCH_WITH_CONTEXT_PROMPT = (
+    "You are a professional translator for a chat application UI.\n\n"
+    "CONTEXT FOR EACH ITEM:\n{contexts}\n\n"
+    "Translate each of the following numbered texts to {language}.\n"
+    "Pay careful attention to the context provided for each item - it explains "
+    "the MEANING and PURPOSE of each word/phrase, not just its literal translation.\n\n"
+    "Rules:\n"
+    "- Use the context to understand what the word MEANS in this UI context\n"
+    "- Translate the MEANING, not the literal word\n"
+    "- Respond with ONLY the translations, one per line, numbered to match the input\n"
+    "- Format: 1. <translation>\\n2. <translation>\\n..."
+)
+
+# UI element contexts with example translations to help the LLM understand meaning
+# These examples guide the LLM to understand the MEANING, not just literal translation
+UI_ELEMENT_CONTEXTS = {
+    # Navigation
+    "Back": (
+        "Navigation button that returns the user to the previous screen. "
+        "NOT the body part 'back/spine'. "
+        "Examples: Chinese='返回', Spanish='Atrás', French='Retour', German='Zurück', "
+        "Japanese='戻る', Korean='뒤로'"
+    ),
+    "Skip": (
+        "Button to skip an optional step and continue to the next screen. "
+        "Examples: Chinese='跳过', Spanish='Omitir', French='Passer', "
+        "German='Überspringen', Japanese='スキップ'"
+    ),
+    # Confirmation
+    "Yes": (
+        "Confirmation button meaning agreement/acceptance. "
+        "Examples: Chinese='是', Spanish='Sí', French='Oui', German='Ja', "
+        "Japanese='はい'"
+    ),
+    "No": (
+        "Rejection/decline button. "
+        "Examples: Chinese='否', Spanish='No', French='Non', German='Nein', "
+        "Japanese='いいえ'"
+    ),
+    "Yes, this is perfect": (
+        "Confirmation button expressing satisfaction with the current selection. "
+        "User is confirming they are happy with their choice. "
+        "Examples: Chinese='是的，这很完美', Spanish='Sí, esto es perfecto'"
+    ),
+    "No, show me others": (
+        "Button to decline current selection and see alternative options. "
+        "User wants to browse more choices. "
+        "Examples: Chinese='不，给我看其他的', Spanish='No, muéstrame otros'"
+    ),
+    "Yes, let's begin!": (
+        "Enthusiastic confirmation button to start/proceed with the setup. "
+        "User is ready to begin. "
+        "Examples: Chinese='是的，开始吧！', Spanish='¡Sí, comencemos!'"
+    ),
+    "No, let me change something": (
+        "Button to go BACK to the previous step and modify/adjust settings before proceeding. "
+        "This is a NAVIGATION button to return and make changes. "
+        "Examples: Chinese='不，让我返回修改', Spanish='No, déjame volver a cambiar algo'"
+    ),
+    "Yes, proceed anyway": (
+        "Warning acknowledgment button - user understands the warning but wants to continue. "
+        "Examples: Chinese='是的，继续', Spanish='Sí, continuar de todos modos'"
+    ),
+    "No, let me adjust": (
+        "Button to go back and make changes after seeing a warning. "
+        "Examples: Chinese='不，让我调整', Spanish='No, déjame ajustar'"
+    ),
+    # Personality setup
+    "Choose a Preset": (
+        "Button to select from predefined personality templates. "
+        "'Preset' means a pre-configured option, not 'pre-set' as in 'set beforehand'. "
+        "Examples: Chinese='选择预设', Spanish='Elegir un preajuste'"
+    ),
+    "Customize Traits": (
+        "Button to manually configure personality characteristics one by one. "
+        "Examples: Chinese='自定义特征', Spanish='Personalizar rasgos'"
+    ),
+    # Trait levels
+    "Very Low": (
+        "Trait level indicator meaning the lowest setting (0.1 on a 0-1 scale). "
+        "Examples: Chinese='非常低', Spanish='Muy bajo', French='Très bas'"
+    ),
+    "Low": (
+        "Trait level indicator meaning a below-average setting (0.3 on a 0-1 scale). "
+        "Examples: Chinese='低', Spanish='Bajo', French='Bas'"
+    ),
+    "Medium": (
+        "Trait level indicator meaning an average/middle setting (0.5 on a 0-1 scale). "
+        "Examples: Chinese='中等', Spanish='Medio', French='Moyen'"
+    ),
+    "High": (
+        "Trait level indicator meaning an above-average setting (0.7 on a 0-1 scale). "
+        "Examples: Chinese='高', Spanish='Alto', French='Élevé'"
+    ),
+    "Very High": (
+        "Trait level indicator meaning the highest setting (0.9 on a 0-1 scale). "
+        "Examples: Chinese='非常高', Spanish='Muy alto', French='Très élevé'"
+    ),
+    # Communication style
+    "Casual": (
+        "Communication style option - informal, relaxed, friendly tone. "
+        "Examples: Chinese='随意', Spanish='Informal', French='Décontracté'"
+    ),
+    "Balanced": (
+        "Communication style option - mix of formal and informal. "
+        "Examples: Chinese='平衡', Spanish='Equilibrado', French='Équilibré'"
+    ),
+    "Formal": (
+        "Communication style option - professional, polite, structured tone. "
+        "Examples: Chinese='正式', Spanish='Formal', French='Formel'"
+    ),
+    # Verbosity
+    "Concise": (
+        "Response length option - short, to-the-point messages. "
+        "Examples: Chinese='简洁', Spanish='Conciso', French='Concis'"
+    ),
+    "Normal": (
+        "Response length option - standard message length. "
+        "Examples: Chinese='正常', Spanish='Normal', French='Normal'"
+    ),
+    "Detailed": (
+        "Response length option - longer, more elaborate responses. "
+        "Examples: Chinese='详细', Spanish='Detallado', French='Détaillé'"
+    ),
+}
 
 
 @dataclass
@@ -51,7 +188,7 @@ class TranslationService:
     """
 
     llm_provider: LLMProvider
-    _cache: dict[tuple[str, str], str] = field(default_factory=dict, repr=False)
+    _cache: dict[tuple[str, str, str | None], str] = field(default_factory=dict, repr=False)
 
     async def detect_language(self, human_input: str) -> str:
         """Identify the language from free-text input.
@@ -81,7 +218,9 @@ class TranslationService:
         logger.info("Detected language '%s' from input '%s'", detected, human_input)
         return detected
 
-    async def translate(self, text: str, target_language: str) -> str:
+    async def translate(
+        self, text: str, target_language: str, *, context: str | None = None
+    ) -> str:
         """Translate a single text to the target language.
 
         If *target_language* is ``"English"``, returns the original text
@@ -96,6 +235,10 @@ class TranslationService:
             The English text to translate.
         target_language:
             The language to translate into (e.g. "Russian", "Spanish").
+        context:
+            Optional context to help the translator understand the text better.
+            For example: "This is a message from the AI companion to the user,
+            asking for the companion's name (not the user's name)."
 
         Returns
         -------
@@ -105,11 +248,17 @@ class TranslationService:
         if target_language.lower() == "english":
             return text
 
-        cache_key = (text, target_language)
+        cache_key = (text, target_language, context)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        prompt = _TRANSLATE_PROMPT.format(language=target_language)
+        if context:
+            prompt = _TRANSLATE_WITH_CONTEXT_PROMPT.format(
+                language=target_language, context=context
+            )
+        else:
+            prompt = _TRANSLATE_PROMPT.format(language=target_language)
+
         messages = [
             ChatMessage(role=MessageRole.SYSTEM, content=prompt),
             ChatMessage(role=MessageRole.USER, content=text),
@@ -158,7 +307,7 @@ class TranslationService:
         uncached_indices: list[int] = []
 
         for i, text in enumerate(texts):
-            cache_key = (text, target_language)
+            cache_key = (text, target_language, None)
             if cache_key in self._cache:
                 results[i] = self._cache[cache_key]
             else:
@@ -199,7 +348,103 @@ class TranslationService:
                     idx + 1,
                 )
 
-            self._cache[(texts[orig_idx], target_language)] = translation
+            self._cache[(texts[orig_idx], target_language, None)] = translation
+            results[orig_idx] = translation
+
+        return [r if r is not None else texts[i] for i, r in enumerate(results)]
+
+    async def translate_ui_batch(
+        self, texts: list[str], target_language: str
+    ) -> list[str]:
+        """Translate UI elements with rich context to ensure correct meaning.
+
+        This method is specifically for UI elements like buttons where words
+        can have multiple meanings. It provides context and example translations
+        to help the LLM understand the intended meaning.
+
+        For example, "Back" as a navigation button should be "Назад" in Russian,
+        not "Спина" (which means back/spine as a body part).
+
+        Parameters
+        ----------
+        texts:
+            List of English UI element texts to translate.
+        target_language:
+            The language to translate into.
+
+        Returns
+        -------
+        list[str]
+            Translated texts in the same order as the input.
+        """
+        if target_language.lower() == "english":
+            return list(texts)
+
+        if not texts:
+            return []
+
+        # Check cache
+        results: list[str | None] = [None] * len(texts)
+        uncached_indices: list[int] = []
+
+        for i, text in enumerate(texts):
+            cache_key = (text, target_language, "ui_element")
+            if cache_key in self._cache:
+                results[i] = self._cache[cache_key]
+            else:
+                uncached_indices.append(i)
+
+        if not uncached_indices:
+            return [r for r in results if r is not None]
+
+        # Build context for each item
+        context_lines = []
+        for idx, i in enumerate(uncached_indices):
+            text = texts[i]
+            # Look up context, or create a generic one
+            if text in UI_ELEMENT_CONTEXTS:
+                context = UI_ELEMENT_CONTEXTS[text]
+            else:
+                context = f"UI button/label text in a chat application"
+            context_lines.append(f"{idx + 1}. \"{text}\": {context}")
+
+        contexts_str = "\n".join(context_lines)
+
+        # Build numbered input
+        numbered_input = "\n".join(
+            f"{idx + 1}. {texts[i]}" for idx, i in enumerate(uncached_indices)
+        )
+
+        prompt = _TRANSLATE_BATCH_WITH_CONTEXT_PROMPT.format(
+            language=target_language,
+            contexts=contexts_str,
+        )
+        messages = [
+            ChatMessage(role=MessageRole.SYSTEM, content=prompt),
+            ChatMessage(role=MessageRole.USER, content=numbered_input),
+        ]
+        response = await self.llm_provider.generate(
+            messages,
+            temperature=0.1,
+            max_tokens=sum(len(texts[i]) for i in uncached_indices) * 4,
+        )
+
+        # Parse numbered response
+        translated_lines = _parse_numbered_response(
+            response.content, expected_count=len(uncached_indices)
+        )
+
+        for idx, orig_idx in enumerate(uncached_indices):
+            if idx < len(translated_lines):
+                translation = translated_lines[idx]
+            else:
+                translation = texts[orig_idx]
+                logger.warning(
+                    "UI batch translation missing line %d, falling back to original",
+                    idx + 1,
+                )
+
+            self._cache[(texts[orig_idx], target_language, "ui_element")] = translation
             results[orig_idx] = translation
 
         return [r if r is not None else texts[i] for i, r in enumerate(results)]
