@@ -267,6 +267,7 @@ class BotHandler:
             config = await self._onboarding.handle_message(message)
             if config:
                 await self._create_companion(message.chat_id, config)
+                self._onboarding.clear_session(message.user_id)
             return
 
         # Regular conversation
@@ -287,6 +288,7 @@ class BotHandler:
             config = await self._onboarding.handle_message(message)
             if config:
                 await self._create_companion(message.chat_id, config)
+                self._onboarding.clear_session(message.user_id)
             return
 
         # Other callbacks (future features)
@@ -421,6 +423,20 @@ class BotHandler:
         async with get_session() as session:
             companion = Companion(**record)
             session.add(companion)
+            await session.flush()  # Get the companion ID
+
+            # Create initial mood state
+            mood_manager = MoodManager(session)
+            baseline = mood_manager.compute_baseline(config.traits)
+            from mai_companion.personality.mood import resolve_label
+            label = resolve_label(baseline)
+            await mood_manager._save_mood(
+                companion.id,
+                baseline,
+                label,
+                "initial baseline at companion creation",
+            )
+
             await session.commit()
 
         logger.info(

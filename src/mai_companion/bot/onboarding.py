@@ -89,6 +89,8 @@ class OnboardingSession:
         Optional appearance description.
     last_message_id:
         ID of the last bot message (for editing).
+    warning_acknowledged:
+        Whether the extreme config warning has been acknowledged.
     """
 
     user_id: str
@@ -103,6 +105,7 @@ class OnboardingSession:
     verbosity: Verbosity = Verbosity.NORMAL
     appearance: str | None = None
     last_message_id: str | None = None
+    warning_acknowledged: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -448,8 +451,10 @@ class OnboardingManager:
 
         elif parts[0] == "warning":
             if parts[1] == "proceed":
+                session.warning_acknowledged = True
                 return await self._complete_onboarding(session)
             elif parts[1] == "back":
+                session.warning_acknowledged = False
                 await self._show_confirmation(session)
 
         return None
@@ -694,30 +699,31 @@ class OnboardingManager:
 
         config.appearance_description = session.appearance
 
-        # Check for extreme configuration warning
-        warning = CharacterBuilder.get_extreme_warning(config)
-        if warning:
-            msg = ONBOARDING_TEXTS["extreme_warning"].format(warning=warning)
-            translated = await self._translate(msg, session.language)
+        # Check for extreme configuration warning (only if not already acknowledged)
+        if not session.warning_acknowledged:
+            warning = CharacterBuilder.get_extreme_warning(config)
+            if warning:
+                msg = ONBOARDING_TEXTS["extreme_warning"].format(warning=warning)
+                translated = await self._translate(msg, session.language)
 
-            keyboard = [
-                [("⚠️ Yes, proceed anyway", "warning:proceed")],
-                [("← No, let me adjust", "warning:back")],
-            ]
-            if session.language.lower() != "english":
-                labels = await self._translator.translate_batch(
-                    ["Yes, proceed anyway", "No, let me adjust"],
-                    session.language,
-                )
                 keyboard = [
-                    [(f"⚠️ {labels[0]}", "warning:proceed")],
-                    [(f"← {labels[1]}", "warning:back")],
+                    [("⚠️ Yes, proceed anyway", "warning:proceed")],
+                    [("← No, let me adjust", "warning:back")],
                 ]
+                if session.language.lower() != "english":
+                    labels = await self._translator.translate_batch(
+                        ["Yes, proceed anyway", "No, let me adjust"],
+                        session.language,
+                    )
+                    keyboard = [
+                        [(f"⚠️ {labels[0]}", "warning:proceed")],
+                        [(f"← {labels[1]}", "warning:back")],
+                    ]
 
-            await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
-            # Don't complete yet -- wait for warning response
-            # Return a marker that we're waiting
-            return None  # type: ignore
+                await self._send_message(session.chat_id, translated, session, keyboard=keyboard)
+                # Don't complete yet -- wait for warning response
+                # Return a marker that we're waiting
+                return None  # type: ignore
 
         # Send completion message
         msg = ONBOARDING_TEXTS["completed"].format(name=session.companion_name)
