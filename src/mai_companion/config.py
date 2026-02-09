@@ -72,11 +72,33 @@ class Settings(BaseSettings):
         description="Hour (0-23) when quiet hours end",
     )
 
+    # -- Access Control --
+    allowed_users: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of Telegram user IDs allowed to use the bot. "
+            "Leave empty to allow anyone (not recommended for production). "
+            "Get your user ID by messaging @userinfobot on Telegram."
+        ),
+    )
+
     # -- Debug --
     debug: bool = Field(
         default=False,
         description="Enable debug mode (verbose logging, SQL echo)",
     )
+
+    def get_allowed_user_ids(self) -> set[str]:
+        """Parse the allowed_users string into a set of user IDs.
+
+        Returns
+        -------
+        set[str]
+            Set of allowed user IDs. Empty set means no restriction.
+        """
+        if not self.allowed_users.strip():
+            return set()
+        return {uid.strip() for uid in self.allowed_users.split(",") if uid.strip()}
 
 
 def get_settings() -> Settings:

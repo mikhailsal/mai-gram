@@ -22,6 +22,7 @@ class TestSettings:
         assert settings.quiet_hours_start == 23
         assert settings.quiet_hours_end == 7
         assert settings.debug is False
+        assert settings.allowed_users == ""
 
     def test_override_via_constructor(self) -> None:
         """Settings can be overridden via constructor kwargs."""
@@ -43,3 +44,63 @@ class TestSettings:
         """get_settings() returns a valid Settings instance."""
         settings = get_settings()
         assert isinstance(settings, Settings)
+
+
+class TestAllowedUsers:
+    """Tests for the allowed_users access control setting."""
+
+    def test_empty_allowed_users_returns_empty_set(self) -> None:
+        """Empty allowed_users string returns empty set (allow all)."""
+        settings = Settings(
+            allowed_users="",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_allowed_user_ids() == set()
+
+    def test_whitespace_only_returns_empty_set(self) -> None:
+        """Whitespace-only allowed_users returns empty set."""
+        settings = Settings(
+            allowed_users="   ",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_allowed_user_ids() == set()
+
+    def test_single_user_id(self) -> None:
+        """Single user ID is parsed correctly."""
+        settings = Settings(
+            allowed_users="123456789",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_allowed_user_ids() == {"123456789"}
+
+    def test_multiple_user_ids(self) -> None:
+        """Multiple user IDs are parsed correctly."""
+        settings = Settings(
+            allowed_users="123456789,987654321,555555555",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_allowed_user_ids() == {
+            "123456789",
+            "987654321",
+            "555555555",
+        }
+
+    def test_user_ids_with_spaces(self) -> None:
+        """User IDs with surrounding spaces are trimmed."""
+        settings = Settings(
+            allowed_users=" 123456789 , 987654321 , 555555555 ",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_allowed_user_ids() == {
+            "123456789",
+            "987654321",
+            "555555555",
+        }
+
+    def test_empty_entries_are_ignored(self) -> None:
+        """Empty entries in the comma-separated list are ignored."""
+        settings = Settings(
+            allowed_users="123456789,,987654321,",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_allowed_user_ids() == {"123456789", "987654321"}

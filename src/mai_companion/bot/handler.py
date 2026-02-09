@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from mai_companion.bot.middleware import MessageLogger, RateLimiter, RateLimitConfig
 from mai_companion.bot.onboarding import OnboardingManager, OnboardingResult, OnboardingState
+from mai_companion.config import get_settings
 from mai_companion.db.database import get_session
 from mai_companion.db.models import Companion, Message
 from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
@@ -69,6 +70,20 @@ class BotHandler:
         )
         self._message_logger = MessageLogger(log_content=False)
 
+        # Load allowed users from config
+        settings = get_settings()
+        self._allowed_users = settings.get_allowed_user_ids()
+        if self._allowed_users:
+            logger.info(
+                "Access control enabled: %d user(s) allowed",
+                len(self._allowed_users),
+            )
+        else:
+            logger.warning(
+                "Access control DISABLED: anyone can use this bot. "
+                "Set ALLOWED_USERS in .env to restrict access."
+            )
+
         # Register handlers
         messenger.register_command_handler("start", self._handle_start)
         messenger.register_command_handler("reset", self._handle_reset)
@@ -112,6 +127,45 @@ class BotHandler:
             OutgoingMessage(text=msg, chat_id=chat_id)
         )
 
+    async def _check_access(self, message: IncomingMessage) -> bool:
+        """Check if the user is allowed to use the bot.
+
+        Parameters
+        ----------
+        message:
+            The incoming message.
+
+        Returns
+        -------
+        bool
+            True if the user is allowed, False otherwise.
+        """
+        # If no allowed users configured, allow everyone
+        if not self._allowed_users:
+            return True
+
+        # Check if user is in the allowed list
+        if message.user_id in self._allowed_users:
+            return True
+
+        # User not allowed - log and send rejection message
+        logger.warning(
+            "Access denied for user_id=%s (not in ALLOWED_USERS)",
+            message.user_id,
+        )
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=(
+                    "🚫 Access denied.\n\n"
+                    "This is a private bot. If you believe you should have access, "
+                    "please contact the bot owner and provide your user ID: "
+                    f"`{message.user_id}`"
+                ),
+                chat_id=message.chat_id,
+            )
+        )
+        return False
+
     async def _handle_start(self, message: IncomingMessage) -> None:
         """Handle the /start command.
 
@@ -121,6 +175,10 @@ class BotHandler:
             The incoming message.
         """
         self._message_logger.log_incoming(message)
+
+        # Check access control
+        if not await self._check_access(message):
+            return
 
         # Check if a companion already exists for this chat
         async with get_session() as session:
@@ -151,6 +209,10 @@ class BotHandler:
             The incoming message.
         """
         self._message_logger.log_incoming(message)
+
+        # Check access control
+        if not await self._check_access(message):
+            return
 
         async with get_session() as session:
             companion = await self._get_companion_by_chat(session, message.chat_id)
@@ -184,6 +246,10 @@ class BotHandler:
             The incoming message.
         """
         self._message_logger.log_incoming(message)
+
+        # Check access control
+        if not await self._check_access(message):
+            return
 
         async with get_session() as session:
             companion = await self._get_companion_by_chat(session, message.chat_id)
@@ -230,6 +296,10 @@ class BotHandler:
         """
         self._message_logger.log_incoming(message)
 
+        # Check access control
+        if not await self._check_access(message):
+            return
+
         msg = (
             "**Available commands:**\n\n"
             "/start - Create a new AI companion\n"
@@ -258,6 +328,10 @@ class BotHandler:
         """
         self._message_logger.log_incoming(message)
 
+        # Check access control
+        if not await self._check_access(message):
+            return
+
         # Check rate limit
         if not await self._rate_limiter.check_rate_limit(message.user_id, message.chat_id):
             return
@@ -282,6 +356,10 @@ class BotHandler:
             The incoming message with callback data.
         """
         self._message_logger.log_incoming(message)
+
+        # Check access control
+        if not await self._check_access(message):
+            return
 
         # Check if user is in onboarding
         if self._onboarding.is_onboarding(message.user_id):

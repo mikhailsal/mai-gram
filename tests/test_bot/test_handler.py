@@ -34,8 +34,18 @@ def mock_llm_provider():
 
 @pytest.fixture
 def bot_handler(mock_messenger, mock_llm_provider):
-    """Create a bot handler with mocks."""
-    return BotHandler(mock_messenger, mock_llm_provider)
+    """Create a bot handler with mocks (no access control)."""
+    with patch("mai_companion.bot.handler.get_settings") as mock_settings:
+        mock_settings.return_value.get_allowed_user_ids.return_value = set()
+        return BotHandler(mock_messenger, mock_llm_provider)
+
+
+@pytest.fixture
+def bot_handler_with_access_control(mock_messenger, mock_llm_provider):
+    """Create a bot handler with access control enabled."""
+    with patch("mai_companion.bot.handler.get_settings") as mock_settings:
+        mock_settings.return_value.get_allowed_user_ids.return_value = {"allowed_user"}
+        return BotHandler(mock_messenger, mock_llm_provider)
 
 
 class TestBotHandlerInit:
@@ -237,3 +247,97 @@ class TestRateLimitCallback:
 
             # Should send a rate limit message
             mock_messenger.send_message.assert_called()
+
+
+class TestAccessControl:
+    """Tests for access control functionality."""
+
+    @pytest.fixture
+    def allowed_user_message(self):
+        """Create a message from an allowed user."""
+        return IncomingMessage(
+            platform="telegram",
+            chat_id="12345",
+            user_id="allowed_user",
+            message_id="111",
+            message_type=MessageType.TEXT,
+            text="Hello!",
+        )
+
+    @pytest.fixture
+    def denied_user_message(self):
+        """Create a message from a denied user."""
+        return IncomingMessage(
+            platform="telegram",
+            chat_id="99999",
+            user_id="denied_user",
+            message_id="222",
+            message_type=MessageType.TEXT,
+            text="Hello!",
+        )
+
+    async def test_access_granted_for_allowed_user(
+        self, bot_handler_with_access_control, allowed_user_message
+    ):
+        """Test that allowed users can access the bot."""
+        result = await bot_handler_with_access_control._check_access(
+            allowed_user_message
+        )
+        assert result is True
+
+    async def test_access_denied_for_unknown_user(
+        self, bot_handler_with_access_control, denied_user_message, mock_messenger
+    ):
+        """Test that unknown users are denied access."""
+        result = await bot_handler_with_access_control._check_access(
+            denied_user_message
+        )
+        assert result is False
+
+        # Should send access denied message
+        mock_messenger.send_message.assert_called()
+        call_args = mock_messenger.send_message.call_args
+        message = call_args[0][0]
+        assert "Access denied" in message.text
+        assert "denied_user" in message.text  # User ID should be shown
+
+    async def test_no_access_control_allows_everyone(
+        self, bot_handler, denied_user_message
+    ):
+        """Test that when no allowed_users is set, everyone is allowed."""
+        result = await bot_handler._check_access(denied_user_message)
+        assert result is True
+
+    async def test_start_command_blocked_for_denied_user(
+        self, bot_handler_with_access_control, mock_messenger
+    ):
+        """Test that /start is blocked for denied users."""
+        start_message = IncomingMessage(
+            platform="telegram",
+            chat_id="99999",
+            user_id="denied_user",
+            message_id="222",
+            message_type=MessageType.COMMAND,
+            text="/start",
+            command="start",
+        )
+
+        await bot_handler_with_access_control._handle_start(start_message)
+
+        # Should send access denied message (not onboarding)
+        mock_messenger.send_message.assert_called()
+        call_args = mock_messenger.send_message.call_args
+        message = call_args[0][0]
+        assert "Access denied" in message.text
+
+    async def test_message_blocked_for_denied_user(
+        self, bot_handler_with_access_control, denied_user_message, mock_messenger
+    ):
+        """Test that regular messages are blocked for denied users."""
+        await bot_handler_with_access_control._handle_message(denied_user_message)
+
+        # Should send access denied message
+        mock_messenger.send_message.assert_called()
+        call_args = mock_messenger.send_message.call_args
+        message = call_args[0][0]
+        assert "Access denied" in message.text
