@@ -15,12 +15,12 @@ todos:
       - phase-1-foundation
   - id: phase-3-personality
     content: "Phase 3: Personality engine -- Wave 1 traits (warmth, humor, patience, directness, laziness, mood_volatility) + mood system + translation"
-    status: pending
+    status: completed
     dependencies:
       - phase-1-foundation
   - id: phase-4-telegram
     content: "Phase 4: Telegram integration with onboarding and basic conversation, a messenger abstraction (for future integrations)"
-    status: pending
+    status: completed
     dependencies:
       - phase-2-llm
       - phase-3-personality
