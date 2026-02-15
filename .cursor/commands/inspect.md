@@ -1,0 +1,5 @@
+Act as the inspector and conduct a thorough review of the implementation. Examine the associated code, its performance, readability, and extensibility, referencing the exact requirements specified in the plan. Pay extra attention to the quality and completeness of automated tests—ensure all potential edge cases are covered and verify that the tests are effectively validating the intended logic.
+
+In your report, clearly documentm any overlooked aspects or deviations from the plan, highlighting missing features, unhandled edge cases, gaps in test coverage, issues with code structure, or any subtleties that may have been missed by the executor. If all aspects of the plan have been successfully implemented with high-quality code and thorough, relevant testing, simply state that everything is fine.
+
+Provide your findings in a structured, detailed manner, leaving no doubt as to whether Tasks completion meets the required standards.

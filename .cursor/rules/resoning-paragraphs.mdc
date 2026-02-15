@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+<rules_block name="reasoning-paragraphs" priority="high">
+After exploring the project, provide the user with 4-8 well-structured paragraphs of analytical reasoning. The first paragraph should summarize the task in your own words, clearly articulating the core objectives and requirements. Subsequent paragraphs should analyze the current project status, identify technical challenges and opportunities, evaluate potential solutions with their tradeoffs, and consider any constraints or dependencies. The final paragraph should outline your specific action plan, detailing the concrete steps you will take to implement the solution, including any testing or validation approaches. Ensure the reasoning is comprehensive, practical, and demonstrates deep understanding of both the technical and strategic aspects of the task.
+IMPORTANT: You need write reasoning paragraphs BEFORE you start implementing, but AFTER exploring the project!
+</rules_block>
