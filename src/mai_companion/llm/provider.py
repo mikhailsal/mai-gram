@@ -23,6 +23,25 @@ class MessageRole(str, enum.Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    """Tool/function definition exposed to the model."""
+
+    name: str
+    description: str
+    parameters: dict
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    """A single tool call emitted by the model."""
+
+    id: str
+    name: str
+    arguments: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +50,8 @@ class ChatMessage:
 
     role: MessageRole
     content: str
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +75,7 @@ class LLMResponse:
     model: str
     usage: TokenUsage = field(default_factory=TokenUsage)
     finish_reason: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +140,8 @@ class LLMProvider(ABC):
         model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> LLMResponse:
         """Send a chat-completion request and return the full response.
 
@@ -132,6 +156,16 @@ class LLMProvider(ABC):
         max_tokens:
             Maximum number of tokens to generate.  ``None`` lets the
             provider decide.
+        tools:
+            Optional list of tool definitions the model may call.
+            When provided, the model can emit ``tool_calls`` in the
+            response instead of (or alongside) text content.
+        tool_choice:
+            Controls how the model selects tools.  Common values:
+            ``"auto"`` (model decides), ``"none"`` (no tools),
+            ``"required"`` (must call a tool), or a dict specifying
+            a particular function
+            (``{"type": "function", "function": {"name": "..."}}``)
         """
 
     @abstractmethod
@@ -142,11 +176,30 @@ class LLMProvider(ABC):
         model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat-completion response token-by-token.
 
         Yields ``StreamChunk`` objects.  The final chunk will carry a
         non-``None`` ``finish_reason``.
+
+        Parameters
+        ----------
+        messages:
+            The conversation history (system + user + assistant turns).
+        model:
+            Override the default model for this call.
+        temperature:
+            Sampling temperature (0.0 = deterministic, 2.0 = very random).
+        max_tokens:
+            Maximum number of tokens to generate.  ``None`` lets the
+            provider decide.
+        tools:
+            Optional list of tool definitions the model may call.
+        tool_choice:
+            Controls how the model selects tools (``"auto"``,
+            ``"none"``, ``"required"``, or a function-specific dict).
         """
         # The yield below is only so that type-checkers see this as an
         # async generator; subclasses will provide the real implementation.

@@ -23,6 +23,8 @@ from mai_companion.llm.provider import (
     LLMProviderError,
     LLMRateLimitError,
     LLMResponse,
+    ToolCall,
+    ToolDefinition,
     StreamChunk,
     TokenUsage,
     LLMProvider,
@@ -108,6 +110,8 @@ class OpenRouterProvider(LLMProvider):
         model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> LLMResponse:
         """Send a non-streaming chat-completion request."""
         payload = self._build_payload(
@@ -115,6 +119,8 @@ class OpenRouterProvider(LLMProvider):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
             stream=False,
         )
 
@@ -129,6 +135,8 @@ class OpenRouterProvider(LLMProvider):
         model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat-completion response as SSE chunks."""
         payload = self._build_payload(
@@ -136,6 +144,8 @@ class OpenRouterProvider(LLMProvider):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
             stream=True,
         )
 
@@ -176,17 +186,56 @@ class OpenRouterProvider(LLMProvider):
         model: str | None,
         temperature: float,
         max_tokens: int | None,
+        tools: list[ToolDefinition] | None,
+        tool_choice: str | dict | None,
         stream: bool,
     ) -> dict[str, Any]:
         """Build the JSON request body."""
         payload: dict[str, Any] = {
             "model": model or self._default_model,
-            "messages": [{"role": m.role.value, "content": m.content} for m in messages],
+            "messages": [self._serialize_message(m) for m in messages],
             "temperature": temperature,
             "stream": stream,
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if tools is not None:
+            payload["tools"] = [self._serialize_tool_definition(tool) for tool in tools]
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        return payload
+
+    @staticmethod
+    def _serialize_tool_definition(tool: ToolDefinition) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            },
+        }
+
+    @staticmethod
+    def _serialize_message(message: ChatMessage) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "role": message.role.value,
+            "content": message.content,
+        }
+        if message.tool_call_id is not None:
+            payload["tool_call_id"] = message.tool_call_id
+        if message.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                    },
+                }
+                for tool_call in message.tool_calls
+            ]
         return payload
 
     # -- Non-streaming request with retry ---------------------------------
@@ -336,7 +385,8 @@ class OpenRouterProvider(LLMProvider):
             raise LLMProviderError("No choices in API response")
 
         message = choices[0].get("message", {})
-        content = message.get("content", "")
+        content = message.get("content") or ""
+        tool_calls = OpenRouterProvider._parse_tool_calls(message.get("tool_calls"))
         finish_reason = choices[0].get("finish_reason", "")
 
         usage_data = data.get("usage", {})
@@ -351,7 +401,37 @@ class OpenRouterProvider(LLMProvider):
             model=data.get("model", ""),
             usage=usage,
             finish_reason=finish_reason,
+            tool_calls=tool_calls,
         )
+
+    @staticmethod
+    def _parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
+        if not isinstance(raw_tool_calls, list):
+            return []
+
+        parsed_calls: list[ToolCall] = []
+        for tool_call in raw_tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function_data = tool_call.get("function")
+            if not isinstance(function_data, dict):
+                continue
+
+            tool_call_id = tool_call.get("id")
+            name = function_data.get("name")
+            arguments = function_data.get("arguments")
+            if not isinstance(tool_call_id, str) or not isinstance(name, str):
+                continue
+
+            parsed_calls.append(
+                ToolCall(
+                    id=tool_call_id,
+                    name=name,
+                    arguments=arguments if isinstance(arguments, str) else "",
+                )
+            )
+
+        return parsed_calls
 
     # -- HTTP status → typed exception mapping -----------------------------
 

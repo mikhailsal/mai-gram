@@ -15,6 +15,8 @@ from mai_companion.llm.provider import (
     LLMResponse,
     MessageRole,
     StreamChunk,
+    ToolCall,
+    ToolDefinition,
     TokenUsage,
 )
 
@@ -26,6 +28,7 @@ class TestMessageRole:
         assert MessageRole.SYSTEM == "system"
         assert MessageRole.USER == "user"
         assert MessageRole.ASSISTANT == "assistant"
+        assert MessageRole.TOOL == "tool"
 
     def test_is_str_subclass(self) -> None:
         assert isinstance(MessageRole.USER, str)
@@ -38,6 +41,17 @@ class TestChatMessage:
         msg = ChatMessage(role=MessageRole.USER, content="Hello!")
         assert msg.role == MessageRole.USER
         assert msg.content == "Hello!"
+        assert msg.tool_calls is None
+        assert msg.tool_call_id is None
+
+    def test_with_tool_calls(self) -> None:
+        calls = [ToolCall(id="call_1", name="search_messages", arguments='{"query":"paris"}')]
+        msg = ChatMessage(role=MessageRole.ASSISTANT, content="", tool_calls=calls)
+        assert msg.tool_calls == calls
+
+    def test_with_tool_call_id(self) -> None:
+        msg = ChatMessage(role=MessageRole.TOOL, content="result", tool_call_id="call_1")
+        assert msg.tool_call_id == "call_1"
 
     def test_is_frozen(self) -> None:
         msg = ChatMessage(role=MessageRole.USER, content="Hi")
@@ -63,21 +77,45 @@ class TestLLMResponse:
     """LLMResponse dataclass."""
 
     def test_creation(self) -> None:
+        calls = [ToolCall(id="call_1", name="search_messages", arguments='{"query":"paris"}')]
         resp = LLMResponse(
             content="Hello, world!",
             model="openai/gpt-4o",
             usage=TokenUsage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
             finish_reason="stop",
+            tool_calls=calls,
         )
         assert resp.content == "Hello, world!"
         assert resp.model == "openai/gpt-4o"
         assert resp.usage.total_tokens == 8
         assert resp.finish_reason == "stop"
+        assert resp.tool_calls == calls
 
     def test_defaults(self) -> None:
         resp = LLMResponse(content="Hi", model="test")
         assert resp.usage.total_tokens == 0
         assert resp.finish_reason == ""
+        assert resp.tool_calls == []
+
+
+class TestToolStructures:
+    """ToolDefinition and ToolCall dataclasses."""
+
+    def test_tool_definition_creation(self) -> None:
+        tool = ToolDefinition(
+            name="search",
+            description="Search messages",
+            parameters={"type": "object", "properties": {"query": {"type": "string"}}},
+        )
+        assert tool.name == "search"
+        assert tool.description == "Search messages"
+        assert tool.parameters["type"] == "object"
+
+    def test_tool_call_creation(self) -> None:
+        call = ToolCall(id="call_abc", name="search_messages", arguments='{"query":"hello"}')
+        assert call.id == "call_abc"
+        assert call.name == "search_messages"
+        assert call.arguments == '{"query":"hello"}'
 
 
 class TestStreamChunk:

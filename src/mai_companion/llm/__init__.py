@@ -22,6 +22,8 @@ from mai_companion.llm.provider import (
     LLMResponse,
     MessageRole,
     StreamChunk,
+    ToolCall,
+    ToolDefinition,
     TokenUsage,
 )
 from mai_companion.llm.translation import TranslationService
@@ -39,6 +41,8 @@ __all__ = [
     "MessageRole",
     "OpenRouterProvider",
     "StreamChunk",
+    "ToolCall",
+    "ToolDefinition",
     "TokenUsage",
     "TranslationService",
 ]

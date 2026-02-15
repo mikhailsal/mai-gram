@@ -397,19 +397,18 @@ Key files: `bot/handler.py`, `bot/onboarding.py`, `main.py`
 
 This is the most critical phase. Implement a multi-tier memory architecture:
 
-1. **Short-term memory**: Recent N messages (sliding window) included directly in context.
-2. **Daily summaries**: At the end of each day (or when a threshold is reached), the LLM compresses the day's conversation into a concise summary. Stored in SQLite.
-3. **Semantic search (vector memory)**: All messages are embedded and stored in ChromaDB. When the human references something from the past, relevant messages are retrieved via similarity search and injected into context.
-4. **Knowledge base (wiki)**: Structured facts about the human and AI extracted automatically from conversations -- name, preferences, important dates, opinions, life events. Stored as key-value entries in SQLite with **importance scores**, always included in context.
-5. **Graceful forgetting**: Very old memories degrade naturally over time. Low-importance facts fade ("You mentioned preferring Thai food at some point" instead of "On March 15th you said..."). High-importance facts (human's name, family members, major life events) persist forever. The human can explicitly pin memories with "remember this" to mark them as permanently important.
+1. **Short-term memory**: Recent 30 messages (sliding window) included directly in context. And always all today messages. But all messages are stored forever and could be accesed using build-in MCP (see below).
+2. **Summaries**: At the end of each day (or when a threshold is reached), the parallel AI memory subsystem (not the same as the AI companion) compresses the day's conversation into a concise summary. Stored as *.md files. After end of each week - weekly summaries. Then mounthly summaries. All summaries are automaticaly included in context (yes, this could be costly, but we need this quality of memory to achieve greate experience).
+3. **Messeges search**: When the human references something from the past, the AI could use messeges tool to search exacly what happend in its messeges history using keywords search (like humans do using their messengers history). Let's implement this as build-in MCP (with possibility adding other MCPs in the future). Let's use only models with native tools support.
+4. **Knowledge base (wiki)**: Structured facts about the human and the AI extracted from conversations by the AI companion itself -- name, preferences, important dates, opinions, life events, etc. Stored as key-value entries in wiki folder with **importance scores (e.g. 9999_human_name.md)**, 20 most important things are always included in context. AI can create/edit/read/search entries using another build-in MCP - wiki tools. Of cource, the human can ask the AI to add some important information to its wiki.
+5. **Graceful forgetting**: The parallel AI memory subsystem summaries old entries into less verbose ones. For example after 4 weeks will be created mounthly summary with more condensed information about what happend during these weeks and the weeks memoried will be deleted. Thus low-importance facts fade ("You mentioned preferring Thai food at some point" instead of "On March 15th you said..."). High-importance facts (human's name, family members, major life events) persist forever in wiki and even very condesed memory (because the subsystem understands its importance).
 
 The prompt builder assembles context in this priority order:
 
 - System prompt (personality + current mood + relationship stage)
-- Knowledge base facts (always present, filtered by importance)
-- Relevant vector search results (if topic seems to reference past)
-- Recent daily summaries (last 7 days)
-- Short-term message window (last ~30 messages)
+- Wiki base facts (always present, filtered by importance)
+- All Summaries
+- Short-term message window
 
 Key files: `memory/manager.py`, `memory/messages.py`, `memory/summaries.py`, `memory/vector_store.py`, `memory/knowledge_base.py`, `memory/forgetting.py`, `core/prompt_builder.py`
 
