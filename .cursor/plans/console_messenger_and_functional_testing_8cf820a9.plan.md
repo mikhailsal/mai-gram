@@ -4,10 +4,10 @@ overview: Build a non-interactive console messenger with time offset simulation,
 todos:
   - id: s1-clock
     content: "[Stage 1] Clock: time offset system, per-chat persistence, monotonic check"
-    status: pending
+    status: completed
   - id: s1-console-messenger
     content: "[Stage 1] ConsoleMessenger: Messenger interface impl with button display"
-    status: pending
+    status: completed
   - id: s1-llm-logger
     content: "[Stage 1] LLM Logger: provider proxy capturing all LLM interactions"
     status: pending

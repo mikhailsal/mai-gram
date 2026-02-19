@@ -15,6 +15,13 @@ def _escape_like_pattern(query: str) -> str:
     return query.replace("%", r"\%").replace("_", r"\_")
 
 
+def _to_utc_naive(dt: datetime) -> datetime:
+    """Normalize datetime values for safe chronological comparisons."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 class MessageStore:
     """Data access layer for conversation messages."""
 
@@ -31,6 +38,25 @@ class MessageStore:
         is_proactive: bool = False,
     ) -> Message:
         """Persist a message and return the saved ORM object."""
+        if timestamp is not None:
+            result = await self._session.execute(
+                select(Message.timestamp)
+                .where(Message.companion_id == companion_id)
+                .order_by(desc(Message.timestamp), desc(Message.id))
+                .limit(1)
+            )
+            last_timestamp = result.scalar_one_or_none()
+            if (
+                isinstance(last_timestamp, datetime)
+                and _to_utc_naive(timestamp) <= _to_utc_naive(last_timestamp)
+            ):
+                raise ValueError(
+                    "Error: target date "
+                    f"{timestamp.date().isoformat()} would place this message before "
+                    f"the last message at {last_timestamp.isoformat()}. "
+                    "Messages must be chronologically ordered."
+                )
+
         message = Message(
             companion_id=companion_id,
             role=role,

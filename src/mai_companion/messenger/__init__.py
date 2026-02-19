@@ -12,8 +12,10 @@ from mai_companion.messenger.base import (
     OutgoingMessage,
     SendResult,
 )
+from mai_companion.messenger.console import ConsoleMessenger
 
 __all__ = [
+    "ConsoleMessenger",
     "IncomingMessage",
     "Messenger",
     "MessengerError",

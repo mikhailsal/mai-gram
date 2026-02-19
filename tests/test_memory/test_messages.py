@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mai_companion.db.models import Companion
@@ -189,3 +190,27 @@ class TestMessageStore:
         results = await store.search(companion_id, "data_file")
         assert len(results) == 1
         assert results[0].content == "The file is named data_file.txt"
+
+    async def test_save_message_rejects_non_monotonic_timestamp(
+        self, session: AsyncSession
+    ) -> None:
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        timestamp = datetime(2026, 2, 1, 10, 0, 0)
+        await store.save_message(companion_id, "user", "first", timestamp=timestamp)
+
+        with pytest.raises(ValueError, match="chronologically ordered"):
+            await store.save_message(companion_id, "assistant", "second", timestamp=timestamp)
+
+    async def test_save_message_allows_strictly_newer_timestamp(
+        self, session: AsyncSession
+    ) -> None:
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+        await store.save_message(companion_id, "user", "first", timestamp=base)
+        newer = await store.save_message(
+            companion_id, "assistant", "second", timestamp=base + timedelta(seconds=1)
+        )
+
+        assert newer.content == "second"
