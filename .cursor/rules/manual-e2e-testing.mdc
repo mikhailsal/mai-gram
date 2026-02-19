@@ -1,0 +1,40 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+<rules_block name="manual-e2e-testing" priority="higher">
+After completing any implementation task, you MUST conduct manual end-to-end testing. This stage is MANDATORY and cannot be skipped.
+
+## Testing Process
+1. After finishing implementation, immediately perform end-to-end testing to verify the solution works correctly
+2. If errors are discovered during testing, fix them and repeat the testing cycle
+3. Continue the fix-and-retest loop until all issues are resolved
+4. Only conclude the task when testing confirms the implementation is working
+
+## When Testing Seems Impossible
+The ONLY acceptable reason to modify this requirement is if the environment genuinely cannot support reasonable form of testing OR if your task is to write only the tests themselves. However:
+- You must provide STRONG justification explaining exactly why manual testing is impossible
+- Before claiming impossibility, you MUST attempt to create testing conditions as close to reality as the environment allows
+- Even in constrained environments, find ways to verify functionality and catch obvious errors
+- Partial testing or smoke testing is always better than no testing
+
+## Examples of Acceptable Adaptations
+- If a full database is unavailable, create a temporary mock database or use in-memory storage for testing
+- If external APIs are inaccessible, create stub responses to test integration logic
+- If UI testing tools are limited, manually verify through available browser/console tools
+- If the full system cannot run, test individual components in isolation
+
+## Unacceptable Excuses
+- "The code looks correct" — you must verify, not assume
+- "Testing would take too long" — testing is part of the task, not optional
+- "I already tested in unit tests" — manual execution is required
+- "The changes are minor" — all changes require verification
+
+## Acceptable Exceptions
+- If the task is to write only the tests themselves, you can skip the manual testing.
+- If your task is not about technical things
+
+
+IMPORTANT: Skipping testing without exhaustive justification is a critical failure. Always prefer imperfect testing over no testing.
+</rules_block>

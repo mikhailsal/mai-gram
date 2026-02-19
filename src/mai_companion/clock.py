@@ -46,7 +46,11 @@ class ConsoleStateStore:
         if not self._state_path.exists():
             return {"last_chat_id": None, "chats": {}}
 
-        data = json.loads(self._state_path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {"last_chat_id": None, "chats": {}}
+
         if not isinstance(data, dict):
             return {"last_chat_id": None, "chats": {}}
 

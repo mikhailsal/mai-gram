@@ -1,0 +1,12 @@
+[llm]
+model = "google/gemini-2.5-flash-lite-preview-09-2025"
+
+[memory]
+summary_threshold = 5
+short_term_limit = 30
+wiki_context_limit = 20
+tool_max_iterations = 5
+
+[testing]
+data_dir = "./data/functional_tests"
+debug_logging = true

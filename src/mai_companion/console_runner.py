@@ -343,7 +343,7 @@ async def _seed_messages(chat_id: str, jsonl_path: str) -> int:
                     seconds = offsets_by_day.get(target_day, 0)
                     offsets_by_day[target_day] = seconds + 1
                     timestamp = datetime.combine(target_day, datetime.min.time(), tzinfo=timezone.utc)
-                    timestamp = timestamp.replace(second=seconds % 60, minute=(seconds // 60) % 60)
+                    timestamp += timedelta(seconds=seconds)
 
                 try:
                     await message_store.save_message(

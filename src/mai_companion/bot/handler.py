@@ -447,15 +447,15 @@ class BotHandler:
             )
 
             mcp_manager = MCPManager()
+            clock = self._clock_provider(message.chat_id)
             mcp_manager.register_server(
                 "messages",
                 MessagesMCPServer(message_store, companion.id),
             )
             mcp_manager.register_server(
                 "wiki",
-                WikiMCPServer(wiki_store, companion.id),
+                WikiMCPServer(wiki_store, companion.id, clock=clock),
             )
-            clock = self._clock_provider(message.chat_id)
 
             # Save the human's message
             await memory_manager.save_message(

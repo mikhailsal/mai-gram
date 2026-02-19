@@ -5,6 +5,7 @@ Provides an in-memory SQLite database and session for all tests.
 
 from __future__ import annotations
 
+import os
 from typing import AsyncGenerator
 
 import pytest
@@ -15,6 +16,42 @@ from mai_companion.db.models import Base
 
 # In-memory SQLite URL for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add project-specific pytest CLI options."""
+    parser.addoption(
+        "--run-functional",
+        action="store_true",
+        default=False,
+        help="Run tests marked as 'functional' (real LLM/OpenRouter integration).",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers",
+        "functional: integration tests that may call real LLM/provider services",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip functional tests unless explicitly enabled or API key is present."""
+    run_functional = config.getoption("--run-functional")
+    has_api_key = bool(os.getenv("OPENROUTER_API_KEY", "").strip())
+    if run_functional or has_api_key:
+        return
+
+    skip_marker = pytest.mark.skip(
+        reason=(
+            "functional tests are skipped; pass --run-functional or set OPENROUTER_API_KEY "
+            "to enable them."
+        )
+    )
+    for item in items:
+        if "functional" in item.keywords:
+            item.add_marker(skip_marker)
 
 
 @pytest.fixture

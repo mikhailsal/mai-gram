@@ -42,6 +42,14 @@ backups/
 .DS_Store
 Thumbs.db
 
+# Data and Testing generated files
+data/
+tests/functional/seed_data/*.jsonl
+!tests/functional/seed_data/basic_conversation.jsonl
+!tests/functional/seed_data/multi_topic_day.jsonl
+!tests/functional/seed_data/paris_trip.jsonl
+!tests/functional/seed_data/with_tool_calls.jsonl
+
 # pytest
 .pytest_cache/
 htmlcov/

@@ -51,52 +51,52 @@ todos:
       - s1-llm-logger
   - id: s4-func-config
     content: "[Stage 4] Functional test config: functional_config.toml with test settings"
-    status: pending
+    status: completed
   - id: s4-func-fixtures
     content: "[Stage 4] Functional test fixtures: conftest.py, helpers, seed data"
-    status: pending
+    status: completed
     dependencies:
       - s2-cli-entry-point
       - s1-llm-logger
       - s4-func-config
   - id: s5-test-onboarding
     content: "[Stage 5] Functional test: onboarding via console"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-wiki
     content: "[Stage 5] Functional test: wiki creation, retrieval, and changelog"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-search
     content: "[Stage 5] Functional test: message search tool"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-natural-summary
     content: "[Stage 5] Functional test: natural daily summarization triggering"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-natural-forget
     content: "[Stage 5] Functional test: natural forgetting cycle + diff tracking"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-tool-summary
     content: "[Stage 5] Functional test: how tool calls appear in summaries"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-lifecycle
     content: "[Stage 5] Functional test: full multi-week lifecycle simulation"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
   - id: s5-test-prompt
     content: "[Stage 5] Functional test: prompt assembly inspection (no LLM)"
-    status: pending
+    status: completed
     dependencies:
       - s4-func-fixtures
 ---

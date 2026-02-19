@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from mai_companion.clock import Clock
 from mai_companion.memory.knowledge_base import WikiStore
 from mai_companion.mcp_servers.messages_server import MCPToolSpec
 
@@ -14,13 +15,15 @@ from mai_companion.mcp_servers.messages_server import MCPToolSpec
 class WikiMCPServer:
     """Expose wiki CRUD/search tools for MCP-style tool calling."""
 
-    def __init__(self, store: WikiStore, companion_id: str) -> None:
+    def __init__(self, store: WikiStore, companion_id: str, *, clock: Clock | None = None) -> None:
         self._store = store
         self._companion_id = companion_id
+        self._clock = clock
 
     def _append_changelog(self, action: str, payload: dict[str, Any]) -> None:
+        now = self._clock.now() if self._clock is not None else datetime.now(timezone.utc)
         entry: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": now.isoformat().replace("+00:00", "Z"),
             "action": action,
         }
         for key in ("key", "content", "importance"):
