@@ -62,13 +62,19 @@ class PromptBuilder:
         weekly = [summary for summary in summaries if summary.summary_type == "weekly"]
         daily = [summary for summary in summaries if summary.summary_type == "daily"]
 
-        llm_history = [
-            ChatMessage(
-                role=MessageRole.USER if msg.role == "user" else MessageRole.ASSISTANT,
-                content=f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}",
-            )
-            for msg in sorted(recent_messages, key=lambda item: item.id)
-        ]
+        llm_history = []
+        for msg in sorted(recent_messages, key=lambda item: item.id):
+            role = MessageRole.USER if msg.role == "user" else MessageRole.ASSISTANT
+            if msg.role == "user":
+                # Timestamps on user messages help the companion understand
+                # when things were said (time gaps, time of day, etc.)
+                content = f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}"
+            else:
+                # Do NOT prepend timestamps to assistant messages — the LLM
+                # will imitate the pattern and embed timestamps in its own
+                # responses, which then snowball on subsequent context builds.
+                content = msg.content
+            llm_history.append(ChatMessage(role=role, content=content))
 
         warned = False
         while True:
@@ -152,4 +158,18 @@ class PromptBuilder:
             + ("\n".join(summary_lines) if summary_lines else "- No memory summaries yet.")
         )
 
-        return f"{full_prompt}\n\n{current_time_section}\n\n{wiki_section}\n\n{memories_section}"
+        # Guard against the LLM imitating the timestamp metadata format.
+        # User messages carry "[YYYY-MM-DD HH:MM]" prefixes for temporal
+        # context, but the LLM must never reproduce them in its own output.
+        timestamp_guard = (
+            "## Response formatting\n"
+            "User messages in the conversation history may start with a timestamp "
+            "like [2024-01-15 14:30]. This is system metadata for your temporal "
+            "awareness. NEVER include such timestamps in your own responses. "
+            "Your replies must contain only natural conversational text."
+        )
+
+        return (
+            f"{full_prompt}\n\n{current_time_section}\n\n"
+            f"{wiki_section}\n\n{memories_section}\n\n{timestamp_guard}"
+        )
