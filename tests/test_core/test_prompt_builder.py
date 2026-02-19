@@ -84,11 +84,13 @@ class TestPromptBuilder:
         await wiki_store.create_entry(companion.id, "human_name", "Alex", 9999)
         builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
 
-        context = await builder.build_context(companion, _mood())
+        fixed_now = datetime(2026, 2, 19, 14, 35, tzinfo=timezone.utc)
+        context = await builder.build_context(companion, _mood(), current_time=fixed_now)
 
         assert context[0].role.value == "system"
         assert "Things you know" in context[0].content
         assert "Your memories" in context[0].content
+        assert "## Current date and time" in context[0].content
         assert len(context) >= 2
 
     async def test_build_context_short_term_messages(self, session, tmp_path: Path) -> None:
@@ -100,9 +102,15 @@ class TestPromptBuilder:
         await message_store.save_message(companion.id, "assistant", "second")
         builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
 
-        context = await builder.build_context(companion, _mood())
+        fixed_now = datetime(2026, 2, 19, 14, 35, tzinfo=timezone.utc)
+        context = await builder.build_context(companion, _mood(), current_time=fixed_now)
 
-        assert [m.content for m in context[1:]] == ["first", "second"]
+        history_contents = [m.content for m in context[1:]]
+        assert len(history_contents) == 2
+        assert history_contents[0].endswith(" first")
+        assert history_contents[1].endswith(" second")
+        assert history_contents[0].startswith("[")
+        assert history_contents[1].startswith("[")
 
     async def test_token_budget_truncation(self, session, tmp_path: Path, caplog) -> None:
         companion = await _create_companion(session)

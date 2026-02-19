@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from mai_companion.llm.provider import ChatMessage, LLMProvider, LLMResponse, MessageRole, ToolCall, ToolDefinition
 from mai_companion.mcp_servers.manager import MCPManager, RegisteredTool
@@ -76,6 +77,7 @@ async def run_with_tools(
     max_tokens: int | None = None,
     max_iterations: int = 5,
     tool_choice: str | dict | None = "auto",
+    on_tool_result: Callable[..., Awaitable[None] | None] | None = None,
 ) -> LLMResponse:
     """Run an agentic loop: LLM -> tools -> LLM until completion."""
     if max_iterations < 1:
@@ -124,8 +126,24 @@ async def run_with_tools(
                     resolved.arguments,
                 )
                 tool_content = mcp_result_to_openai(raw_result)
+                tool_error = None
             except Exception as exc:  # pragma: no cover - exercised in tests
                 tool_content = f"Tool execution error: {exc}"
+                raw_result = None
+                resolved = None
+                tool_error = str(exc)
+
+            if on_tool_result is not None:
+                callback_result = on_tool_result(
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    arguments=tool_call.arguments,
+                    result=raw_result,
+                    error=tool_error,
+                    server_name=resolved.server_name if resolved is not None else None,
+                )
+                if inspect.isawaitable(callback_result):
+                    await callback_result
 
             conversation.append(
                 ChatMessage(

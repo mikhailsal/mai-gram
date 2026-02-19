@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
+from mai_companion.clock import Clock
 from mai_companion.db.models import Companion
 from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
 from mai_companion.memory.knowledge_base import WikiStore
@@ -36,14 +38,24 @@ class PromptBuilder:
         self._short_term_limit = short_term_limit
         self._max_context_tokens = max_context_tokens
 
-    async def build_context(self, companion: Companion, mood: MoodSnapshot) -> list[ChatMessage]:
+    async def build_context(
+        self,
+        companion: Companion,
+        mood: MoodSnapshot,
+        *,
+        clock: Clock | None = None,
+        current_time: datetime | None = None,
+    ) -> list[ChatMessage]:
         """Build full model context: system message + short-term conversation."""
+        now = current_time or (clock.now() if clock is not None else datetime.now(timezone.utc))
         wiki_entries = await self._wiki_store.get_top_entries(
             companion.id, limit=self._wiki_context_limit
         )
         summaries = self._summary_store.get_all_summaries(companion.id)
         recent_messages = await self._message_store.get_short_term(
-            companion.id, limit=self._short_term_limit
+            companion.id,
+            limit=self._short_term_limit,
+            now=now,
         )
 
         monthly = [summary for summary in summaries if summary.summary_type == "monthly"]
@@ -53,7 +65,7 @@ class PromptBuilder:
         llm_history = [
             ChatMessage(
                 role=MessageRole.USER if msg.role == "user" else MessageRole.ASSISTANT,
-                content=msg.content,
+                content=f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}",
             )
             for msg in sorted(recent_messages, key=lambda item: item.id)
         ]
@@ -61,7 +73,9 @@ class PromptBuilder:
         warned = False
         while True:
             ordered_summaries = [*monthly, *weekly, *daily]
-            system_prompt = self._build_system_prompt(companion, mood, wiki_entries, ordered_summaries)
+            system_prompt = self._build_system_prompt(
+                companion, mood, wiki_entries, ordered_summaries, now
+            )
             context = [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
             token_count = await self._llm.count_tokens(context)
 
@@ -100,7 +114,15 @@ class PromptBuilder:
         mood: MoodSnapshot,
         wiki_entries: list,
         summaries: list[StoredSummary],
+        now: datetime,
     ) -> str:
+        prompt_now = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+        prompt_now = prompt_now.astimezone(timezone.utc)
+        current_time_section = (
+            "## Current date and time\n"
+            f"Right now it is: {prompt_now.strftime('%A, %B')} {prompt_now.day}, "
+            f"{prompt_now.year}, {prompt_now.strftime('%H:%M')} UTC."
+        )
         base_prompt = companion.system_prompt
         mood_section = mood_to_prompt_section(mood)
         relationship_section = (
@@ -130,4 +152,4 @@ class PromptBuilder:
             + ("\n".join(summary_lines) if summary_lines else "- No memory summaries yet.")
         )
 
-        return f"{full_prompt}\n\n{wiki_section}\n\n{memories_section}"
+        return f"{full_prompt}\n\n{current_time_section}\n\n{wiki_section}\n\n{memories_section}"

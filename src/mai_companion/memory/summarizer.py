@@ -152,9 +152,10 @@ class MemorySummarizer:
         companion_id: str,
         *,
         target_date: date | None = None,
+        today: date | None = None,
     ) -> bool:
         """Generate a daily summary if message count for the date reaches threshold."""
-        day = target_date or datetime.now(timezone.utc).date()
+        day = target_date or today or datetime.now(timezone.utc).date()
         messages = await self._message_store.get_messages_for_date(companion_id, day)
         count = len(messages)
         

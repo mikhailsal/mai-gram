@@ -44,6 +44,12 @@ class TestForgettingEngine:
         remaining_dailies = store.list_dailies(companion_id)
         # Verify consolidation happened (dailies gone)
         assert not remaining_dailies
+        diff_path = tmp_path / "debug_logs" / companion_id / "consolidation" / "weekly_2026-W06.md"
+        assert diff_path.exists()
+        text = diff_path.read_text(encoding="utf-8")
+        assert "# Weekly Consolidation: 2026-W06" in text
+        assert "## Original Daily Summaries (deleted)" in text
+        assert "## Resulting Weekly Summary" in text
 
     async def test_weekly_consolidation_skips_recent(self, tmp_path: Path) -> None:
         store = SummaryStore(data_dir=tmp_path)
@@ -92,6 +98,12 @@ class TestForgettingEngine:
 
         assert summarizer.monthly_calls
         assert not store.list_weeklies(companion_id)
+        diff_path = tmp_path / "debug_logs" / companion_id / "consolidation" / "monthly_2026-01.md"
+        assert diff_path.exists()
+        text = diff_path.read_text(encoding="utf-8")
+        assert "# Monthly Consolidation: 2026-01" in text
+        assert "## Original Weekly Summaries (deleted)" in text
+        assert "## Resulting Monthly Summary" in text
 
     async def test_monthly_consolidation_skips_recent(self, tmp_path: Path) -> None:
         store = SummaryStore(data_dir=tmp_path)

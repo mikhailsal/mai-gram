@@ -399,7 +399,11 @@ class TestBotHandlerPhase5Integration:
 
             await bot_handler._handle_conversation(text_message)
 
-            mock_builder.build_context.assert_awaited_once_with(companion, mood)
+            assert mock_builder.build_context.await_count == 1
+            called_companion, called_mood = mock_builder.build_context.await_args.args
+            assert called_companion is companion
+            assert called_mood is mood
+            assert "clock" in mock_builder.build_context.await_args.kwargs
 
     async def test_conversation_uses_mcp_bridge(self, bot_handler, text_message):
         companion = MagicMock(

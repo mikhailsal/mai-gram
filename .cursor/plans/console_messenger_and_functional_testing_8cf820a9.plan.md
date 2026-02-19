@@ -10,20 +10,20 @@ todos:
     status: completed
   - id: s1-llm-logger
     content: "[Stage 1] LLM Logger: provider proxy capturing all LLM interactions"
-    status: pending
+    status: completed
   - id: s2-date-in-context
     content: "[Stage 2] Date in context: add date/time + msg timestamps to PromptBuilder"
-    status: pending
+    status: completed
     dependencies:
       - s1-clock
   - id: s2-clock-injection
     content: "[Stage 2] Clock injection: thread Clock into memory subsystems + handler"
-    status: pending
+    status: completed
     dependencies:
       - s1-clock
   - id: s2-cli-entry-point
     content: "[Stage 2] CLI entry point: mai-chat with state persistence and short syntax"
-    status: pending
+    status: completed
     dependencies:
       - s1-clock
       - s1-console-messenger
@@ -31,22 +31,22 @@ todos:
       - s2-clock-injection
   - id: s3-summary-diff
     content: "[Stage 3] Summary diff tracking: log before/after on consolidation"
-    status: pending
+    status: completed
     dependencies:
       - s2-clock-injection
   - id: s3-wiki-changelog
     content: "[Stage 3] Wiki changelog: append-only JSONL log of wiki changes"
-    status: pending
+    status: completed
     dependencies:
       - s2-cli-entry-point
   - id: s3-conversation-replay
     content: "[Stage 3] Conversation replay: --replay command for formatted history"
-    status: pending
+    status: completed
     dependencies:
       - s2-cli-entry-point
   - id: s3-cost-tracking
     content: "[Stage 3] Cost tracking: token usage accumulation and pricing estimates"
-    status: pending
+    status: completed
     dependencies:
       - s1-llm-logger
   - id: s4-func-config

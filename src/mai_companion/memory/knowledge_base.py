@@ -23,6 +23,11 @@ class WikiStore:
         self._session = session
         self._data_dir = Path(data_dir)
 
+    @property
+    def data_dir(self) -> Path:
+        """Expose the configured wiki base directory."""
+        return self._data_dir
+
     async def create_entry(
         self,
         companion_id: str,

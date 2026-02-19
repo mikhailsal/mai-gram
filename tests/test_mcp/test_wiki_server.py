@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,3 +83,29 @@ class TestWikiMCPServer:
         result = await server.call_tool("wiki_search", {"query": "Alex"})
 
         assert "human_name (9999): Alex" in result
+
+    async def test_changelog_appends_for_create_and_edit(
+        self,
+        session: AsyncSession,
+        tmp_path: Path,
+    ) -> None:
+        companion_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), companion_id)
+
+        await server.call_tool(
+            "wiki_create",
+            {"key": "human_name", "content": "Alex", "importance": 9999},
+        )
+        await server.call_tool(
+            "wiki_edit",
+            {"key": "human_name", "content": "Alexander", "importance": 9999},
+        )
+
+        changelog_path = tmp_path / companion_id / "wiki" / "changelog.jsonl"
+        assert changelog_path.exists()
+        lines = [json.loads(line) for line in changelog_path.read_text(encoding="utf-8").splitlines() if line]
+        assert len(lines) == 2
+        assert lines[0]["action"] == "create"
+        assert lines[0]["key"] == "human_name"
+        assert lines[1]["action"] == "edit"
+        assert lines[1]["content"] == "Alexander"

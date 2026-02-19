@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from mai_companion.memory.knowledge_base import WikiStore
@@ -14,6 +17,22 @@ class WikiMCPServer:
     def __init__(self, store: WikiStore, companion_id: str) -> None:
         self._store = store
         self._companion_id = companion_id
+
+    def _append_changelog(self, action: str, payload: dict[str, Any]) -> None:
+        entry: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "action": action,
+        }
+        for key in ("key", "content", "importance"):
+            if key in payload and payload[key] is not None:
+                entry[key] = payload[key]
+
+        changelog_path = (
+            Path(self._store.data_dir) / self._companion_id / "wiki" / "changelog.jsonl"
+        )
+        changelog_path.parent.mkdir(parents=True, exist_ok=True)
+        with changelog_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     async def list_tools(self) -> list[MCPToolSpec]:
         """Return tools exposed by this server."""
@@ -123,9 +142,14 @@ class WikiMCPServer:
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a named wiki tool."""
         if tool_name == "wiki_create":
-            return await self._call_create(arguments)
+            result = await self._call_create(arguments)
+            self._append_changelog("create", arguments)
+            return result
         if tool_name == "wiki_edit":
-            return await self._call_edit(arguments)
+            result = await self._call_edit(arguments)
+            if "not found" not in result.lower():
+                self._append_changelog("edit", arguments)
+            return result
         if tool_name == "wiki_read":
             return await self._call_read(arguments)
         if tool_name == "wiki_search":

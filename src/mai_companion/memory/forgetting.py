@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from mai_companion.memory.summaries import SummaryStore
 from mai_companion.memory.summarizer import MemorySummarizer
@@ -15,6 +16,98 @@ class ForgettingEngine:
     def __init__(self, summary_store: SummaryStore, summarizer: MemorySummarizer) -> None:
         self._summary_store = summary_store
         self._summarizer = summarizer
+
+    def _consolidation_dir(self, companion_id: str) -> Path:
+        base_dir = self._summary_store.data_dir
+        path = base_dir / "debug_logs" / companion_id / "consolidation"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _read_daily_summary(self, companion_id: str, daily: date) -> str:
+        path = (
+            self._summary_store.data_dir
+            / companion_id
+            / "summaries"
+            / "daily"
+            / f"{daily.isoformat()}.md"
+        )
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+
+    def _read_weekly_summary(self, companion_id: str, period: str) -> str:
+        path = (
+            self._summary_store.data_dir
+            / companion_id
+            / "summaries"
+            / "weekly"
+            / f"{period}.md"
+        )
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
+
+    def _write_weekly_consolidation_log(
+        self,
+        companion_id: str,
+        *,
+        iso_year: int,
+        iso_week: int,
+        current_day: date,
+        source_dailies: dict[date, str],
+        weekly_summary: str,
+    ) -> None:
+        period = f"{iso_year}-W{iso_week:02d}"
+        lines = [
+            f"# Weekly Consolidation: {period}",
+            f"## Date: {current_day.isoformat()} (when consolidation ran)",
+            "",
+            "## Original Daily Summaries (deleted)",
+        ]
+        for daily in sorted(source_dailies):
+            lines.append(f"### {daily.isoformat()}")
+            lines.append(source_dailies[daily].strip() or "(empty)")
+            lines.append("")
+        lines.extend(
+            [
+                "## Resulting Weekly Summary",
+                weekly_summary.strip() or "(empty)",
+                "",
+            ]
+        )
+        log_path = self._consolidation_dir(companion_id) / f"weekly_{period}.md"
+        log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _write_monthly_consolidation_log(
+        self,
+        companion_id: str,
+        *,
+        year: int,
+        month: int,
+        current_day: date,
+        source_weeklies: dict[str, str],
+        monthly_summary: str,
+    ) -> None:
+        period = f"{year}-{month:02d}"
+        lines = [
+            f"# Monthly Consolidation: {period}",
+            f"## Date: {current_day.isoformat()} (when consolidation ran)",
+            "",
+            "## Original Weekly Summaries (deleted)",
+        ]
+        for weekly_period in sorted(source_weeklies):
+            lines.append(f"### {weekly_period}")
+            lines.append(source_weeklies[weekly_period].strip() or "(empty)")
+            lines.append("")
+        lines.extend(
+            [
+                "## Resulting Monthly Summary",
+                monthly_summary.strip() or "(empty)",
+                "",
+            ]
+        )
+        log_path = self._consolidation_dir(companion_id) / f"monthly_{period}.md"
+        log_path.write_text("\n".join(lines), encoding="utf-8")
 
     async def run_forgetting_cycle(self, companion_id: str, *, today: date | None = None) -> None:
         """Run both weekly and monthly consolidation cycles."""
@@ -47,9 +140,23 @@ class ForgettingEngine:
             
             # Check if the week is fully stale (e.g. ended more than 7 days ago)
             if current_day > week_end + timedelta(days=7):
+                source_dailies = {
+                    daily: self._read_daily_summary(companion_id, daily) for daily in sorted(daily_dates)
+                }
                 # Always regenerate/update the summary to ensure it includes ALL dailies
                 # (even if it already exists, we might have new dailies that appeared later)
-                await self._summarizer.generate_weekly_summary(companion_id, iso_year, iso_week)
+                weekly_summary = await self._summarizer.generate_weekly_summary(
+                    companion_id, iso_year, iso_week
+                )
+                if weekly_summary is not None:
+                    self._write_weekly_consolidation_log(
+                        companion_id,
+                        iso_year=iso_year,
+                        iso_week=iso_week,
+                        current_day=current_day,
+                        source_dailies=source_dailies,
+                        weekly_summary=weekly_summary,
+                    )
                 
                 # Safe to delete all dailies for this week now
                 for daily in daily_dates:
@@ -80,7 +187,22 @@ class ForgettingEngine:
             
             # Check if month is fully stale (ended more than 28 days ago)
             if current_day > month_end + timedelta(days=28):
-                await self._summarizer.generate_monthly_summary(companion_id, year, month)
+                source_weeklies = {
+                    period: self._read_weekly_summary(companion_id, period)
+                    for period in sorted(periods)
+                }
+                monthly_summary = await self._summarizer.generate_monthly_summary(
+                    companion_id, year, month
+                )
+                if monthly_summary is not None:
+                    self._write_monthly_consolidation_log(
+                        companion_id,
+                        year=year,
+                        month=month,
+                        current_day=current_day,
+                        source_weeklies=source_weeklies,
+                        monthly_summary=monthly_summary,
+                    )
                 
                 for period in periods:
                     self._summary_store.delete_weekly(companion_id, period)

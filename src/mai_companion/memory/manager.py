@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from mai_companion.clock import Clock
 from mai_companion.db.models import KnowledgeEntry, Message
 from mai_companion.memory.forgetting import ForgettingEngine
 from mai_companion.memory.knowledge_base import WikiStore
@@ -36,23 +37,35 @@ class MemoryManager:
         content: str,
         *,
         timestamp: datetime | None = None,
+        clock: Clock | None = None,
         is_proactive: bool = False,
         trigger_summary: bool = False,
     ) -> Message:
+        effective_timestamp = timestamp or (clock.now() if clock is not None else None)
         message = await self._message_store.save_message(
             companion_id,
             role,
             content,
-            timestamp=timestamp,
+            timestamp=effective_timestamp,
             is_proactive=is_proactive,
         )
         if trigger_summary:
-            day = (timestamp or message.timestamp).date()
-            await self._summarizer.trigger_daily_if_needed(companion_id, target_date=day)
+            day = (effective_timestamp or message.timestamp).date()
+            await self._summarizer.trigger_daily_if_needed(
+                companion_id,
+                target_date=day,
+                today=clock.today() if clock is not None else None,
+            )
         return message
 
-    async def get_short_term(self, companion_id: str, *, limit: int = 30) -> list[Message]:
-        return await self._message_store.get_short_term(companion_id, limit=limit)
+    async def get_short_term(
+        self, companion_id: str, *, limit: int = 30, clock: Clock | None = None
+    ) -> list[Message]:
+        return await self._message_store.get_short_term(
+            companion_id,
+            limit=limit,
+            now=clock.now() if clock is not None else None,
+        )
 
     async def search_messages(self, companion_id: str, query: str, *, limit: int = 20) -> list[Message]:
         return await self._message_store.search(companion_id, query, limit=limit)
@@ -66,5 +79,12 @@ class MemoryManager:
     async def trigger_daily_summary(self, companion_id: str, target_date: date) -> str | None:
         return await self._summarizer.generate_daily_summary(companion_id, target_date)
 
-    async def run_forgetting_cycle(self, companion_id: str, *, today: date | None = None) -> None:
-        await self._forgetting_engine.run_forgetting_cycle(companion_id, today=today)
+    async def run_forgetting_cycle(
+        self,
+        companion_id: str,
+        *,
+        today: date | None = None,
+        clock: Clock | None = None,
+    ) -> None:
+        effective_day = today or (clock.today() if clock is not None else None)
+        await self._forgetting_engine.run_forgetting_cycle(companion_id, today=effective_day)

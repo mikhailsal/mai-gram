@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from sqlalchemy import select
 
 from mai_companion.bot.middleware import MessageLogger, RateLimiter, RateLimitConfig
 from mai_companion.bot.onboarding import OnboardingManager, OnboardingResult, OnboardingState
+from mai_companion.clock import Clock
 from mai_companion.config import get_settings
 from mai_companion.core.prompt_builder import PromptBuilder
 from mai_companion.db.database import get_session
@@ -75,6 +76,7 @@ class BotHandler:
         wiki_context_limit: int | None = None,
         short_term_limit: int | None = None,
         tool_max_iterations: int | None = None,
+        clock_provider: Callable[[str], Clock] | None = None,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
@@ -93,6 +95,7 @@ class BotHandler:
         self._wiki_context_limit = wiki_context_limit or settings.wiki_context_limit
         self._short_term_limit = short_term_limit or settings.short_term_limit
         self._tool_max_iterations = tool_max_iterations or settings.tool_max_iterations
+        self._clock_provider = clock_provider or (lambda _chat_id: Clock())
         self._allowed_users = settings.get_allowed_user_ids()
         if self._allowed_users:
             logger.info(
@@ -452,12 +455,14 @@ class BotHandler:
                 "wiki",
                 WikiMCPServer(wiki_store, companion.id),
             )
+            clock = self._clock_provider(message.chat_id)
 
             # Save the human's message
             await memory_manager.save_message(
                 companion.id,
                 "user",
                 message.text,
+                clock=clock,
                 is_proactive=False,
                 trigger_summary=True,
             )
@@ -467,7 +472,10 @@ class BotHandler:
             mood_manager = MoodManager(session)
             mood = await mood_manager.get_current_mood(companion.id, traits)
 
-            llm_messages = await prompt_builder.build_context(companion, mood)
+            llm_messages = await prompt_builder.build_context(companion, mood, clock=clock)
+            tool_result_observer = getattr(self._llm, "record_tool_execution", None)
+            if not callable(tool_result_observer):
+                tool_result_observer = None
 
             # Generate response
             try:
@@ -477,6 +485,7 @@ class BotHandler:
                     llm_messages,
                     temperature=companion.temperature,
                     max_iterations=self._tool_max_iterations,
+                    on_tool_result=tool_result_observer,
                 )
                 response_text = response.content
 
@@ -485,9 +494,10 @@ class BotHandler:
                     companion.id,
                     "assistant",
                     response_text,
+                    clock=clock,
                     is_proactive=False,
                 )
-                await memory_manager.run_forgetting_cycle(companion.id)
+                await memory_manager.run_forgetting_cycle(companion.id, clock=clock)
 
                 # Update mood based on conversation
                 from mai_companion.personality.mood import evaluate_message_sentiment

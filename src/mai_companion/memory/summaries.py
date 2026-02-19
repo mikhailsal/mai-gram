@@ -22,6 +22,11 @@ class SummaryStore:
     def __init__(self, data_dir: str | Path = "./data") -> None:
         self._data_dir = Path(data_dir)
 
+    @property
+    def data_dir(self) -> Path:
+        """Expose the configured base data directory."""
+        return self._data_dir
+
     def save_daily(self, companion_id: str, target_date: date, content: str) -> Path:
         """Save a daily summary."""
         filename = f"{target_date.isoformat()}.md"
