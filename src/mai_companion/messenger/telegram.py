@@ -7,6 +7,7 @@ keyboard building, and bot lifecycle management.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -206,8 +207,20 @@ class TelegramMessenger(Messenger):
         """Start the Telegram bot and begin polling for updates."""
         logger.info("Starting Telegram messenger...")
 
-        # Build the application
-        self._app = Application.builder().token(self._token).build()
+        # Build the application with increased timeouts for network resilience
+        # Default timeouts are 5 seconds which is too aggressive for unstable networks
+        self._app = (
+            Application.builder()
+            .token(self._token)
+            .read_timeout(30.0)  # Wait up to 30s for response data
+            .write_timeout(30.0)  # Wait up to 30s for sending data
+            .connect_timeout(15.0)  # Wait up to 15s for connection
+            .pool_timeout(10.0)  # Wait up to 10s for connection from pool
+            .get_updates_read_timeout(30.0)  # Polling read timeout
+            .get_updates_write_timeout(30.0)  # Polling write timeout
+            .get_updates_connect_timeout(15.0)  # Polling connect timeout
+            .build()
+        )
 
         # Register command handlers
         for command, handler in self._command_handlers.items():
@@ -255,66 +268,96 @@ class TelegramMessenger(Messenger):
         self._app = None
         logger.info("Telegram messenger stopped")
 
-    async def send_message(self, message: OutgoingMessage) -> SendResult:
-        """Send a message via Telegram."""
+    async def send_message(
+        self, message: OutgoingMessage, *, max_retries: int = 2
+    ) -> SendResult:
+        """Send a message via Telegram with retry logic for transient failures.
+        
+        Parameters
+        ----------
+        message:
+            The message to send.
+        max_retries:
+            Number of retries on transient errors (default: 2).
+        """
         if self._app is None:
             return SendResult(success=False, error="Messenger not started")
 
-        try:
-            # Determine parse mode
-            parse_mode = None
-            if message.parse_mode:
-                if message.parse_mode.lower() == "markdown":
-                    parse_mode = ParseMode.MARKDOWN_V2
-                elif message.parse_mode.lower() == "html":
-                    parse_mode = ParseMode.HTML
+        # Determine parse mode
+        parse_mode = None
+        if message.parse_mode:
+            if message.parse_mode.lower() == "markdown":
+                parse_mode = ParseMode.MARKDOWN_V2
+            elif message.parse_mode.lower() == "html":
+                parse_mode = ParseMode.HTML
 
-            # Build keyboard if provided
-            reply_markup = None
-            if message.keyboard is not None:
-                if message.keyboard == "remove":
-                    reply_markup = ReplyKeyboardRemove()
-                elif isinstance(message.keyboard, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
-                    reply_markup = message.keyboard
-                elif isinstance(message.keyboard, list):
-                    # Assume it's inline keyboard data
-                    reply_markup = build_inline_keyboard(message.keyboard)
+        # Build keyboard if provided
+        reply_markup = None
+        if message.keyboard is not None:
+            if message.keyboard == "remove":
+                reply_markup = ReplyKeyboardRemove()
+            elif isinstance(message.keyboard, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
+                reply_markup = message.keyboard
+            elif isinstance(message.keyboard, list):
+                # Assume it's inline keyboard data
+                reply_markup = build_inline_keyboard(message.keyboard)
 
-            # Send photo if provided
-            if message.photo_path:
-                with open(message.photo_path, "rb") as photo:
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 2):  # +2 because range is exclusive
+            try:
+                # Send photo if provided
+                if message.photo_path:
+                    with open(message.photo_path, "rb") as photo:
+                        sent = await self._app.bot.send_photo(
+                            chat_id=int(message.chat_id),
+                            photo=photo,
+                            caption=message.text if message.text else None,
+                            parse_mode=parse_mode,
+                            reply_markup=reply_markup,
+                            reply_to_message_id=int(message.reply_to) if message.reply_to else None,
+                        )
+                elif message.photo_url:
                     sent = await self._app.bot.send_photo(
                         chat_id=int(message.chat_id),
-                        photo=photo,
+                        photo=message.photo_url,
                         caption=message.text if message.text else None,
                         parse_mode=parse_mode,
                         reply_markup=reply_markup,
                         reply_to_message_id=int(message.reply_to) if message.reply_to else None,
                     )
-            elif message.photo_url:
-                sent = await self._app.bot.send_photo(
-                    chat_id=int(message.chat_id),
-                    photo=message.photo_url,
-                    caption=message.text if message.text else None,
-                    parse_mode=parse_mode,
-                    reply_markup=reply_markup,
-                    reply_to_message_id=int(message.reply_to) if message.reply_to else None,
-                )
-            else:
-                # Send text message
-                sent = await self._app.bot.send_message(
-                    chat_id=int(message.chat_id),
-                    text=message.text,
-                    parse_mode=parse_mode,
-                    reply_markup=reply_markup,
-                    reply_to_message_id=int(message.reply_to) if message.reply_to else None,
-                )
+                else:
+                    # Send text message
+                    sent = await self._app.bot.send_message(
+                        chat_id=int(message.chat_id),
+                        text=message.text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        reply_to_message_id=int(message.reply_to) if message.reply_to else None,
+                    )
 
-            return SendResult(success=True, message_id=str(sent.message_id))
+                return SendResult(success=True, message_id=str(sent.message_id))
 
-        except TelegramError as e:
-            logger.error("Failed to send Telegram message: %s", e)
-            return SendResult(success=False, error=str(e))
+            except TelegramError as e:
+                last_error = e
+                error_str = str(e).lower()
+                # Retry on transient errors (timeouts, network issues)
+                is_transient = "timed out" in error_str or "network" in error_str
+                if is_transient and attempt <= max_retries:
+                    logger.warning(
+                        "Telegram send failed (attempt %d/%d): %s - retrying...",
+                        attempt,
+                        max_retries + 1,
+                        e,
+                    )
+                    await asyncio.sleep(1.0 * attempt)  # Exponential backoff
+                    continue
+                # Non-transient error or max retries reached
+                logger.error("Failed to send Telegram message: %s", e)
+                return SendResult(success=False, error=str(e))
+
+        # Should not reach here, but just in case
+        logger.error("Failed to send Telegram message after retries: %s", last_error)
+        return SendResult(success=False, error=str(last_error) if last_error else "Unknown error")
 
     async def edit_message(
         self, chat_id: str, message_id: str, new_text: str, **kwargs: Any
