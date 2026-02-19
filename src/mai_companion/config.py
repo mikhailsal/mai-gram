@@ -46,6 +46,32 @@ class Settings(BaseSettings):
         description="Directory for ChromaDB vector store persistence",
     )
 
+    # -- Memory subsystem --
+    memory_data_dir: str = Field(
+        default="./data",
+        description="Base directory for wiki and summary memory files",
+    )
+    summary_threshold: int = Field(
+        default=20,
+        ge=1,
+        description="Minimum number of same-day messages before daily summarization triggers",
+    )
+    wiki_context_limit: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum number of wiki entries to include in prompt context",
+    )
+    short_term_limit: int = Field(
+        default=30,
+        ge=1,
+        description="Recent message window size for short-term context",
+    )
+    tool_max_iterations: int = Field(
+        default=5,
+        ge=1,
+        description="Maximum agentic tool-calling iterations per response",
+    )
+
     # -- Logging --
     log_level: str = Field(
         default="INFO",

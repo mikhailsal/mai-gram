@@ -67,8 +67,24 @@ async def startup() -> None:
     # Initialize Telegram messenger
     _messenger = TelegramMessenger(settings.telegram_bot_token)
 
-    # Create and wire up the bot handler
-    _handler = BotHandler(_messenger, _llm_provider)
+    # Create and wire up the bot handler with memory/tooling settings.
+    _handler = BotHandler(
+        _messenger,
+        _llm_provider,
+        memory_data_dir=settings.memory_data_dir,
+        summary_threshold=settings.summary_threshold,
+        wiki_context_limit=settings.wiki_context_limit,
+        short_term_limit=settings.short_term_limit,
+        tool_max_iterations=settings.tool_max_iterations,
+    )
+    logger.info(
+        "Memory subsystem configured: data_dir=%s threshold=%s wiki_limit=%s short_term_limit=%s tool_iterations=%s",
+        settings.memory_data_dir,
+        settings.summary_threshold,
+        settings.wiki_context_limit,
+        settings.short_term_limit,
+        settings.tool_max_iterations,
+    )
 
     # Start the messenger (begins polling)
     await _messenger.start()

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mai_companion.bot.handler import BotHandler
+from mai_companion.llm.provider import ChatMessage, LLMResponse, MessageRole
 from mai_companion.messenger.base import IncomingMessage, MessageType, SendResult
 
 
@@ -341,3 +342,151 @@ class TestAccessControl:
         call_args = mock_messenger.send_message.call_args
         message = call_args[0][0]
         assert "Access denied" in message.text
+
+
+class TestBotHandlerPhase5Integration:
+    @pytest.fixture
+    def text_message(self):
+        return IncomingMessage(
+            platform="telegram",
+            chat_id="12345",
+            user_id="67890",
+            message_id="111",
+            message_type=MessageType.TEXT,
+            text="Hello!",
+        )
+
+    async def test_conversation_uses_prompt_builder(self, bot_handler, text_message):
+        companion = MagicMock(
+            id="12345",
+            personality_traits="{}",
+            temperature=0.7,
+            human_language="English",
+            system_prompt="{mood_section}\n{relationship_section}",
+            relationship_stage="getting_to_know",
+        )
+        built_context = [ChatMessage(role=MessageRole.SYSTEM, content="system")]
+        mood = MagicMock()
+
+        with (
+            patch("mai_companion.bot.handler.get_session") as mock_get_session,
+            patch("mai_companion.bot.handler.PromptBuilder") as mock_builder_cls,
+            patch("mai_companion.bot.handler.run_with_tools", new=AsyncMock(return_value=LLMResponse(content="ok", model="mock"))),
+            patch("mai_companion.bot.handler.MemoryManager") as mock_memory_cls,
+            patch("mai_companion.bot.handler.MoodManager") as mock_mood_cls,
+        ):
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+            mock_get_session.return_value = mock_session
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = companion
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            mock_builder = MagicMock()
+            mock_builder.build_context = AsyncMock(return_value=built_context)
+            mock_builder_cls.return_value = mock_builder
+
+            mock_memory = MagicMock()
+            mock_memory.save_message = AsyncMock()
+            mock_memory.run_forgetting_cycle = AsyncMock()
+            mock_memory_cls.return_value = mock_memory
+
+            mock_mood = MagicMock()
+            mock_mood.get_current_mood = AsyncMock(return_value=mood)
+            mock_mood_cls.return_value = mock_mood
+
+            await bot_handler._handle_conversation(text_message)
+
+            mock_builder.build_context.assert_awaited_once_with(companion, mood)
+
+    async def test_conversation_uses_mcp_bridge(self, bot_handler, text_message):
+        companion = MagicMock(
+            id="12345",
+            personality_traits="{}",
+            temperature=0.7,
+            human_language="English",
+            system_prompt="{mood_section}\n{relationship_section}",
+            relationship_stage="getting_to_know",
+        )
+
+        with (
+            patch("mai_companion.bot.handler.get_session") as mock_get_session,
+            patch("mai_companion.bot.handler.PromptBuilder") as mock_builder_cls,
+            patch("mai_companion.bot.handler.run_with_tools", new=AsyncMock(return_value=LLMResponse(content="ok", model="mock"))) as mock_run,
+            patch("mai_companion.bot.handler.MemoryManager") as mock_memory_cls,
+            patch("mai_companion.bot.handler.MoodManager") as mock_mood_cls,
+        ):
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+            mock_get_session.return_value = mock_session
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = companion
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            mock_builder = MagicMock()
+            mock_builder.build_context = AsyncMock(
+                return_value=[ChatMessage(role=MessageRole.SYSTEM, content="system")]
+            )
+            mock_builder_cls.return_value = mock_builder
+
+            mock_memory = MagicMock()
+            mock_memory.save_message = AsyncMock()
+            mock_memory.run_forgetting_cycle = AsyncMock()
+            mock_memory_cls.return_value = mock_memory
+
+            mock_mood = MagicMock()
+            mock_mood.get_current_mood = AsyncMock(return_value=MagicMock())
+            mock_mood_cls.return_value = mock_mood
+
+            await bot_handler._handle_conversation(text_message)
+
+            assert mock_run.await_count == 1
+
+    async def test_conversation_saves_messages_via_memory_manager(self, bot_handler, text_message):
+        companion = MagicMock(
+            id="12345",
+            personality_traits="{}",
+            temperature=0.7,
+            human_language="English",
+            system_prompt="{mood_section}\n{relationship_section}",
+            relationship_stage="getting_to_know",
+        )
+
+        with (
+            patch("mai_companion.bot.handler.get_session") as mock_get_session,
+            patch("mai_companion.bot.handler.PromptBuilder") as mock_builder_cls,
+            patch("mai_companion.bot.handler.run_with_tools", new=AsyncMock(return_value=LLMResponse(content="ok", model="mock"))),
+            patch("mai_companion.bot.handler.MemoryManager") as mock_memory_cls,
+            patch("mai_companion.bot.handler.MoodManager") as mock_mood_cls,
+        ):
+            mock_session = AsyncMock()
+            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = AsyncMock(return_value=None)
+            mock_get_session.return_value = mock_session
+
+            mock_result = MagicMock()
+            mock_result.scalar_one_or_none.return_value = companion
+            mock_session.execute = AsyncMock(return_value=mock_result)
+
+            mock_builder = MagicMock()
+            mock_builder.build_context = AsyncMock(
+                return_value=[ChatMessage(role=MessageRole.SYSTEM, content="system")]
+            )
+            mock_builder_cls.return_value = mock_builder
+
+            mock_memory = MagicMock()
+            mock_memory.save_message = AsyncMock()
+            mock_memory.run_forgetting_cycle = AsyncMock()
+            mock_memory_cls.return_value = mock_memory
+
+            mock_mood = MagicMock()
+            mock_mood.get_current_mood = AsyncMock(return_value=MagicMock())
+            mock_mood_cls.return_value = mock_mood
+
+            await bot_handler._handle_conversation(text_message)
+
+            assert mock_memory.save_message.await_count == 2

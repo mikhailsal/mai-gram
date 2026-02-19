@@ -23,6 +23,11 @@ class TestSettings:
         assert settings.quiet_hours_end == 7
         assert settings.debug is False
         assert settings.allowed_users == ""
+        assert settings.memory_data_dir == "./data"
+        assert settings.summary_threshold == 20
+        assert settings.wiki_context_limit == 20
+        assert settings.short_term_limit == 30
+        assert settings.tool_max_iterations == 5
 
     def test_override_via_constructor(self) -> None:
         """Settings can be overridden via constructor kwargs."""
@@ -39,6 +44,22 @@ class TestSettings:
         assert settings.llm_model == "anthropic/claude-3-opus"
         assert settings.log_level == "DEBUG"
         assert settings.debug is True
+
+    def test_memory_settings_override(self) -> None:
+        """Memory settings can be overridden."""
+        settings = Settings(
+            memory_data_dir="/tmp/memory",
+            summary_threshold=12,
+            wiki_context_limit=10,
+            short_term_limit=25,
+            tool_max_iterations=7,
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.memory_data_dir == "/tmp/memory"
+        assert settings.summary_threshold == 12
+        assert settings.wiki_context_limit == 10
+        assert settings.short_term_limit == 25
+        assert settings.tool_max_iterations == 7
 
     def test_get_settings_returns_instance(self) -> None:
         """get_settings() returns a valid Settings instance."""

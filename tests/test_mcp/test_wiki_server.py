@@ -1,0 +1,84 @@
+"""Tests for WikiMCPServer."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mai_companion.db.models import Companion
+from mai_companion.memory.knowledge_base import WikiStore
+from mai_companion.mcp_servers.wiki_server import WikiMCPServer
+
+
+async def _create_companion(session: AsyncSession, companion_id: str = "comp-mcp-wiki") -> str:
+    companion = Companion(id=companion_id, name="MCP Wiki")
+    session.add(companion)
+    await session.flush()
+    return companion_id
+
+
+class TestWikiMCPServer:
+    async def test_list_tools(self, session: AsyncSession, tmp_path: Path) -> None:
+        companion_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), companion_id)
+
+        tools = await server.list_tools()
+
+        assert [tool.name for tool in tools] == [
+            "wiki_create",
+            "wiki_edit",
+            "wiki_read",
+            "wiki_search",
+        ]
+
+    async def test_call_wiki_create(self, session: AsyncSession, tmp_path: Path) -> None:
+        companion_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), companion_id)
+
+        result = await server.call_tool(
+            "wiki_create",
+            {"key": "human_name", "content": "Alex", "importance": 9999},
+        )
+
+        assert "Created wiki entry 'human_name'" in result
+        assert (tmp_path / companion_id / "wiki" / "9999_human_name.md").exists()
+
+    async def test_call_wiki_edit(self, session: AsyncSession, tmp_path: Path) -> None:
+        companion_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(companion_id, "human_name", "Alex", 9999)
+        server = WikiMCPServer(store, companion_id)
+
+        result = await server.call_tool("wiki_edit", {"key": "human_name", "content": "Alice"})
+
+        assert "Updated wiki entry 'human_name'" in result
+        assert await store.read_entry(companion_id, "human_name") == "Alice"
+
+    async def test_call_wiki_read(self, session: AsyncSession, tmp_path: Path) -> None:
+        companion_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(companion_id, "human_name", "Alex", 9999)
+        server = WikiMCPServer(store, companion_id)
+
+        result = await server.call_tool("wiki_read", {"key": "human_name"})
+
+        assert result == "Alex"
+
+    async def test_call_wiki_read_not_found(self, session: AsyncSession, tmp_path: Path) -> None:
+        companion_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), companion_id)
+
+        result = await server.call_tool("wiki_read", {"key": "missing"})
+
+        assert "not found" in result.lower()
+
+    async def test_call_wiki_search(self, session: AsyncSession, tmp_path: Path) -> None:
+        companion_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(companion_id, "human_name", "Alex", 9999)
+        server = WikiMCPServer(store, companion_id)
+
+        result = await server.call_tool("wiki_search", {"query": "Alex"})
+
+        assert "human_name (9999): Alex" in result

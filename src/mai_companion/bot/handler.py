@@ -22,10 +22,21 @@ from sqlalchemy import select
 from mai_companion.bot.middleware import MessageLogger, RateLimiter, RateLimitConfig
 from mai_companion.bot.onboarding import OnboardingManager, OnboardingResult, OnboardingState
 from mai_companion.config import get_settings
+from mai_companion.core.prompt_builder import PromptBuilder
 from mai_companion.db.database import get_session
 from mai_companion.db.models import Companion, Message
 from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
 from mai_companion.llm.translation import TranslationService
+from mai_companion.mcp_servers.bridge import run_with_tools
+from mai_companion.mcp_servers.manager import MCPManager
+from mai_companion.mcp_servers.messages_server import MessagesMCPServer
+from mai_companion.mcp_servers.wiki_server import WikiMCPServer
+from mai_companion.memory.forgetting import ForgettingEngine
+from mai_companion.memory.knowledge_base import WikiStore
+from mai_companion.memory.manager import MemoryManager
+from mai_companion.memory.messages import MessageStore
+from mai_companion.memory.summaries import SummaryStore
+from mai_companion.memory.summarizer import MemorySummarizer
 from mai_companion.messenger.base import IncomingMessage, MessageType, OutgoingMessage
 from mai_companion.personality.character import CharacterBuilder, CharacterConfig
 from mai_companion.personality.mood import MoodManager, mood_to_prompt_section
@@ -59,6 +70,11 @@ class BotHandler:
         llm_provider: LLMProvider,
         *,
         rate_limit_config: RateLimitConfig | None = None,
+        memory_data_dir: str | None = None,
+        summary_threshold: int | None = None,
+        wiki_context_limit: int | None = None,
+        short_term_limit: int | None = None,
+        tool_max_iterations: int | None = None,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
@@ -72,6 +88,11 @@ class BotHandler:
 
         # Load allowed users from config
         settings = get_settings()
+        self._memory_data_dir = memory_data_dir or settings.memory_data_dir
+        self._summary_threshold = summary_threshold or settings.summary_threshold
+        self._wiki_context_limit = wiki_context_limit or settings.wiki_context_limit
+        self._short_term_limit = short_term_limit or settings.short_term_limit
+        self._tool_max_iterations = tool_max_iterations or settings.tool_max_iterations
         self._allowed_users = settings.get_allowed_user_ids()
         if self._allowed_users:
             logger.info(
@@ -396,19 +417,49 @@ class BotHandler:
             # Show typing indicator
             await self._messenger.send_typing_indicator(message.chat_id)
 
-            # Save the human's message
-            human_msg = Message(
-                role="user",
-                content=message.text,
-                companion_id=companion.id,
-                is_proactive=False,
+            message_store = MessageStore(session)
+            wiki_store = WikiStore(session, data_dir=self._memory_data_dir)
+            summary_store = SummaryStore(data_dir=self._memory_data_dir)
+            summarizer = MemorySummarizer(
+                message_store,
+                summary_store,
+                self._llm,
+                summary_threshold=self._summary_threshold,
             )
-            session.add(human_msg)
-            await session.flush()
+            forgetting_engine = ForgettingEngine(summary_store, summarizer)
+            memory_manager = MemoryManager(
+                message_store,
+                summary_store,
+                wiki_store,
+                summarizer,
+                forgetting_engine,
+            )
+            prompt_builder = PromptBuilder(
+                self._llm,
+                message_store,
+                wiki_store,
+                summary_store,
+                wiki_context_limit=self._wiki_context_limit,
+                short_term_limit=self._short_term_limit,
+            )
 
-            # Get recent messages for context
-            recent_messages = await self._get_recent_messages(
-                session, companion.id, limit=30
+            mcp_manager = MCPManager()
+            mcp_manager.register_server(
+                "messages",
+                MessagesMCPServer(message_store, companion.id),
+            )
+            mcp_manager.register_server(
+                "wiki",
+                WikiMCPServer(wiki_store, companion.id),
+            )
+
+            # Save the human's message
+            await memory_manager.save_message(
+                companion.id,
+                "user",
+                message.text,
+                is_proactive=False,
+                trigger_summary=True,
             )
 
             # Get current mood
@@ -416,33 +467,27 @@ class BotHandler:
             mood_manager = MoodManager(session)
             mood = await mood_manager.get_current_mood(companion.id, traits)
 
-            # Build the prompt
-            system_prompt = self._build_full_prompt(companion, mood)
-
-            # Build message history for LLM
-            llm_messages = [
-                ChatMessage(role=MessageRole.SYSTEM, content=system_prompt)
-            ]
-            for msg in reversed(recent_messages):  # Oldest first
-                role = MessageRole.USER if msg.role == "user" else MessageRole.ASSISTANT
-                llm_messages.append(ChatMessage(role=role, content=msg.content))
+            llm_messages = await prompt_builder.build_context(companion, mood)
 
             # Generate response
             try:
-                response = await self._llm.generate(
+                response = await run_with_tools(
+                    self._llm,
+                    mcp_manager,
                     llm_messages,
                     temperature=companion.temperature,
+                    max_iterations=self._tool_max_iterations,
                 )
                 response_text = response.content
 
                 # Save the companion's response
-                ai_msg = Message(
-                    role="assistant",
-                    content=response_text,
-                    companion_id=companion.id,
+                await memory_manager.save_message(
+                    companion.id,
+                    "assistant",
+                    response_text,
                     is_proactive=False,
                 )
-                session.add(ai_msg)
+                await memory_manager.run_forgetting_cycle(companion.id)
 
                 # Update mood based on conversation
                 from mai_companion.personality.mood import evaluate_message_sentiment
