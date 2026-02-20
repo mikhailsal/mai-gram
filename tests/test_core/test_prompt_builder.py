@@ -107,10 +107,12 @@ class TestPromptBuilder:
 
         history_contents = [m.content for m in context[1:]]
         assert len(history_contents) == 2
+        # User messages get a "[YYYY-MM-DD HH:MM] " timestamp prefix
         assert history_contents[0].endswith(" first")
-        assert history_contents[1].endswith(" second")
         assert history_contents[0].startswith("[")
-        assert history_contents[1].startswith("[")
+        # Assistant messages are kept as-is (no timestamp prefix) to prevent
+        # the LLM from imitating the pattern in its own responses.
+        assert history_contents[1] == "second"
 
     async def test_token_budget_truncation(self, session, tmp_path: Path, caplog) -> None:
         companion = await _create_companion(session)
