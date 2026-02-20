@@ -32,7 +32,7 @@ docs/
 ### "I want to understand the project"
 
 1. [TERMINOLOGY.md](TERMINOLOGY.md) — Project language and philosophy
-2. [../PROJECT_VISION.md](../PROJECT_VISION.md) — Full vision document
+2. [../PROJECT_PHILOSOPHY.md](../PROJECT_PHILOSOPHY.md) — Full philosophy document
 3. [ARCHITECTURE.md](ARCHITECTURE.md) — How it works technically
 
 ### "I want to understand my companion"
@@ -72,6 +72,6 @@ See [TERMINOLOGY.md](TERMINOLOGY.md) for the complete glossary.
 | File | Description |
 |------|-------------|
 | [../README.md](../README.md) | Project overview and quick start |
-| [../PROJECT_VISION.md](../PROJECT_VISION.md) | Full philosophy and design |
+| [../PROJECT_PHILOSOPHY.md](../PROJECT_PHILOSOPHY.md) | Full philosophy and design |
 | [../OPINION_AND_RECOMMENDATIONS.md](../OPINION_AND_RECOMMENDATIONS.md) | Critical analysis |
 | [../.env.example](../.env.example) | Configuration template |

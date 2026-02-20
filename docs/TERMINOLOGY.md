@@ -281,6 +281,6 @@ The approach to preventing unhealthy configurations. Instead of hard blocks:
 ## See Also
 
 - [README.md](../README.md) — Project overview
-- [PROJECT_VISION.md](../PROJECT_VISION.md) — Full philosophy
+- [PROJECT_PHILOSOPHY.md](../PROJECT_PHILOSOPHY.md) — Full philosophy
 - [PERSONALITY.md](PERSONALITY.md) — Personality system details
 - [MEMORY.md](MEMORY.md) — Memory system details

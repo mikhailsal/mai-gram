@@ -60,7 +60,7 @@ Current AI interactions are deeply unnatural:
 4. **Servile behavior** — agrees with everything, never pushes back
 5. **Purely reactive** — only speaks when spoken to
 
-mAI Companion addresses all of these. For the full philosophy, see [PROJECT_VISION.md](PROJECT_VISION.md).
+mAI Companion addresses all of these. For the full philosophy, see [PROJECT_PHILOSOPHY.md](PROJECT_PHILOSOPHY.md).
 
 ---
 
@@ -159,5 +159,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Further Reading
 
-- [**PROJECT_VISION.md**](PROJECT_VISION.md) — The full philosophy and design principles
+- [**PROJECT_PHILOSOPHY.md**](PROJECT_PHILOSOPHY.md) — The full philosophy and design principles
 - [**OPINION_AND_RECOMMENDATIONS.md**](OPINION_AND_RECOMMENDATIONS.md) — Critical analysis and future directions

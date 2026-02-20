@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "mai-companion"
 version = "0.1.0"
 description = "A self-hosted AI companion that lives on your server and communicates through Telegram like a real friend."
-readme = "PROJECT_VISION.md"
+readme = "PROJECT_PHILOSOPHY.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
