@@ -2,7 +2,31 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from mai_companion.config import Settings, get_settings
+
+# Environment variable names that correspond to Settings fields.
+# Pydantic reads these automatically, so we must clear them in tests
+# that assert default values.
+_SETTINGS_ENV_VARS = [
+    "TELEGRAM_BOT_TOKEN",
+    "OPENROUTER_API_KEY",
+    "LLM_MODEL",
+    "DATABASE_URL",
+    "CHROMA_PERSIST_DIR",
+    "MEMORY_DATA_DIR",
+    "SUMMARY_THRESHOLD",
+    "WIKI_CONTEXT_LIMIT",
+    "SHORT_TERM_LIMIT",
+    "TOOL_MAX_ITERATIONS",
+    "LOG_LEVEL",
+    "TIMEZONE",
+    "QUIET_HOURS_START",
+    "QUIET_HOURS_END",
+    "ALLOWED_USERS",
+    "DEBUG",
+]
 
 
 class TestSettings:
@@ -10,9 +34,16 @@ class TestSettings:
 
     def test_default_values(self) -> None:
         """Settings have sensible defaults when no env vars are set."""
-        settings = Settings(
-            _env_file=None,  # type: ignore[call-arg]
-        )
+        import os
+
+        # Remove any environment variables that would override defaults.
+        clean_env = {
+            k: v for k, v in os.environ.items() if k.upper() not in _SETTINGS_ENV_VARS
+        }
+        with patch.dict("os.environ", clean_env, clear=True):
+            settings = Settings(
+                _env_file=None,  # type: ignore[call-arg]
+            )
         assert settings.telegram_bot_token == ""
         assert settings.openrouter_api_key == ""
         assert settings.llm_model == "openai/gpt-4o"

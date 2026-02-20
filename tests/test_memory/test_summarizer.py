@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -72,7 +72,9 @@ class TestMemorySummarizer:
         llm = _MockLLM(["Daily summary text"])
         summarizer = MemorySummarizer(message_store, summary_store, llm)
 
-        result = await summarizer.generate_daily_summary(companion_id, date.today())
+        # Use UTC date to match the UTC timestamps stored by SQLite's func.now().
+        utc_today = datetime.now(timezone.utc).date()
+        result = await summarizer.generate_daily_summary(companion_id, utc_today)
 
         assert result == "Daily summary text"
         assert summary_store.get_all_summaries(companion_id)[0].content == "Daily summary text"
@@ -84,7 +86,8 @@ class TestMemorySummarizer:
             SummaryStore(data_dir=tmp_path),
             _MockLLM(["unused"]),
         )
-        result = await summarizer.generate_daily_summary(companion_id, date.today())
+        utc_today = datetime.now(timezone.utc).date()
+        result = await summarizer.generate_daily_summary(companion_id, utc_today)
         assert result is None
 
     async def test_generate_weekly_summary(self, session, tmp_path: Path) -> None:
@@ -142,7 +145,8 @@ class TestMemorySummarizer:
             summary_threshold=3,
         )
 
-        triggered = await summarizer.trigger_daily_if_needed(companion_id, target_date=date.today())
+        utc_today = datetime.now(timezone.utc).date()
+        triggered = await summarizer.trigger_daily_if_needed(companion_id, target_date=utc_today)
 
         assert triggered is True
         assert summary_store.get_all_summaries(companion_id)[0].content == "threshold summary"
@@ -165,7 +169,8 @@ class TestMemorySummarizer:
             summary_threshold=3,
         )
 
-        triggered = await summarizer.trigger_daily_if_needed(companion_id, target_date=date.today())
+        utc_today = datetime.now(timezone.utc).date()
+        triggered = await summarizer.trigger_daily_if_needed(companion_id, target_date=utc_today)
 
         assert triggered is False
         assert len(summary_store.get_all_summaries(companion_id)) == 0
