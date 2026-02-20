@@ -29,9 +29,7 @@ The ONLY acceptable reason to modify this requirement is if the environment genu
 - "The code looks correct" — you must verify, not assume
 - "Testing would take too long" — testing is part of the task, not optional
 - "I already tested in unit tests" — manual execution is required
-- "The changes are minor" — all changes require verification
-
-## Acceptable Exceptions
+- "The changes are minor" — all changes require verification## Acceptable Exceptions
 - If the task is to write only the tests themselves, you can skip the manual testing.
 - If your task is not about technical things
 

@@ -169,7 +169,31 @@ class PromptBuilder:
             "Your replies must contain only natural conversational text."
         )
 
+        # Explicit instruction to use tools for persistent memory.
+        # Without this, many models (especially smaller ones) will simply
+        # claim they "saved" information without actually calling wiki_create.
+        tool_instructions = (
+            "## Your personal wiki (IMPORTANT)\n"
+            "You have access to tools that let you save and retrieve important "
+            "information. You MUST use these tools — do NOT just say you will "
+            "remember something.\n\n"
+            "WHEN TO USE wiki_create:\n"
+            "- When your human tells you their name, birthday, or age\n"
+            "- When they share important personal facts (family, job, location)\n"
+            "- When they mention significant preferences, hobbies, or interests\n"
+            "- When they explicitly ask you to remember something\n"
+            "- When they share plans, goals, or important dates\n\n"
+            "CRITICAL: If the human shares personal information or asks you to "
+            "remember something, you MUST call the wiki_create tool BEFORE "
+            "responding. Never pretend to save information — actually save it "
+            "using the tool. This is how your memory works.\n\n"
+            "WHEN TO USE search_messages:\n"
+            "- When you need to recall something from a past conversation\n"
+            "- When the human asks \"do you remember when...\" or similar"
+        )
+
         return (
             f"{full_prompt}\n\n{current_time_section}\n\n"
-            f"{wiki_section}\n\n{memories_section}\n\n{timestamp_guard}"
+            f"{wiki_section}\n\n{memories_section}\n\n"
+            f"{tool_instructions}\n\n{timestamp_guard}"
         )
