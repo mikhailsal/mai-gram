@@ -59,6 +59,7 @@ mai-companion/
 ├── tests/                      # Test suite
 │   ├── functional/             # End-to-end functional tests
 │   ├── test_bot/               # Bot unit tests
+│   ├── test_mcp/               # MCP server & bridge tests
 │   ├── test_memory/            # Memory unit tests
 │   └── ...
 │

@@ -9,6 +9,7 @@ from mai_companion.mcp_servers.bridge import (
 )
 from mai_companion.mcp_servers.manager import MCPManager, MCPServer, RegisteredTool
 from mai_companion.mcp_servers.messages_server import MCPToolSpec, MessagesMCPServer
+from mai_companion.mcp_servers.sleep_server import SleepMCPServer
 from mai_companion.mcp_servers.wiki_server import WikiMCPServer
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "MCPToolSpec",
     "MessagesMCPServer",
     "RegisteredTool",
+    "SleepMCPServer",
     "WikiMCPServer",
     "mcp_result_to_openai",
     "mcp_tools_to_openai",

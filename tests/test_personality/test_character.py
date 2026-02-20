@@ -13,6 +13,7 @@ from mai_companion.personality.character import (
     Gender,
     Verbosity,
     generate_system_prompt,
+    regenerate_system_prompt_from_companion,
 )
 
 # ---------------------------------------------------------------------------
@@ -265,12 +266,24 @@ class TestCreateCompanionRecord:
         assert record["temperature"] == 0.65
         assert record["relationship_stage"] == "getting_to_know"
         assert record["mood_volatility"] == config.traits["mood_volatility"]
+        assert record["communication_style"] == "balanced"
+        assert record["verbosity"] == "normal"
         # personality_traits should be valid JSON
         traits = json.loads(record["personality_traits"])
         assert isinstance(traits, dict)
         assert len(traits) == 6
         # system_prompt should be non-empty
         assert len(record["system_prompt"]) > 100
+
+    def test_stores_communication_style_and_verbosity(self) -> None:
+        config = CharacterBuilder.from_preset(
+            "Luna", "caring_guide",
+            style=CommunicationStyle.FORMAL,
+            verbosity=Verbosity.DETAILED,
+        )
+        record = CharacterBuilder.create_companion_record(config, temperature=0.65)
+        assert record["communication_style"] == "formal"
+        assert record["verbosity"] == "detailed"
 
     def test_includes_gender_field(self) -> None:
         config = CharacterBuilder.from_preset("Luna", "caring_guide")
@@ -293,6 +306,98 @@ class TestCreateCompanionRecord:
         config = CharacterBuilder.from_preset("Alex", "balanced_friend")
         record = CharacterBuilder.create_companion_record(config, temperature=0.65)
         assert record["language_style"] is None
+
+
+# ---------------------------------------------------------------------------
+# regenerate_system_prompt_from_companion
+# ---------------------------------------------------------------------------
+
+class _FakeCompanion:
+    """Minimal stand-in for a Companion ORM object (no DB needed)."""
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+class TestRegenerateSystemPrompt:
+    """Verify regenerate_system_prompt_from_companion produces correct output."""
+
+    def test_basic_regeneration(self) -> None:
+        companion = _FakeCompanion(
+            name="TestBot",
+            gender="neutral",
+            human_language="English",
+            language_style=None,
+            personality_traits=json.dumps({
+                "warmth": 0.5, "humor": 0.5, "directness": 0.5,
+                "patience": 0.5, "laziness": 0.5, "mood_volatility": 0.5,
+            }),
+            communication_style="balanced",
+            verbosity="normal",
+        )
+        prompt = regenerate_system_prompt_from_companion(companion)
+        assert "TestBot" in prompt
+        assert "## Personality" in prompt
+        assert "## Ethical boundaries" in prompt
+        assert "{mood_section}" in prompt
+        assert "{relationship_section}" in prompt
+
+    def test_regeneration_matches_generate(self) -> None:
+        """Output from regenerate should match generate for the same config."""
+        config = CharacterBuilder.from_preset(
+            "Luna", "caring_guide", language="Spanish",
+            style=CommunicationStyle.FORMAL,
+            verbosity=Verbosity.DETAILED,
+        )
+        config.gender = Gender.FEMALE
+        config.language_style = "Andalusian dialect"
+        direct_prompt = generate_system_prompt(config)
+
+        companion = _FakeCompanion(
+            name="Luna",
+            gender="female",
+            human_language="Spanish",
+            language_style="Andalusian dialect",
+            personality_traits=json.dumps(config.traits),
+            communication_style="formal",
+            verbosity="detailed",
+        )
+        regenerated_prompt = regenerate_system_prompt_from_companion(companion)
+        assert regenerated_prompt == direct_prompt
+
+    def test_regeneration_with_defaults_for_missing_fields(self) -> None:
+        """Old companions without communication_style/verbosity should get defaults."""
+        companion = _FakeCompanion(
+            name="OldBot",
+            gender="male",
+            human_language="English",
+            personality_traits=json.dumps({
+                "warmth": 0.5, "humor": 0.5, "directness": 0.5,
+                "patience": 0.5, "laziness": 0.5, "mood_volatility": 0.5,
+            }),
+        )
+        # Simulate missing attributes (old DB schema)
+        # regenerate should fall back to defaults
+        prompt = regenerate_system_prompt_from_companion(companion)
+        assert "OldBot" in prompt
+        assert "## Ethical boundaries" in prompt
+
+    def test_regeneration_preserves_gender(self) -> None:
+        companion = _FakeCompanion(
+            name="Мария",
+            gender="female",
+            human_language="Russian",
+            language_style=None,
+            personality_traits=json.dumps({
+                "warmth": 0.8, "humor": 0.5, "directness": 0.5,
+                "patience": 0.5, "laziness": 0.5, "mood_volatility": 0.5,
+            }),
+            communication_style="casual",
+            verbosity="concise",
+        )
+        prompt = regenerate_system_prompt_from_companion(companion)
+        assert "feminine" in prompt.lower() or "female" in prompt.lower()
 
 
 class TestCharacterConfigLanguageStyle:

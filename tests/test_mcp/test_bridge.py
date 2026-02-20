@@ -221,6 +221,116 @@ class TestRunWithTools:
         assert result.finish_reason == "max_tool_iterations"
         assert len(llm.calls) == 3
 
+    async def test_run_with_tools_intermediate_content_callback(self) -> None:
+        """When the LLM produces text alongside a tool call, the
+        on_intermediate_content callback should fire with that text."""
+        llm = _MockLLMProvider(
+            [
+                LLMResponse(
+                    content="Hey!",
+                    model="mock",
+                    tool_calls=[
+                        ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')
+                    ],
+                ),
+                LLMResponse(content="What's up?", model="mock", finish_reason="stop"),
+            ]
+        )
+        manager = MCPManager()
+        manager.register_server(
+            "sleep",
+            _FakeServer([MCPToolSpec("sleep", "Pause", {"type": "object"})], "ok"),
+        )
+
+        delivered: list[str] = []
+
+        async def capture(text: str) -> None:
+            delivered.append(text)
+
+        result = await run_with_tools(
+            llm,
+            manager,
+            [ChatMessage(role=MessageRole.USER, content="Hi")],
+            on_intermediate_content=capture,
+        )
+
+        assert delivered == ["Hey!"]
+        assert result.content == "What's up?"
+
+    async def test_run_with_tools_intermediate_content_not_fired_for_empty(self) -> None:
+        """The callback should NOT fire when the assistant content is empty."""
+        llm = _MockLLMProvider(
+            [
+                LLMResponse(
+                    content="",
+                    model="mock",
+                    tool_calls=[
+                        ToolCall(id="call_1", name="sleep", arguments='{}')
+                    ],
+                ),
+                LLMResponse(content="Done", model="mock", finish_reason="stop"),
+            ]
+        )
+        manager = MCPManager()
+        manager.register_server(
+            "sleep",
+            _FakeServer([MCPToolSpec("sleep", "Pause", {"type": "object"})], "ok"),
+        )
+
+        delivered: list[str] = []
+
+        result = await run_with_tools(
+            llm,
+            manager,
+            [ChatMessage(role=MessageRole.USER, content="Hi")],
+            on_intermediate_content=lambda text: delivered.append(text),
+        )
+
+        assert delivered == []
+        assert result.content == "Done"
+
+    async def test_run_with_tools_multiple_intermediate_messages(self) -> None:
+        """Multiple tool-call iterations should deliver multiple intermediate texts."""
+        llm = _MockLLMProvider(
+            [
+                LLMResponse(
+                    content="First message",
+                    model="mock",
+                    tool_calls=[
+                        ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')
+                    ],
+                ),
+                LLMResponse(
+                    content="Second message",
+                    model="mock",
+                    tool_calls=[
+                        ToolCall(id="call_2", name="sleep", arguments='{"duration":0}')
+                    ],
+                ),
+                LLMResponse(content="Third message", model="mock", finish_reason="stop"),
+            ]
+        )
+        manager = MCPManager()
+        manager.register_server(
+            "sleep",
+            _FakeServer([MCPToolSpec("sleep", "Pause", {"type": "object"})], "ok"),
+        )
+
+        delivered: list[str] = []
+
+        async def capture(text: str) -> None:
+            delivered.append(text)
+
+        result = await run_with_tools(
+            llm,
+            manager,
+            [ChatMessage(role=MessageRole.USER, content="Tell me a lot")],
+            on_intermediate_content=capture,
+        )
+
+        assert delivered == ["First message", "Second message"]
+        assert result.content == "Third message"
+
     async def test_run_with_tools_tool_error_handling(self) -> None:
         llm = _MockLLMProvider(
             [

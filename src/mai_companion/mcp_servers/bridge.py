@@ -78,8 +78,18 @@ async def run_with_tools(
     max_iterations: int = 5,
     tool_choice: str | dict | None = "auto",
     on_tool_result: Callable[..., Awaitable[None] | None] | None = None,
+    on_intermediate_content: Callable[[str], Awaitable[None] | None] | None = None,
 ) -> LLMResponse:
-    """Run an agentic loop: LLM -> tools -> LLM until completion."""
+    """Run an agentic loop: LLM -> tools -> LLM until completion.
+
+    Parameters
+    ----------
+    on_intermediate_content:
+        Called when the LLM produces text alongside tool calls.  This
+        enables multi-message behaviour: the text is dispatched as a
+        standalone message *before* the tool executes, so the human
+        sees it immediately.
+    """
     if max_iterations < 1:
         raise ValueError("max_iterations must be >= 1")
 
@@ -94,6 +104,7 @@ async def run_with_tools(
         for tool in registered_tools
     ]
 
+    intermediate_texts: list[str] = []
     last_response: LLMResponse | None = None
     for _ in range(max_iterations):
         response = await llm.generate(
@@ -108,6 +119,15 @@ async def run_with_tools(
 
         if not response.tool_calls:
             return response
+
+        # When the LLM produces text alongside tool calls, treat it as
+        # an intermediate message that should be sent to the human now.
+        if response.content and response.content.strip():
+            intermediate_texts.append(response.content.strip())
+            if on_intermediate_content is not None:
+                cb_result = on_intermediate_content(response.content.strip())
+                if inspect.isawaitable(cb_result):
+                    await cb_result
 
         conversation.append(
             ChatMessage(

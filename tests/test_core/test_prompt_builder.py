@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
@@ -55,6 +56,18 @@ async def _create_companion(session, companion_id: str = "comp-1") -> Companion:
     companion = Companion(
         id=companion_id,
         name="Comp",
+        gender="neutral",
+        human_language="English",
+        personality_traits=json.dumps({
+            "warmth": 0.5,
+            "humor": 0.5,
+            "directness": 0.5,
+            "patience": 0.5,
+            "laziness": 0.5,
+            "mood_volatility": 0.5,
+        }),
+        communication_style="balanced",
+        verbosity="normal",
         system_prompt=(
             "You are a companion.\n\n{mood_section}\n\n{relationship_section}"
         ),
@@ -147,3 +160,90 @@ class TestPromptBuilder:
 
         assert "No persistent knowledge yet." in context[0].content
         assert "No memory summaries yet." in context[0].content
+
+    async def test_prompt_regenerated_at_runtime(self, session, tmp_path: Path) -> None:
+        """The system prompt must be regenerated from stored config, not from the DB field."""
+        companion = await _create_companion(session)
+        builder = PromptBuilder(
+            _MockLLM(),
+            MessageStore(session),
+            WikiStore(session, data_dir=tmp_path),
+            SummaryStore(data_dir=tmp_path),
+        )
+
+        context = await builder.build_context(companion, _mood())
+        system_content = context[0].content
+
+        # The regenerated prompt should contain current template content
+        # (identity, personality, ethical floor) — NOT the old stored text.
+        assert "You are Comp" in system_content
+        assert "## Ethical boundaries" in system_content
+        assert "## Personality" in system_content
+        assert "## Communication style" in system_content
+
+    async def test_prompt_contains_companion_name(self, session, tmp_path: Path) -> None:
+        """The regenerated prompt should use the companion's stored name."""
+        companion = Companion(
+            id="name-test",
+            name="Aurora",
+            gender="female",
+            human_language="English",
+            personality_traits=json.dumps({
+                "warmth": 0.8, "humor": 0.6, "directness": 0.4,
+                "patience": 0.7, "laziness": 0.3, "mood_volatility": 0.5,
+            }),
+            communication_style="formal",
+            verbosity="detailed",
+            system_prompt="old static prompt",
+        )
+        session.add(companion)
+        await session.flush()
+
+        builder = PromptBuilder(
+            _MockLLM(),
+            MessageStore(session),
+            WikiStore(session, data_dir=tmp_path),
+            SummaryStore(data_dir=tmp_path),
+        )
+        context = await builder.build_context(companion, _mood())
+        system_content = context[0].content
+
+        assert "Aurora" in system_content
+        assert "feminine" in system_content.lower() or "female" in system_content.lower()
+        # Old stored prompt should NOT appear
+        assert "old static prompt" not in system_content
+
+    async def test_old_companion_gets_new_sections(self, session, tmp_path: Path) -> None:
+        """A companion created with an old prompt should still get tool instructions."""
+        companion = Companion(
+            id="legacy-comp",
+            name="Legacy",
+            gender="neutral",
+            human_language="Russian",
+            personality_traits=json.dumps({
+                "warmth": 0.5, "humor": 0.5, "directness": 0.5,
+                "patience": 0.5, "laziness": 0.5, "mood_volatility": 0.5,
+            }),
+            communication_style="casual",
+            verbosity="concise",
+            # Simulate an old prompt that lacks tool instructions
+            system_prompt="You are Legacy. Be nice.",
+        )
+        session.add(companion)
+        await session.flush()
+
+        builder = PromptBuilder(
+            _MockLLM(),
+            MessageStore(session),
+            WikiStore(session, data_dir=tmp_path),
+            SummaryStore(data_dir=tmp_path),
+        )
+        context = await builder.build_context(companion, _mood())
+        system_content = context[0].content
+
+        # Even though the stored prompt was bare, the regenerated prompt
+        # should contain tool instructions and all standard sections.
+        assert "wiki_create" in system_content
+        assert "search_messages" in system_content
+        assert "## Ethical boundaries" in system_content
+        assert "Russian" in system_content

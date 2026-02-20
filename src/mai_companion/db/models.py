@@ -87,11 +87,23 @@ class Companion(Base):
         nullable=True,
         doc="File path to the generated avatar image",
     )
+    communication_style: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="casual",
+        doc="Communication style: 'casual', 'balanced', or 'formal'",
+    )
+    verbosity: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="concise",
+        doc="Response verbosity: 'concise', 'normal', or 'detailed'",
+    )
     system_prompt: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         default="",
-        doc="Base system prompt assembled from personality traits",
+        doc="Legacy base system prompt (kept for reference; prompt is now regenerated at runtime)",
     )
     relationship_stage: Mapped[str] = mapped_column(
         String(50),

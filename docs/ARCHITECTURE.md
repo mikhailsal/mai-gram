@@ -42,6 +42,7 @@ This document explains the system's components, data flow, and design decisions.
 | **Core** | `src/mai_companion/core/` | Prompt building, conversation engine |
 | **Personality** | `src/mai_companion/personality/` | Traits, mood, character config |
 | **Memory** | `src/mai_companion/memory/` | Messages, summaries, wiki, forgetting |
+| **MCP Servers** | `src/mai_companion/mcp_servers/` | Tool servers (wiki, messages, sleep), bridge, manager |
 | **LLM** | `src/mai_companion/llm/` | OpenRouter client, translation |
 | **Database** | `src/mai_companion/db/` | SQLAlchemy models, migrations |
 
@@ -256,6 +257,48 @@ Context is capped at ~120K tokens. When exceeded:
 
 ---
 
+## MCP Tool System
+
+The companion has access to tools via an MCP (Model Context Protocol) compatible
+server architecture. Each tool server exposes a `list_tools` / `call_tool`
+interface and is registered with the central `MCPManager`.
+
+### Available Tool Servers
+
+| Server | Tools | Purpose |
+|--------|-------|---------|
+| **messages** | `search_messages` | Full-text search over conversation history |
+| **wiki** | `wiki_create`, `wiki_edit`, `wiki_read`, `wiki_search` | Persistent knowledge base CRUD |
+| **sleep** | `sleep` | Pause between messages for multi-message delivery |
+
+### Multi-Message Delivery (Sleep Tool)
+
+The `sleep` tool enables a natural texting experience. When the companion
+wants to send several short messages instead of one long one, it:
+
+1. Writes the first part of its reply as assistant content
+2. Calls the `sleep` tool (with an optional duration, default 1s, max 5s)
+3. The bridge's `on_intermediate_content` callback fires, sending the text
+   immediately as a separate message
+4. After the pause, the LLM continues and can produce the next message
+
+This creates the illusion of a real person typing multiple messages.
+
+### Agentic Loop
+
+The `run_with_tools` bridge function implements a loop:
+
+```
+LLM generates → has tool calls? → execute tools → feed results back → repeat
+                  ↓ no
+              return final response
+```
+
+When the LLM produces text alongside tool calls, the text is delivered to
+the human via the `on_intermediate_content` callback before the tools run.
+
+---
+
 ## LLM Provider
 
 Abstracted interface for language model access.
@@ -418,6 +461,13 @@ mai-companion/
 │   │   ├── provider.py      # LLM abstraction
 │   │   ├── openrouter.py    # OpenRouter client
 │   │   └── translation.py   # Multi-language support
+│   │
+│   ├── mcp_servers/
+│   │   ├── bridge.py        # MCP ↔ OpenAI bridge, agentic loop
+│   │   ├── manager.py       # Server registry and tool routing
+│   │   ├── messages_server.py # Message search tool
+│   │   ├── wiki_server.py   # Wiki CRUD tools
+│   │   └── sleep_server.py  # Sleep tool (multi-message delivery)
 │   │
 │   ├── messenger/
 │   │   ├── base.py          # Messenger protocol

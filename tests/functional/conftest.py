@@ -24,7 +24,7 @@ from mai_companion.bot.middleware import RateLimitConfig
 from mai_companion.clock import Clock
 from mai_companion.config import Settings
 from mai_companion.db import close_db, get_session, init_db, reset_db_state, run_migrations
-from mai_companion.db.models import Companion
+from mai_companion.db.models import Companion, MoodState
 from mai_companion.debug import LLMLoggerProvider
 from mai_companion.llm.openrouter import OpenRouterProvider
 from mai_companion.memory.knowledge_base import WikiStore
@@ -32,6 +32,15 @@ from mai_companion.memory.messages import MessageStore
 from mai_companion.memory.summaries import SummaryStore
 from mai_companion.messenger.base import IncomingMessage, MessageType
 from mai_companion.messenger.console import ConsoleMessenger
+from mai_companion.personality.character import (
+    CharacterBuilder,
+    CharacterConfig,
+    CommunicationStyle,
+    Gender,
+    Verbosity,
+)
+from mai_companion.personality.mood import MoodManager, resolve_label
+from mai_companion.personality.temperature import compute_temperature
 
 
 @dataclass(frozen=True)
@@ -91,6 +100,33 @@ class FunctionalHarness:
                 break
             body.append(line)
         return "\n".join(body).strip()
+
+    @staticmethod
+    def _all_ai_responses(console_output: str) -> list[str]:
+        """Extract *every* ``--- AI Response ---`` block from console output.
+
+        Returns a list of response texts (one per block).  Useful for
+        verifying multi-message behaviour where intermediate messages
+        produce separate blocks.
+        """
+        marker = "--- AI Response ---"
+        if marker not in console_output:
+            stripped = console_output.strip()
+            return [stripped] if stripped else []
+
+        parts = console_output.split(marker)
+        responses: list[str] = []
+        for part in parts[1:]:  # skip everything before the first marker
+            lines = part.strip().splitlines()
+            body: list[str] = []
+            for line in lines:
+                if line.strip() == "--- Buttons ---":
+                    break
+                body.append(line)
+            text = "\n".join(body).strip()
+            if text:
+                responses.append(text)
+        return responses
 
     async def _ensure_chat(self, chat_id: str, user_id: str = "functional-user") -> _ChatRuntime:
         existing = self._chat_runtimes.get(chat_id)
@@ -190,6 +226,89 @@ class FunctionalHarness:
         runtime.output.seek(0)
         runtime.output.truncate(0)
         return self._latest_ai_response(rendered)
+
+    async def send_message_multi(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        user_id: str | None = None,
+        target_date: date | None = None,
+    ) -> list[str]:
+        """Send a message and return *all* AI response blocks.
+
+        Unlike :meth:`send_message` which returns only the last response,
+        this returns every ``--- AI Response ---`` block — useful for
+        testing multi-message flows (e.g. the sleep tool).
+        """
+        runtime = await self._ensure_chat(chat_id, user_id=user_id or "functional-user")
+        self._set_target_date(chat_id, target_date)
+        sender_id = user_id or self._user_by_chat.get(chat_id, "functional-user")
+        await runtime.messenger.dispatch_text(chat_id=chat_id, user_id=sender_id, text=text)
+        rendered = runtime.output.getvalue()
+        runtime.output.seek(0)
+        runtime.output.truncate(0)
+        return self._all_ai_responses(rendered)
+
+    async def create_companion_directly(
+        self,
+        chat_id: str,
+        *,
+        name: str = "TestBot",
+        language: str = "English",
+        traits: dict[str, float] | None = None,
+        communication_style: CommunicationStyle = CommunicationStyle.FORMAL,
+        verbosity: Verbosity = Verbosity.CONCISE,
+        gender: Gender = Gender.NEUTRAL,
+        language_style: str | None = None,
+    ) -> Companion:
+        """Insert a companion directly into the DB, bypassing onboarding.
+
+        This is cheaper than :meth:`complete_onboarding` (zero LLM calls)
+        and gives full control over personality traits and system prompt.
+        Useful for deterministic tests that need a specific character.
+        """
+        if traits is None:
+            traits = {
+                "warmth": 0.3,
+                "humor": 0.0,
+                "patience": 0.9,
+                "directness": 0.9,
+                "laziness": 0.0,
+                "mood_volatility": 0.1,
+            }
+
+        config = CharacterConfig(
+            name=name,
+            language=language,
+            traits=traits,
+            gender=gender,
+            language_style=language_style,
+            communication_style=communication_style,
+            verbosity=verbosity,
+        )
+        temperature = compute_temperature(traits)
+        record = CharacterBuilder.create_companion_record(config, temperature)
+        record["id"] = chat_id
+
+        async with get_session() as session:
+            companion = Companion(**record)
+            session.add(companion)
+            await session.flush()
+
+            # Create initial mood state
+            mood_manager = MoodManager(session)
+            baseline = mood_manager.compute_baseline(traits)
+            label = resolve_label(baseline)
+            await mood_manager._save_mood(
+                companion.id,
+                baseline,
+                label,
+                "initial baseline at companion creation",
+            )
+            await session.commit()
+
+        return companion
 
     async def complete_onboarding(
         self,

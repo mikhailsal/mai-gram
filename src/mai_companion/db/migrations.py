@@ -39,7 +39,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 def register_migration(
@@ -143,6 +143,43 @@ async def _migrate_v4(conn: AsyncConnection) -> None:
         logger.info("Schema v4: added language_style column to companions")
     else:
         logger.info("Schema v4: language_style column already exists, skipping")
+
+
+@register_migration(5, "Add communication_style and verbosity to companions")
+async def _migrate_v5(conn: AsyncConnection) -> None:
+    """Version 5: add communication_style and verbosity columns to companions.
+
+    These fields were previously baked into the system_prompt at creation time
+    and lost.  Storing them separately allows the system prompt to be
+    regenerated at runtime so that all companions (old and new) benefit from
+    template improvements.
+
+    Defaults match the onboarding flow (casual / concise).
+    """
+    result = await conn.execute(text("PRAGMA table_info(companions)"))
+    columns = {row[1] for row in result.fetchall()}
+
+    if "communication_style" not in columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE companions ADD COLUMN communication_style "
+                "VARCHAR(20) NOT NULL DEFAULT 'casual'"
+            )
+        )
+        logger.info("Schema v5: added communication_style column to companions")
+    else:
+        logger.info("Schema v5: communication_style column already exists, skipping")
+
+    if "verbosity" not in columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE companions ADD COLUMN verbosity "
+                "VARCHAR(20) NOT NULL DEFAULT 'concise'"
+            )
+        )
+        logger.info("Schema v5: added verbosity column to companions")
+    else:
+        logger.info("Schema v5: verbosity column already exists, skipping")
 
 
 # -- Migration runner --

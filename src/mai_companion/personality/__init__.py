@@ -7,7 +7,8 @@ Public API:
     - validate_traits, detect_extreme_config: Validation utilities
     - CharacterConfig, CharacterBuilder: Character creation
     - CommunicationStyle, Verbosity: Style enums
-    - generate_system_prompt: System prompt assembly
+    - generate_system_prompt: System prompt assembly from CharacterConfig
+    - regenerate_system_prompt_from_companion: Rebuild prompt from DB fields
     - compute_temperature, describe_temperature: Temperature mapping
     - MoodManager, MoodCoordinates, MoodSnapshot: Dynamic mood system
     - resolve_label, mood_to_prompt_section: Mood utilities
@@ -19,6 +20,7 @@ from mai_companion.personality.character import (
     CommunicationStyle,
     Verbosity,
     generate_system_prompt,
+    regenerate_system_prompt_from_companion,
 )
 from mai_companion.personality.mood import (
     MoodCoordinates,
@@ -69,6 +71,7 @@ __all__ = [
     "evaluate_message_sentiment",
     "generate_random_traits",
     "generate_system_prompt",
+    "regenerate_system_prompt_from_companion",
     "get_registered_traits",
     "mood_to_behavior_hints",
     "mood_to_prompt_section",

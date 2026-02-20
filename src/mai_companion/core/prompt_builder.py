@@ -1,4 +1,11 @@
-"""Builds model context from personality prompt + memory layers."""
+"""Builds model context from personality prompt + memory layers.
+
+The system prompt is **regenerated at runtime** from the companion's stored
+configuration fields (name, gender, language, traits, communication style,
+verbosity).  This ensures that template improvements and new functional
+sections automatically apply to *all* companions — including those created
+in earlier versions of the application.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +18,7 @@ from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
 from mai_companion.memory.knowledge_base import WikiStore
 from mai_companion.memory.messages import MessageStore
 from mai_companion.memory.summaries import StoredSummary, SummaryStore
+from mai_companion.personality.character import regenerate_system_prompt_from_companion
 from mai_companion.personality.mood import MoodSnapshot, mood_to_prompt_section
 
 logger = logging.getLogger(__name__)
@@ -129,7 +137,12 @@ class PromptBuilder:
             f"Right now it is: {prompt_now.strftime('%A, %B')} {prompt_now.day}, "
             f"{prompt_now.year}, {prompt_now.strftime('%H:%M')} UTC."
         )
-        base_prompt = companion.system_prompt
+
+        # Regenerate the base prompt from the companion's stored config
+        # fields using the *current* templates.  This is the key mechanism
+        # that keeps old companions up-to-date with new prompt improvements.
+        base_prompt = regenerate_system_prompt_from_companion(companion)
+
         mood_section = mood_to_prompt_section(mood)
         relationship_section = (
             "## Relationship stage\n"
@@ -189,7 +202,13 @@ class PromptBuilder:
             "using the tool. This is how your memory works.\n\n"
             "WHEN TO USE search_messages:\n"
             "- When you need to recall something from a past conversation\n"
-            "- When the human asks \"do you remember when...\" or similar"
+            "- When the human asks \"do you remember when...\" or similar\n\n"
+            "## Sending multiple messages\n"
+            "You can send several short messages instead of one long one — "
+            "just like a real person texting. Write the first part of your "
+            "reply, call the sleep tool, then continue with the next part. "
+            "Each piece of text before a sleep call is delivered as a separate "
+            "message. Use this naturally — don't overdo it."
         )
 
         return (

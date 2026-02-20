@@ -259,6 +259,58 @@ def generate_system_prompt(config: CharacterConfig) -> str:
     return "\n\n".join(sections)
 
 
+def regenerate_system_prompt_from_companion(companion: object) -> str:
+    """Rebuild the system prompt from a Companion's stored DB fields.
+
+    This allows old companions to benefit from updated prompt templates
+    without needing to be re-created.  The function reads the companion's
+    persisted configuration (name, gender, language, traits, etc.) and
+    passes them through the *current* ``generate_system_prompt`` pipeline.
+
+    Parameters
+    ----------
+    companion:
+        A Companion ORM instance (or any object with the expected attributes:
+        ``name``, ``gender``, ``human_language``, ``language_style``,
+        ``personality_traits`` (JSON string), ``communication_style``,
+        ``verbosity``).
+
+    Returns
+    -------
+    str
+        The freshly-generated system prompt using current templates.
+    """
+    traits: dict[str, float] = json.loads(companion.personality_traits)  # type: ignore[union-attr]
+
+    # Map stored string values back to enums, falling back to defaults
+    # for companions created before these columns existed.
+    try:
+        gender = Gender(companion.gender)  # type: ignore[union-attr]
+    except (ValueError, AttributeError):
+        gender = Gender.NEUTRAL
+
+    try:
+        comm_style = CommunicationStyle(companion.communication_style)  # type: ignore[union-attr]
+    except (ValueError, AttributeError):
+        comm_style = CommunicationStyle.CASUAL
+
+    try:
+        verb = Verbosity(companion.verbosity)  # type: ignore[union-attr]
+    except (ValueError, AttributeError):
+        verb = Verbosity.CONCISE
+
+    config = CharacterConfig(
+        name=companion.name,  # type: ignore[union-attr]
+        language=companion.human_language,  # type: ignore[union-attr]
+        traits=traits,
+        gender=gender,
+        language_style=getattr(companion, "language_style", None),
+        communication_style=comm_style,
+        verbosity=verb,
+    )
+    return generate_system_prompt(config)
+
+
 # ---------------------------------------------------------------------------
 # CharacterBuilder
 # ---------------------------------------------------------------------------
@@ -413,6 +465,8 @@ class CharacterBuilder:
             "personality_traits": json.dumps(config.traits),
             "mood_volatility": config.traits.get("mood_volatility", 0.5),
             "temperature": temperature,
+            "communication_style": config.communication_style.value,
+            "verbosity": config.verbosity.value,
             "system_prompt": system_prompt,
             "relationship_stage": "getting_to_know",
         }

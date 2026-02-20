@@ -31,6 +31,7 @@ from mai_companion.llm.translation import TranslationService
 from mai_companion.mcp_servers.bridge import run_with_tools
 from mai_companion.mcp_servers.manager import MCPManager
 from mai_companion.mcp_servers.messages_server import MessagesMCPServer
+from mai_companion.mcp_servers.sleep_server import SleepMCPServer
 from mai_companion.mcp_servers.wiki_server import WikiMCPServer
 from mai_companion.memory.forgetting import ForgettingEngine
 from mai_companion.memory.knowledge_base import WikiStore
@@ -40,7 +41,7 @@ from mai_companion.memory.summaries import SummaryStore
 from mai_companion.memory.summarizer import MemorySummarizer
 from mai_companion.messenger.base import IncomingMessage, MessageType, OutgoingMessage
 from mai_companion.personality.character import CharacterBuilder, CharacterConfig
-from mai_companion.personality.mood import MoodManager, mood_to_prompt_section
+from mai_companion.personality.mood import MoodManager
 from mai_companion.personality.temperature import compute_temperature
 
 if TYPE_CHECKING:
@@ -456,6 +457,7 @@ class BotHandler:
                 "wiki",
                 WikiMCPServer(wiki_store, companion.id, clock=clock),
             )
+            mcp_manager.register_server("sleep", SleepMCPServer())
 
             # Save the human's message
             await memory_manager.save_message(
@@ -477,6 +479,19 @@ class BotHandler:
             if not callable(tool_result_observer):
                 tool_result_observer = None
 
+            # Callback to deliver intermediate messages (multi-message support).
+            # When the LLM produces text alongside a tool call (e.g. sleep),
+            # this sends the text immediately so the human sees it as a
+            # separate message.
+            intermediate_parts: list[str] = []
+
+            async def _send_intermediate(text: str) -> None:
+                intermediate_parts.append(text)
+                await self._messenger.send_message(
+                    OutgoingMessage(text=text, chat_id=message.chat_id)
+                )
+                await self._messenger.send_typing_indicator(message.chat_id)
+
             # Generate response
             try:
                 response = await run_with_tools(
@@ -486,17 +501,31 @@ class BotHandler:
                     temperature=companion.temperature,
                     max_iterations=self._tool_max_iterations,
                     on_tool_result=tool_result_observer,
+                    on_intermediate_content=_send_intermediate,
                 )
                 response_text = response.content
 
-                # Save the companion's response
-                await memory_manager.save_message(
-                    companion.id,
-                    "assistant",
-                    response_text,
-                    clock=clock,
-                    is_proactive=False,
-                )
+                # Save all parts (intermediate + final) as individual messages
+                # so the conversation history reflects the multi-message flow.
+                for part in intermediate_parts:
+                    await memory_manager.save_message(
+                        companion.id,
+                        "assistant",
+                        part,
+                        clock=clock,
+                        is_proactive=False,
+                    )
+
+                # Save the companion's final response (may be empty if
+                # everything was delivered via intermediate messages).
+                if response_text and response_text.strip():
+                    await memory_manager.save_message(
+                        companion.id,
+                        "assistant",
+                        response_text,
+                        clock=clock,
+                        is_proactive=False,
+                    )
                 await memory_manager.run_forgetting_cycle(companion.id, clock=clock)
 
                 # Update mood based on conversation
@@ -522,16 +551,18 @@ class BotHandler:
                         response_text, companion.human_language
                     )
 
-        # Send the response
-        result = await self._messenger.send_message(
-            OutgoingMessage(text=response_text, chat_id=message.chat_id)
-        )
-        self._message_logger.log_outgoing(
-            message.chat_id,
-            response_text,
-            success=result.success,
-            message_id=result.message_id,
-        )
+        # Send the final response (skip if empty — everything was already
+        # delivered through intermediate messages).
+        if response_text and response_text.strip():
+            result = await self._messenger.send_message(
+                OutgoingMessage(text=response_text, chat_id=message.chat_id)
+            )
+            self._message_logger.log_outgoing(
+                message.chat_id,
+                response_text,
+                success=result.success,
+                message_id=result.message_id,
+            )
 
     async def _create_companion(
         self,
@@ -585,40 +616,6 @@ class BotHandler:
             config.language,
             temperature,
         )
-
-    def _build_full_prompt(self, companion: Companion, mood) -> str:
-        """Build the complete system prompt with mood.
-
-        Parameters
-        ----------
-        companion:
-            The companion record.
-        mood:
-            The current mood snapshot.
-
-        Returns
-        -------
-        str
-            The complete system prompt.
-        """
-        # Get the base prompt and inject mood
-        base_prompt = companion.system_prompt
-
-        # Generate mood section
-        mood_section = mood_to_prompt_section(mood)
-
-        # Replace the mood placeholder
-        full_prompt = base_prompt.replace("{mood_section}", mood_section)
-
-        # Replace relationship placeholder (Phase 6 will fill this properly)
-        relationship_section = (
-            f"## Relationship stage\n"
-            f"You are in the '{companion.relationship_stage}' stage of your relationship. "
-            f"This is still early -- you're getting to know each other."
-        )
-        full_prompt = full_prompt.replace("{relationship_section}", relationship_section)
-
-        return full_prompt
 
     async def _get_companion_by_chat(
         self, session, chat_id: str
