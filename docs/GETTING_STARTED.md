@@ -107,6 +107,103 @@ TIMEZONE=America/New_York
 
 ---
 
+## Running the Application
+
+Once installation and configuration are complete, you can run mAI Companion in several ways.
+
+### Option 1: Docker (Recommended for Production)
+
+```bash
+# Start in background (detached mode)
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop the service
+docker compose down
+
+# Restart the service
+docker compose restart
+```
+
+### Option 2: Native Python
+
+```bash
+# Run in foreground (logs visible, Ctrl+C to stop)
+python -m mai_companion.main
+
+# Run in background (Linux/macOS)
+python -m mai_companion.main &
+
+# Run in background with nohup (persists after terminal closes)
+nohup python -m mai_companion.main > mai_companion.log 2>&1 &
+
+# Check if running
+ps aux | grep mai_companion
+
+# Stop background process
+pkill -f "python -m mai_companion.main"
+```
+
+### Startup Output
+
+When the application starts successfully, you'll see:
+
+```
+2024-01-15 10:30:00 - INFO - mAI Companion starting up...
+2024-01-15 10:30:00 - INFO - Database ready
+2024-01-15 10:30:00 - INFO - LLM provider initialized (model: openai/gpt-4o)
+2024-01-15 10:30:00 - INFO - Access control enabled: 1 user(s) allowed
+2024-01-15 10:30:01 - INFO - Telegram messenger started successfully
+2024-01-15 10:30:01 - INFO - mAI Companion is running! Press Ctrl+C to stop.
+```
+
+### Running as a System Service (Linux)
+
+For production deployments, you can create a systemd service:
+
+```bash
+# Create service file
+sudo nano /etc/systemd/system/mai-companion.service
+```
+
+```ini
+[Unit]
+Description=mAI Companion Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/path/to/mai-companion
+Environment="PATH=/path/to/mai-companion/venv/bin"
+ExecStart=/path/to/mai-companion/venv/bin/python -m mai_companion.main
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable mai-companion
+sudo systemctl start mai-companion
+
+# Check status
+sudo systemctl status mai-companion
+
+# View logs
+sudo journalctl -u mai-companion -f
+
+# Stop the service
+sudo systemctl stop mai-companion
+```
+
+---
+
 ## Your First Conversation
 
 ### 1. Start the Bot
