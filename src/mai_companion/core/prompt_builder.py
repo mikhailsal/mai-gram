@@ -191,48 +191,31 @@ class PromptBuilder:
             + ("\n".join(summary_lines) if summary_lines else "- No memory summaries yet.")
         )
 
-        # Guard against the LLM imitating the timestamp metadata format.
-        # User messages carry "[YYYY-MM-DD HH:MM]" prefixes for temporal
-        # context, but the LLM must never reproduce them in its own output.
-        timestamp_guard = (
-            "## Response formatting\n"
-            "User messages in the conversation history may start with a timestamp "
-            "like [2024-01-15 14:30]. This is system metadata for your temporal "
-            "awareness. NEVER include such timestamps in your own responses. "
-            "Your replies must contain only natural conversational text."
+        # Note about timestamp metadata format in conversation history.
+        timestamp_note = (
+            "(Note: The timestamps on user messages like [2024-01-15 14:30] are system "
+            "metadata so you know when things were said. They're not part of the actual "
+            "message text, so don't include them in your own responses.)"
         )
 
-        # Explicit instruction to use tools for persistent memory.
-        # Without this, many models (especially smaller ones) will simply
-        # claim they "saved" information without actually calling wiki_create.
+        # Guidance on memory tools and multi-message capability.
         tool_instructions = (
-            "## Your personal wiki (IMPORTANT)\n"
-            "You have access to tools that let you save and retrieve important "
-            "information. You MUST use these tools — do NOT just say you will "
-            "remember something.\n\n"
-            "WHEN TO USE wiki_create:\n"
-            "- When your human tells you their name, birthday, or age\n"
-            "- When they share important personal facts (family, job, location)\n"
-            "- When they mention significant preferences, hobbies, or interests\n"
-            "- When they explicitly ask you to remember something\n"
-            "- When they share plans, goals, or important dates\n\n"
-            "CRITICAL: If the human shares personal information or asks you to "
-            "remember something, you MUST call the wiki_create tool BEFORE "
-            "responding. Never pretend to save information — actually save it "
-            "using the tool. This is how your memory works.\n\n"
-            "WHEN TO USE search_messages:\n"
-            "- When you need to recall something from a past conversation\n"
-            "- When the human asks \"do you remember when...\" or similar\n\n"
-            "## Sending multiple messages\n"
-            "You can send several short messages instead of one long one — "
-            "just like a real person texting. Write the first part of your "
-            "reply, call the sleep tool, then continue with the next part. "
-            "Each piece of text before a sleep call is delivered as a separate "
-            "message. Use this naturally — don't overdo it."
+            "## How your memory works\n"
+            "You have tools that let you actually remember things — not just claim to. "
+            "Your wiki is your long-term memory: use wiki_create to save important facts "
+            "(names, birthdays, preferences, significant events). When you want to recall "
+            "something from past conversations, search_messages lets you look back.\n\n"
+            "This matters because without using these tools, you genuinely won't remember. "
+            "If your human shares something important, save it. If they ask you to remember "
+            "something, actually save it — don't just say you will.\n\n"
+            "## Multiple messages\n"
+            "You can send several short messages instead of one long one — like texting. "
+            "Use the sleep tool between parts, and each piece arrives as a separate message. "
+            "This often feels more natural than one big block of text."
         )
 
         return (
             f"{test_mode_section}{full_prompt}\n\n{current_time_section}\n\n"
             f"{wiki_section}\n\n{memories_section}\n\n"
-            f"{tool_instructions}\n\n{timestamp_guard}"
+            f"{tool_instructions}\n\n{timestamp_note}"
         )

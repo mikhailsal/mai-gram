@@ -176,11 +176,11 @@ class TestSystemPromptGeneration:
         assert "polished" in prompt.lower() or "formal" in prompt.lower()
         assert "detailed" in prompt.lower() or "thorough" in prompt.lower()
 
-    def test_prompt_contains_ethical_floor(self) -> None:
+    def test_prompt_contains_shared_values(self) -> None:
         config = CharacterBuilder.from_preset("Luna", "caring_guide")
         prompt = generate_system_prompt(config)
-        assert "## Ethical boundaries" in prompt
-        assert "self-harm" in prompt
+        assert "## Shared values" in prompt
+        assert "harm" in prompt
 
     def test_prompt_contains_gender_instructions_male(self) -> None:
         config = CharacterBuilder.from_preset("Max", "bold_challenger")
@@ -239,14 +239,15 @@ class TestSystemPromptGeneration:
         config.language_style = "pre-revolutionary orthography"
         prompt = generate_system_prompt(config)
         assert "pre-revolutionary orthography" in prompt
-        assert "CRITICAL LANGUAGE STYLE REQUIREMENT" in prompt
+        # The style is now described as part of identity, not a critical requirement
+        assert "natural way of speaking" in prompt
 
     def test_prompt_no_language_style_section_when_none(self) -> None:
         """Language style section should not appear when style is None."""
         config = CharacterBuilder.from_preset("Luna", "caring_guide", language="Russian")
         config.language_style = None
         prompt = generate_system_prompt(config)
-        assert "CRITICAL LANGUAGE STYLE REQUIREMENT" not in prompt
+        assert "natural way of speaking uses" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +340,7 @@ class TestRegenerateSystemPrompt:
         prompt = regenerate_system_prompt_from_companion(companion)
         assert "TestBot" in prompt
         assert "## Personality" in prompt
-        assert "## Ethical boundaries" in prompt
+        assert "## Shared values" in prompt
         assert "{mood_section}" in prompt
         assert "{relationship_section}" in prompt
 
@@ -381,7 +382,7 @@ class TestRegenerateSystemPrompt:
         # regenerate should fall back to defaults
         prompt = regenerate_system_prompt_from_companion(companion)
         assert "OldBot" in prompt
-        assert "## Ethical boundaries" in prompt
+        assert "## Shared values" in prompt
 
     def test_regeneration_preserves_gender(self) -> None:
         companion = _FakeCompanion(

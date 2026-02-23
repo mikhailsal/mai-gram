@@ -175,9 +175,9 @@ class TestPromptBuilder:
         system_content = context[0].content
 
         # The regenerated prompt should contain current template content
-        # (identity, personality, ethical floor) — NOT the old stored text.
+        # (identity, personality, shared values) — NOT the old stored text.
         assert "You are Comp" in system_content
-        assert "## Ethical boundaries" in system_content
+        assert "## Shared values" in system_content
         assert "## Personality" in system_content
         assert "## Communication style" in system_content
 
@@ -245,7 +245,7 @@ class TestPromptBuilder:
         # should contain tool instructions and all standard sections.
         assert "wiki_create" in system_content
         assert "search_messages" in system_content
-        assert "## Ethical boundaries" in system_content
+        assert "## Shared values" in system_content
         assert "Russian" in system_content
 
     async def test_test_mode_adds_transparency_section(self, session, tmp_path: Path) -> None:
