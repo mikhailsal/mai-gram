@@ -99,6 +99,16 @@ class Companion(Base):
         default="concise",
         doc="Response verbosity: 'concise', 'normal', or 'detailed'",
     )
+    llm_model: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="openai/gpt-4o",
+        doc=(
+            "The LLM model this companion was created with and uses for all interactions. "
+            "This is the companion's 'soul' - changing it would fundamentally alter who they are. "
+            "Stored at creation time to protect companion identity from casual model changes."
+        ),
+    )
     system_prompt: Mapped[str] = mapped_column(
         Text,
         nullable=False,

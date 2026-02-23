@@ -492,12 +492,15 @@ class BotHandler:
                 )
                 await self._messenger.send_typing_indicator(message.chat_id)
 
-            # Generate response
+            # Generate response using the companion's bound model.
+            # The model is the companion's "soul" -- captured at creation time
+            # to protect their identity from casual model changes in .env.
             try:
                 response = await run_with_tools(
                     self._llm,
                     mcp_manager,
                     llm_messages,
+                    model=companion.llm_model,
                     temperature=companion.temperature,
                     max_iterations=self._tool_max_iterations,
                     on_tool_result=tool_result_observer,
@@ -579,7 +582,14 @@ class BotHandler:
             The character configuration.
         """
         temperature = compute_temperature(config.traits)
-        record = CharacterBuilder.create_companion_record(config, temperature)
+        # Capture the current LLM model at creation time.
+        # This becomes the companion's "soul" -- the fundamental substrate
+        # that processes their memories and personality. Changing the model
+        # in .env will only affect NEW companions, not existing ones.
+        settings = get_settings()
+        record = CharacterBuilder.create_companion_record(
+            config, temperature, llm_model=settings.llm_model
+        )
 
         # Add chat_id as the companion ID for easy lookup
         # In a multi-user scenario, you'd generate a UUID and store

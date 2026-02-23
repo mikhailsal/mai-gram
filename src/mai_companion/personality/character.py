@@ -441,7 +441,12 @@ class CharacterBuilder:
         return dict(PRESETS)
 
     @staticmethod
-    def create_companion_record(config: CharacterConfig, temperature: float) -> dict:
+    def create_companion_record(
+        config: CharacterConfig,
+        temperature: float,
+        *,
+        llm_model: str = "openai/gpt-4o",
+    ) -> dict:
         """Create a dict ready for the Companion ORM model constructor.
 
         Parameters
@@ -450,6 +455,11 @@ class CharacterBuilder:
             The character configuration.
         temperature:
             Pre-computed LLM temperature from the temperature module.
+        llm_model:
+            The LLM model to bind to this companion. This becomes the
+            companion's "soul" -- the fundamental substrate that processes
+            their memories and personality. Should be captured from the
+            current settings at creation time.
 
         Returns
         -------
@@ -467,6 +477,7 @@ class CharacterBuilder:
             "temperature": temperature,
             "communication_style": config.communication_style.value,
             "verbosity": config.verbosity.value,
+            "llm_model": llm_model,
             "system_prompt": system_prompt,
             "relationship_stage": "getting_to_know",
         }

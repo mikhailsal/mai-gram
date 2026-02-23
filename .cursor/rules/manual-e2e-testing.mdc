@@ -17,9 +17,7 @@ The ONLY acceptable reason to modify this requirement is if the environment genu
 - You must provide STRONG justification explaining exactly why manual testing is impossible
 - Before claiming impossibility, you MUST attempt to create testing conditions as close to reality as the environment allows
 - Even in constrained environments, find ways to verify functionality and catch obvious errors
-- Partial testing or smoke testing is always better than no testing
-
-## Examples of Acceptable Adaptations
+- Partial testing or smoke testing is always better than no testing## Examples of Acceptable Adaptations
 - If a full database is unavailable, create a temporary mock database or use in-memory storage for testing
 - If external APIs are inaccessible, create stub responses to test integration logic
 - If UI testing tools are limited, manually verify through available browser/console tools

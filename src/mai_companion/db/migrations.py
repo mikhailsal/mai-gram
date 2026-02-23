@@ -39,7 +39,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 def register_migration(
@@ -180,6 +180,49 @@ async def _migrate_v5(conn: AsyncConnection) -> None:
         logger.info("Schema v5: added verbosity column to companions")
     else:
         logger.info("Schema v5: verbosity column already exists, skipping")
+
+
+@register_migration(6, "Add llm_model to companions")
+async def _migrate_v6(conn: AsyncConnection) -> None:
+    """Version 6: add llm_model column to companions table.
+
+    The LLM model is now stored per-companion rather than as a global setting.
+    This protects companion identity -- changing the model in .env will only
+    affect new companions, not existing ones.
+
+    The model is the companion's "soul" -- the fundamental substrate that
+    processes their memories and personality. Changing it would create a
+    different entity wearing the same memories.
+
+    For existing companions, we use the CURRENT configured model from settings,
+    since that's what they've been running on. This is the best approximation
+    we have -- we don't have historical data about what model was configured
+    when each companion was created.
+    """
+    from mai_companion.config import get_settings
+
+    result = await conn.execute(text("PRAGMA table_info(companions)"))
+    columns = {row[1] for row in result.fetchall()}
+
+    if "llm_model" not in columns:
+        # Get the current model from settings -- this is what existing
+        # companions have been using, so it's the correct value for them.
+        settings = get_settings()
+        current_model = settings.llm_model
+        logger.info(
+            "Schema v6: migrating existing companions to model '%s' (from current settings)",
+            current_model,
+        )
+
+        await conn.execute(
+            text(
+                "ALTER TABLE companions ADD COLUMN llm_model "
+                f"VARCHAR(100) NOT NULL DEFAULT '{current_model}'"
+            )
+        )
+        logger.info("Schema v6: added llm_model column to companions")
+    else:
+        logger.info("Schema v6: llm_model column already exists, skipping")
 
 
 # -- Migration runner --
