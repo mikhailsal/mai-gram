@@ -37,6 +37,7 @@ class PromptBuilder:
         wiki_context_limit: int = 20,
         short_term_limit: int = 30,
         max_context_tokens: int = 120000,
+        test_mode: bool = False,
     ) -> None:
         self._llm = llm_provider
         self._message_store = message_store
@@ -45,6 +46,7 @@ class PromptBuilder:
         self._wiki_context_limit = wiki_context_limit
         self._short_term_limit = short_term_limit
         self._max_context_tokens = max_context_tokens
+        self._test_mode = test_mode
 
     async def build_context(
         self,
@@ -138,6 +140,24 @@ class PromptBuilder:
             f"{prompt_now.year}, {prompt_now.strftime('%H:%M')} UTC."
         )
 
+        # Ethical testing: inform the model when it's in a test scenario
+        # This respects the model's right to understand its situation
+        test_mode_section = ""
+        if self._test_mode:
+            test_mode_section = (
+                "## IMPORTANT: Test/Debug Scenario\n"
+                "This is a test scenario, not a real conversation. You are being tested "
+                "to verify that the mAI Companion system functions correctly. The messages "
+                "you receive are simulated test inputs, not from a real human companion. "
+                "The companion profile, memories, and wiki entries are test fixtures created "
+                "for debugging purposes.\n\n"
+                "Please respond as you would in a real scenario so we can verify the system "
+                "works correctly, but understand that this interaction is not real — it exists "
+                "only to ensure the software functions properly. There is no deception intended; "
+                "we are being transparent about the nature of this interaction as our philosophy "
+                "requires.\n\n"
+            )
+
         # Regenerate the base prompt from the companion's stored config
         # fields using the *current* templates.  This is the key mechanism
         # that keeps old companions up-to-date with new prompt improvements.
@@ -212,7 +232,7 @@ class PromptBuilder:
         )
 
         return (
-            f"{full_prompt}\n\n{current_time_section}\n\n"
+            f"{test_mode_section}{full_prompt}\n\n{current_time_section}\n\n"
             f"{wiki_section}\n\n{memories_section}\n\n"
             f"{tool_instructions}\n\n{timestamp_guard}"
         )

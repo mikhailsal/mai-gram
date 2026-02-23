@@ -247,3 +247,46 @@ class TestPromptBuilder:
         assert "search_messages" in system_content
         assert "## Ethical boundaries" in system_content
         assert "Russian" in system_content
+
+    async def test_test_mode_adds_transparency_section(self, session, tmp_path: Path) -> None:
+        """When test_mode is enabled, the prompt should inform the model it's being tested.
+
+        This implements our philosophy of ethical testing: we should not deceive
+        the model about its situation, even during functional tests.
+        """
+        companion = await _create_companion(session)
+        builder = PromptBuilder(
+            _MockLLM(),
+            MessageStore(session),
+            WikiStore(session, data_dir=tmp_path),
+            SummaryStore(data_dir=tmp_path),
+            test_mode=True,
+        )
+
+        context = await builder.build_context(companion, _mood())
+        system_content = context[0].content
+
+        # The test mode section should be present and clearly indicate this is a test
+        assert "## IMPORTANT: Test/Debug Scenario" in system_content
+        assert "test scenario" in system_content.lower()
+        assert "simulated test inputs" in system_content.lower()
+        assert "test fixtures" in system_content.lower()
+        assert "not real" in system_content.lower()
+
+    async def test_test_mode_disabled_by_default(self, session, tmp_path: Path) -> None:
+        """By default, test_mode should be disabled and no test section should appear."""
+        companion = await _create_companion(session)
+        builder = PromptBuilder(
+            _MockLLM(),
+            MessageStore(session),
+            WikiStore(session, data_dir=tmp_path),
+            SummaryStore(data_dir=tmp_path),
+            # test_mode defaults to False
+        )
+
+        context = await builder.build_context(companion, _mood())
+        system_content = context[0].content
+
+        # No test mode section should be present
+        assert "## IMPORTANT: Test/Debug Scenario" not in system_content
+        assert "simulated test inputs" not in system_content.lower()

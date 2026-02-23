@@ -78,6 +78,7 @@ class BotHandler:
         short_term_limit: int | None = None,
         tool_max_iterations: int | None = None,
         clock_provider: Callable[[str], Clock] | None = None,
+        test_mode: bool = False,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
@@ -88,6 +89,7 @@ class BotHandler:
             on_rate_limited=self._handle_rate_limited,
         )
         self._message_logger = MessageLogger(log_content=False)
+        self._test_mode = test_mode
 
         # Load allowed users from config
         settings = get_settings()
@@ -445,6 +447,7 @@ class BotHandler:
                 summary_store,
                 wiki_context_limit=self._wiki_context_limit,
                 short_term_limit=self._short_term_limit,
+                test_mode=self._test_mode,
             )
 
             mcp_manager = MCPManager()

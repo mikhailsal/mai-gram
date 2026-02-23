@@ -159,6 +159,9 @@ class FunctionalHarness:
             short_term_limit=self.config.short_term_limit,
             tool_max_iterations=self.config.tool_max_iterations,
             clock_provider=self._clock_provider,
+            # Ethical testing: inform the model that this is a test scenario.
+            # This respects our philosophy of transparency with the AI.
+            test_mode=True,
         )
         runtime = _ChatRuntime(
             messenger=messenger,
