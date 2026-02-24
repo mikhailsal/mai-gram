@@ -214,3 +214,242 @@ class TestMessageStore:
         )
 
         assert newer.content == "second"
+
+    async def test_search_oldest_first(self, session: AsyncSession) -> None:
+        """Verify oldest_first parameter returns messages in chronological order."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+        await store.save_message(
+            companion_id, "user", "keyword-first", timestamp=base
+        )
+        await store.save_message(
+            companion_id, "user", "keyword-second", timestamp=base + timedelta(hours=1)
+        )
+        await store.save_message(
+            companion_id, "user", "keyword-third", timestamp=base + timedelta(hours=2)
+        )
+
+        # Default (newest first)
+        results_newest = await store.search(companion_id, "keyword")
+        assert results_newest[0].content == "keyword-third"
+        assert results_newest[-1].content == "keyword-first"
+
+        # Oldest first
+        results_oldest = await store.search(companion_id, "keyword", oldest_first=True)
+        assert results_oldest[0].content == "keyword-first"
+        assert results_oldest[-1].content == "keyword-third"
+
+    async def test_get_message_by_id(self, session: AsyncSession) -> None:
+        """Verify get_message_by_id returns correct message or None."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        msg = await store.save_message(companion_id, "user", "find me")
+
+        found = await store.get_message_by_id(companion_id, msg.id)
+        assert found is not None
+        assert found.content == "find me"
+
+        not_found = await store.get_message_by_id(companion_id, 99999)
+        assert not_found is None
+
+    async def test_get_message_by_id_wrong_companion(self, session: AsyncSession) -> None:
+        """Verify get_message_by_id doesn't return messages from other companions."""
+        companion_id = await _create_companion(session, "comp-a")
+        other_id = await _create_companion(session, "comp-b")
+        store = MessageStore(session)
+
+        msg = await store.save_message(companion_id, "user", "comp-a message")
+
+        # Should not find message when querying with wrong companion_id
+        not_found = await store.get_message_by_id(other_id, msg.id)
+        assert not_found is None
+
+    async def test_get_message_context_basic(self, session: AsyncSession) -> None:
+        """Verify get_message_context returns surrounding messages."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+
+        # Create 10 messages
+        messages = []
+        for i in range(10):
+            msg = await store.save_message(
+                companion_id,
+                "user" if i % 2 == 0 else "assistant",
+                f"msg-{i}",
+                timestamp=base + timedelta(minutes=i),
+            )
+            messages.append(msg)
+
+        # Get context for message 5 (middle)
+        before, target, after = await store.get_message_context(
+            companion_id, messages[5].id, before=3, after=3
+        )
+
+        assert target is not None
+        assert target.content == "msg-5"
+        assert len(before) == 3
+        assert [m.content for m in before] == ["msg-2", "msg-3", "msg-4"]
+        assert len(after) == 3
+        assert [m.content for m in after] == ["msg-6", "msg-7", "msg-8"]
+
+    async def test_get_message_context_at_start(self, session: AsyncSession) -> None:
+        """Verify get_message_context handles messages at conversation start."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+
+        messages = []
+        for i in range(5):
+            msg = await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+            messages.append(msg)
+
+        # Get context for first message
+        before, target, after = await store.get_message_context(
+            companion_id, messages[0].id, before=5, after=3
+        )
+
+        assert target is not None
+        assert target.content == "msg-0"
+        assert len(before) == 0  # No messages before
+        assert len(after) == 3
+        assert [m.content for m in after] == ["msg-1", "msg-2", "msg-3"]
+
+    async def test_get_message_context_at_end(self, session: AsyncSession) -> None:
+        """Verify get_message_context handles messages at conversation end."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+
+        messages = []
+        for i in range(5):
+            msg = await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+            messages.append(msg)
+
+        # Get context for last message
+        before, target, after = await store.get_message_context(
+            companion_id, messages[4].id, before=3, after=5
+        )
+
+        assert target is not None
+        assert target.content == "msg-4"
+        assert len(before) == 3
+        assert [m.content for m in before] == ["msg-1", "msg-2", "msg-3"]
+        assert len(after) == 0  # No messages after
+
+    async def test_get_message_context_not_found(self, session: AsyncSession) -> None:
+        """Verify get_message_context returns empty when message not found."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+
+        before, target, after = await store.get_message_context(
+            companion_id, 99999, before=5, after=5
+        )
+
+        assert target is None
+        assert before == []
+        assert after == []
+
+    async def test_get_messages_paginated_basic(self, session: AsyncSession) -> None:
+        """Verify get_messages_paginated returns correct page of messages."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+
+        for i in range(25):
+            await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+
+        # First page
+        messages, total = await store.get_messages_paginated(
+            companion_id, limit=10, offset=0
+        )
+        assert total == 25
+        assert len(messages) == 10
+        assert messages[0].content == "msg-0"  # oldest first by default
+        assert messages[9].content == "msg-9"
+
+        # Second page
+        messages, total = await store.get_messages_paginated(
+            companion_id, limit=10, offset=10
+        )
+        assert total == 25
+        assert len(messages) == 10
+        assert messages[0].content == "msg-10"
+
+        # Last page (partial)
+        messages, total = await store.get_messages_paginated(
+            companion_id, limit=10, offset=20
+        )
+        assert total == 25
+        assert len(messages) == 5
+        assert messages[0].content == "msg-20"
+
+    async def test_get_messages_paginated_newest_first(self, session: AsyncSession) -> None:
+        """Verify get_messages_paginated respects oldest_first=False."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+
+        for i in range(10):
+            await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+
+        messages, _ = await store.get_messages_paginated(
+            companion_id, limit=5, oldest_first=False
+        )
+        assert messages[0].content == "msg-9"  # newest first
+        assert messages[4].content == "msg-5"
+
+    async def test_get_messages_paginated_with_date_filter(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify get_messages_paginated filters by date range."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+
+        # Messages across multiple days
+        await store.save_message(
+            companion_id, "user", "day1", timestamp=datetime(2026, 2, 1, 10, 0)
+        )
+        await store.save_message(
+            companion_id, "user", "day2", timestamp=datetime(2026, 2, 2, 10, 0)
+        )
+        await store.save_message(
+            companion_id, "user", "day3", timestamp=datetime(2026, 2, 3, 10, 0)
+        )
+        await store.save_message(
+            companion_id, "user", "day4", timestamp=datetime(2026, 2, 4, 10, 0)
+        )
+
+        # Filter to days 2-3
+        messages, total = await store.get_messages_paginated(
+            companion_id,
+            start_date=date(2026, 2, 2),
+            end_date=date(2026, 2, 3),
+        )
+        assert total == 2
+        assert [m.content for m in messages] == ["day2", "day3"]
+
+    async def test_get_messages_paginated_limit_clamped(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify limit is clamped to max 50."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 1, 10, 0, 0)
+
+        for i in range(60):
+            await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+
+        messages, _ = await store.get_messages_paginated(companion_id, limit=100)
+        assert len(messages) == 50  # Clamped to max

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mai_companion.db.models import Companion
@@ -25,23 +26,28 @@ class TestMessagesMCPServer:
 
         tools = await server.list_tools()
 
-        assert len(tools) == 1
-        assert tools[0].name == "search_messages"
+        assert len(tools) == 3
+        tool_names = [t.name for t in tools]
+        assert "search_messages" in tool_names
+        assert "get_message_context" in tool_names
+        assert "get_messages_by_timerange" in tool_names
 
     async def test_search_messages_tool_schema(self, session: AsyncSession) -> None:
         companion_id = await _create_companion(session)
         server = MessagesMCPServer(MessageStore(session), companion_id)
 
-        schema = (await server.list_tools())[0].input_schema
+        tools = await server.list_tools()
+        schema = next(t for t in tools if t.name == "search_messages").input_schema
         properties = schema["properties"]
         assert properties["query"]["type"] == "string"
         assert properties["limit"]["type"] == "integer"
+        assert properties["oldest_first"]["type"] == "boolean"
         assert "query" in schema["required"]
 
     async def test_call_search_messages(self, session: AsyncSession) -> None:
         companion_id = await _create_companion(session)
         store = MessageStore(session)
-        await store.save_message(
+        msg = await store.save_message(
             companion_id,
             "user",
             "I was in Paris",
@@ -51,6 +57,8 @@ class TestMessagesMCPServer:
 
         result = await server.call_tool("search_messages", {"query": "Paris"})
 
+        # Should include message ID
+        assert f"[#{msg.id}]" in result
         assert "[2026-02-14 09:30:00] user: I was in Paris" in result
 
     async def test_call_search_messages_empty(self, session: AsyncSession) -> None:
@@ -81,3 +89,257 @@ class TestMessagesMCPServer:
         # Count the number of lines (one per message)
         lines = result.strip().split("\n")
         assert len(lines) == 50
+
+    async def test_call_search_messages_oldest_first(self, session: AsyncSession) -> None:
+        """Verify oldest_first parameter works in MCP tool."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 14, 9, 0, 0)
+        await store.save_message(
+            companion_id, "user", "keyword-old", timestamp=base
+        )
+        await store.save_message(
+            companion_id, "user", "keyword-new", timestamp=base + timedelta(hours=1)
+        )
+        server = MessagesMCPServer(store, companion_id)
+
+        # Default (newest first)
+        result_newest = await server.call_tool("search_messages", {"query": "keyword"})
+        lines_newest = result_newest.strip().split("\n")
+        assert "keyword-new" in lines_newest[0]
+
+        # Oldest first
+        result_oldest = await server.call_tool(
+            "search_messages", {"query": "keyword", "oldest_first": True}
+        )
+        lines_oldest = result_oldest.strip().split("\n")
+        assert "keyword-old" in lines_oldest[0]
+
+
+class TestGetMessageContext:
+    async def test_get_message_context_basic(self, session: AsyncSession) -> None:
+        """Verify get_message_context returns surrounding messages."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 14, 9, 0, 0)
+
+        messages = []
+        for i in range(7):
+            msg = await store.save_message(
+                companion_id,
+                "user" if i % 2 == 0 else "assistant",
+                f"msg-{i}",
+                timestamp=base + timedelta(minutes=i),
+            )
+            messages.append(msg)
+
+        server = MessagesMCPServer(store, companion_id)
+        result = await server.call_tool(
+            "get_message_context",
+            {"message_id": messages[3].id, "before": 2, "after": 2},
+        )
+
+        assert "--- Before ---" in result
+        assert "--- Target message ---" in result
+        assert "--- After ---" in result
+        assert "msg-1" in result
+        assert "msg-2" in result
+        assert "msg-3" in result  # target
+        assert "msg-4" in result
+        assert "msg-5" in result
+
+    async def test_get_message_context_not_found(self, session: AsyncSession) -> None:
+        """Verify get_message_context handles missing message."""
+        companion_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), companion_id)
+
+        result = await server.call_tool(
+            "get_message_context", {"message_id": 99999}
+        )
+
+        assert "not found" in result.lower()
+
+    async def test_get_message_context_limits_clamped(self, session: AsyncSession) -> None:
+        """Verify before/after are clamped to max 10."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 14, 9, 0, 0)
+
+        messages = []
+        for i in range(25):
+            msg = await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+            messages.append(msg)
+
+        server = MessagesMCPServer(store, companion_id)
+        result = await server.call_tool(
+            "get_message_context",
+            {"message_id": messages[12].id, "before": 100, "after": 100},
+        )
+
+        # Count messages in result (excluding section headers)
+        lines = [l for l in result.split("\n") if l.startswith("[#")]
+        # Should be 10 before + 1 target + 10 after = 21 max
+        assert len(lines) <= 21
+
+    async def test_get_message_context_invalid_message_id(self, session: AsyncSession) -> None:
+        """Verify get_message_context requires integer message_id."""
+        companion_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), companion_id)
+
+        with pytest.raises(ValueError, match="integer"):
+            await server.call_tool(
+                "get_message_context", {"message_id": "not-an-int"}
+            )
+
+
+class TestGetMessagesByTimerange:
+    async def test_get_messages_by_timerange_basic(self, session: AsyncSession) -> None:
+        """Verify get_messages_by_timerange returns messages for a date."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        await store.save_message(
+            companion_id, "user", "msg-day1", timestamp=datetime(2026, 2, 14, 10, 0)
+        )
+        await store.save_message(
+            companion_id, "user", "msg-day2", timestamp=datetime(2026, 2, 15, 10, 0)
+        )
+
+        server = MessagesMCPServer(store, companion_id)
+        result = await server.call_tool(
+            "get_messages_by_timerange", {"start_date": "2026-02-14"}
+        )
+
+        assert "msg-day1" in result
+        assert "msg-day2" not in result
+        assert "Showing messages 1-1 of 1 total" in result
+
+    async def test_get_messages_by_timerange_with_end_date(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify get_messages_by_timerange respects end_date."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        for i in range(5):
+            await store.save_message(
+                companion_id,
+                "user",
+                f"day{i+10}",
+                timestamp=datetime(2026, 2, 10 + i, 10, 0),
+            )
+
+        server = MessagesMCPServer(store, companion_id)
+        result = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-11", "end_date": "2026-02-13"},
+        )
+
+        assert "day11" in result
+        assert "day12" in result
+        assert "day13" in result
+        assert "day10" not in result
+        assert "day14" not in result
+        assert "of 3 total" in result
+
+    async def test_get_messages_by_timerange_pagination(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify pagination works correctly."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 14, 10, 0, 0)
+        for i in range(15):
+            await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+
+        server = MessagesMCPServer(store, companion_id)
+
+        # First page
+        result1 = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "limit": 5, "offset": 0},
+        )
+        assert "msg-0" in result1
+        assert "msg-4" in result1
+        assert "msg-5" not in result1
+        assert "Showing messages 1-5 of 15 total" in result1
+        assert "use offset=5 to see more" in result1
+
+        # Second page
+        result2 = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "limit": 5, "offset": 5},
+        )
+        assert "msg-5" in result2
+        assert "msg-9" in result2
+        assert "Showing messages 6-10 of 15 total" in result2
+
+    async def test_get_messages_by_timerange_newest_first(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify oldest_first=false returns newest messages first."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 14, 10, 0, 0)
+        for i in range(5):
+            await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+
+        server = MessagesMCPServer(store, companion_id)
+        result = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "oldest_first": False},
+        )
+
+        lines = result.split("\n")
+        # Find first message line (skip header)
+        msg_lines = [l for l in lines if "msg-" in l]
+        assert "msg-4" in msg_lines[0]  # Newest first
+
+    async def test_get_messages_by_timerange_empty(self, session: AsyncSession) -> None:
+        """Verify empty result message."""
+        companion_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), companion_id)
+
+        result = await server.call_tool(
+            "get_messages_by_timerange", {"start_date": "2026-02-14"}
+        )
+
+        assert "No messages found" in result
+
+    async def test_get_messages_by_timerange_invalid_date(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify invalid date format raises error."""
+        companion_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), companion_id)
+
+        with pytest.raises(ValueError, match="Invalid start_date format"):
+            await server.call_tool(
+                "get_messages_by_timerange", {"start_date": "not-a-date"}
+            )
+
+    async def test_get_messages_by_timerange_limit_clamped(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify limit is clamped to max 20."""
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        base = datetime(2026, 2, 14, 10, 0, 0)
+        for i in range(30):
+            await store.save_message(
+                companion_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
+            )
+
+        server = MessagesMCPServer(store, companion_id)
+        result = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "limit": 100},
+        )
+
+        # Count message lines
+        msg_lines = [l for l in result.split("\n") if l.startswith("[#")]
+        assert len(msg_lines) == 20  # Clamped to max
