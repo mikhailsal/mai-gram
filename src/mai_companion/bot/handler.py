@@ -13,6 +13,7 @@ It handles:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Callable
@@ -557,7 +558,11 @@ class BotHandler:
             # Generate response using the companion's bound model.
             # The model is the companion's "soul" -- captured at creation time
             # to protect their identity from casual model changes in .env.
+            response_text: str | None = None
             try:
+                logger.info(
+                    "Starting run_with_tools for companion %s", companion.id
+                )
                 response = await run_with_tools(
                     self._llm,
                     mcp_manager,
@@ -570,6 +575,14 @@ class BotHandler:
                     on_assistant_tool_call=_save_assistant_tool_call,
                 )
                 response_text = response.content
+                logger.info(
+                    "run_with_tools completed for companion %s: "
+                    "content_length=%d, finish_reason=%s, intermediate_count=%d",
+                    companion.id,
+                    len(response_text) if response_text else 0,
+                    response.finish_reason,
+                    len(intermediate_parts),
+                )
 
                 # NOTE: Intermediate messages that came with tool calls are now
                 # saved via _save_assistant_tool_call (with tool_calls field set).
@@ -601,6 +614,14 @@ class BotHandler:
                         traits,
                     )
 
+            except asyncio.CancelledError:
+                # Task was cancelled (e.g., due to hot-reload or shutdown)
+                # Re-raise to allow proper cleanup
+                logger.warning(
+                    "Message handling cancelled for companion %s",
+                    companion.id,
+                )
+                raise
             except Exception as e:
                 logger.exception("Failed to generate response")
                 response_text = (
@@ -614,6 +635,13 @@ class BotHandler:
 
         # Send the final response (skip if empty — everything was already
         # delivered through intermediate messages).
+        logger.info(
+            "About to send response for companion %s: "
+            "response_text_length=%d, intermediate_count=%d",
+            companion.id if companion else "unknown",
+            len(response_text) if response_text else 0,
+            len(intermediate_parts),
+        )
         if response_text and response_text.strip():
             result = await self._messenger.send_message(
                 OutgoingMessage(text=response_text, chat_id=message.chat_id)
@@ -623,6 +651,12 @@ class BotHandler:
                 response_text,
                 success=result.success,
                 message_id=result.message_id,
+            )
+        elif not intermediate_parts:
+            # No response was sent at all - this is unexpected and should be logged
+            logger.warning(
+                "LLM returned empty response with no intermediate messages for companion %s",
+                companion.id if companion else "unknown",
             )
 
     async def _create_companion(

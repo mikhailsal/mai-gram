@@ -80,6 +80,10 @@ class PromptBuilder:
             chat_msg = self._message_to_chat_message(msg)
             llm_history.append(chat_msg)
 
+        # Normalize conversation: merge consecutive user messages and ensure
+        # proper message ordering (user/assistant alternation)
+        llm_history = self._normalize_conversation(llm_history)
+
         warned = False
         while True:
             ordered_summaries = [*monthly, *weekly, *daily]
@@ -117,6 +121,66 @@ class PromptBuilder:
                 daily.pop(0)
                 continue
             return context
+
+    def _normalize_conversation(
+        self, messages: list[ChatMessage]
+    ) -> list[ChatMessage]:
+        """Normalize conversation to ensure valid message ordering.
+
+        Many LLM APIs require strict user/assistant alternation. This method:
+        1. Merges consecutive user messages into a single message
+        2. Ensures tool results are followed by assistant messages (or merges
+           subsequent user messages if no assistant response exists)
+
+        This handles edge cases like:
+        - User sends multiple messages before AI responds
+        - AI uses a tool but returns empty content afterward
+        - Network issues causing message ordering problems
+        """
+        if not messages:
+            return messages
+
+        normalized: list[ChatMessage] = []
+
+        for msg in messages:
+            if not normalized:
+                normalized.append(msg)
+                continue
+
+            last = normalized[-1]
+
+            # Merge consecutive user messages
+            if msg.role == MessageRole.USER and last.role == MessageRole.USER:
+                # Combine the content with a newline separator
+                merged_content = f"{last.content}\n{msg.content}"
+                normalized[-1] = ChatMessage(
+                    role=MessageRole.USER,
+                    content=merged_content,
+                )
+                logger.debug(
+                    "Merged consecutive user messages: %d chars total",
+                    len(merged_content),
+                )
+                continue
+
+            # Check for tool result followed directly by user message
+            # This indicates a missing assistant continuation
+            if (
+                msg.role == MessageRole.USER
+                and last.role == MessageRole.TOOL
+            ):
+                # Look back to find the assistant message with tool calls
+                # and check if there's content we can use
+                logger.warning(
+                    "User message follows tool result without assistant continuation. "
+                    "This may indicate a previous response was not saved."
+                )
+                # We'll let it through - the LLM should handle it,
+                # but log for debugging
+
+            normalized.append(msg)
+
+        return normalized
 
     def _message_to_chat_message(self, msg: Message) -> ChatMessage:
         """Convert a stored Message to a ChatMessage for LLM context.

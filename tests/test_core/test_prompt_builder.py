@@ -9,7 +9,15 @@ from typing import AsyncIterator
 
 from mai_companion.core.prompt_builder import PromptBuilder
 from mai_companion.db.models import Companion
-from mai_companion.llm.provider import ChatMessage, LLMProvider, LLMResponse, StreamChunk, TokenUsage
+from mai_companion.llm.provider import (
+    ChatMessage,
+    LLMProvider,
+    LLMResponse,
+    MessageRole,
+    StreamChunk,
+    TokenUsage,
+    ToolCall,
+)
 from mai_companion.memory.knowledge_base import WikiStore
 from mai_companion.memory.messages import MessageStore
 from mai_companion.memory.summaries import SummaryStore
@@ -361,3 +369,79 @@ class TestPromptBuilder:
         # Summaries for past days should appear in the system prompt
         assert "Summary for Feb 18" in context[0].content
         assert "Summary for Feb 19" in context[0].content
+
+    async def test_normalize_conversation_merges_consecutive_user_messages(
+        self, session, tmp_path: Path
+    ):
+        """Test that consecutive user messages are merged into one."""
+        message_store = MessageStore(session)
+        wiki_store = WikiStore(session, data_dir=tmp_path)
+        summary_store = SummaryStore(data_dir=tmp_path)
+        builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
+
+        messages = [
+            ChatMessage(role=MessageRole.USER, content="First message"),
+            ChatMessage(role=MessageRole.USER, content="Second message"),
+            ChatMessage(role=MessageRole.USER, content="Third message"),
+        ]
+
+        normalized = builder._normalize_conversation(messages)
+
+        assert len(normalized) == 1
+        assert normalized[0].role == MessageRole.USER
+        assert "First message" in normalized[0].content
+        assert "Second message" in normalized[0].content
+        assert "Third message" in normalized[0].content
+
+    async def test_normalize_conversation_preserves_alternation(
+        self, session, tmp_path: Path
+    ):
+        """Test that properly alternating messages are preserved."""
+        message_store = MessageStore(session)
+        wiki_store = WikiStore(session, data_dir=tmp_path)
+        summary_store = SummaryStore(data_dir=tmp_path)
+        builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
+
+        messages = [
+            ChatMessage(role=MessageRole.USER, content="User 1"),
+            ChatMessage(role=MessageRole.ASSISTANT, content="Assistant 1"),
+            ChatMessage(role=MessageRole.USER, content="User 2"),
+            ChatMessage(role=MessageRole.ASSISTANT, content="Assistant 2"),
+        ]
+
+        normalized = builder._normalize_conversation(messages)
+
+        assert len(normalized) == 4
+        assert normalized[0].content == "User 1"
+        assert normalized[1].content == "Assistant 1"
+        assert normalized[2].content == "User 2"
+        assert normalized[3].content == "Assistant 2"
+
+    async def test_normalize_conversation_handles_tool_messages(
+        self, session, tmp_path: Path
+    ):
+        """Test that tool messages are handled correctly."""
+        message_store = MessageStore(session)
+        wiki_store = WikiStore(session, data_dir=tmp_path)
+        summary_store = SummaryStore(data_dir=tmp_path)
+        builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
+
+        messages = [
+            ChatMessage(role=MessageRole.USER, content="Use a tool"),
+            ChatMessage(
+                role=MessageRole.ASSISTANT,
+                content="Using tool...",
+                tool_calls=[ToolCall(id="tc1", name="test", arguments="{}")],
+            ),
+            ChatMessage(role=MessageRole.TOOL, content="ok", tool_call_id="tc1"),
+            ChatMessage(role=MessageRole.USER, content="What happened?"),
+        ]
+
+        normalized = builder._normalize_conversation(messages)
+
+        # All messages should be preserved (tool result followed by user is logged but allowed)
+        assert len(normalized) == 4
+        assert normalized[0].role == MessageRole.USER
+        assert normalized[1].role == MessageRole.ASSISTANT
+        assert normalized[2].role == MessageRole.TOOL
+        assert normalized[3].role == MessageRole.USER
