@@ -43,6 +43,40 @@ def _parse_target_date(value: str) -> date:
         ) from exc
 
 
+def _parse_week_period(value: str) -> str:
+    """Validate and normalize week period format (YYYY-Www)."""
+    import re
+    match = re.match(r"^(\d{4})-W(\d{1,2})$", value)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"Invalid week period '{value}'. Expected YYYY-Www format (e.g., 2024-W03)."
+        )
+    year = int(match.group(1))
+    week = int(match.group(2))
+    if week < 1 or week > 53:
+        raise argparse.ArgumentTypeError(
+            f"Invalid week number {week}. Must be 1-53."
+        )
+    return f"{year}-W{week:02d}"
+
+
+def _parse_month_period(value: str) -> str:
+    """Validate and normalize month period format (YYYY-MM)."""
+    import re
+    match = re.match(r"^(\d{4})-(\d{1,2})$", value)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"Invalid month period '{value}'. Expected YYYY-MM format (e.g., 2024-01)."
+        )
+    year = int(match.group(1))
+    month = int(match.group(2))
+    if month < 1 or month > 12:
+        raise argparse.ArgumentTypeError(
+            f"Invalid month number {month}. Must be 1-12."
+        )
+    return f"{year}-{month:02d}"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mai-chat",
@@ -65,6 +99,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--debug", action="store_true", help="Enable structured LLM debug logging.")
     parser.add_argument("--list", action="store_true", help="List all chat IDs with message counts.")
+    
+    # Consolidation commands
+    parser.add_argument(
+        "--list-consolidations",
+        action="store_true",
+        help="List all consolidations with version history.",
+    )
+    parser.add_argument(
+        "--reconsolidate",
+        choices=["daily", "weekly", "monthly"],
+        help="Re-consolidate summaries of specified type.",
+    )
+    parser.add_argument(
+        "--from",
+        dest="from_period",
+        help="Starting period for reconsolidation (YYYY-MM-DD for daily, YYYY-Www for weekly, YYYY-MM for monthly).",
+    )
+    parser.add_argument(
+        "--until",
+        dest="until_period",
+        help="Ending period for reconsolidation (inclusive). Defaults to today/current period.",
+    )
     return parser
 
 
@@ -377,6 +433,126 @@ def _print_summaries(chat_id: str, data_dir: str) -> None:
         print(f"- [{item.summary_type}:{item.period}] {item.content.strip()}")
 
 
+def _print_consolidations(chat_id: str, data_dir: str) -> None:
+    """Print all consolidations with version history."""
+    summary_store = SummaryStore(data_dir=data_dir)
+    all_data = summary_store.get_all_summaries_with_versions(chat_id)
+    
+    print(f"=== Consolidations for {chat_id} ===")
+    print()
+    
+    has_any = False
+    
+    for summary_type in ["daily", "weekly", "monthly"]:
+        items = all_data.get(summary_type, [])
+        print(f"{summary_type.title()} Summaries:")
+        
+        if not items:
+            print("  (none)")
+        else:
+            has_any = True
+            for summary, versions in items:
+                version_count = len(versions) + 1  # +1 for current
+                content_preview = summary.content[:60].replace("\n", " ")
+                if len(summary.content) > 60:
+                    content_preview += "..."
+                
+                print(f"  {summary.period}  [{version_count} version{'s' if version_count > 1 else ''}]")
+                print(f"    - current: {len(summary.content)} chars")
+                print(f"      {content_preview}")
+                
+                for ver in versions:
+                    ver_preview = ver.content[:50].replace("\n", " ")
+                    if len(ver.content) > 50:
+                        ver_preview += "..."
+                    print(f"    - {ver.version_id}: {ver.timestamp.strftime('%Y-%m-%d %H:%M')} ({len(ver.content)} chars)")
+                    print(f"      {ver_preview}")
+        print()
+    
+    if not has_any:
+        print("(no consolidations found)")
+
+
+async def _run_reconsolidation(
+    chat_id: str,
+    summary_type: str,
+    from_period: str,
+    until_period: str | None,
+    data_dir: str,
+    llm: LLMProvider,
+) -> None:
+    """Run reconsolidation for the specified type and period range."""
+    from mai_companion.memory.summarizer import MemorySummarizer
+    from mai_companion.memory.knowledge_base import WikiStore
+    
+    async with get_session() as session:
+        # Get companion info
+        result = await session.execute(select(Companion).where(Companion.id == chat_id))
+        companion = result.scalar_one_or_none()
+        if companion is None:
+            raise SystemExit(f"Error: no companion found for chat '{chat_id}'.")
+        
+        message_store = MessageStore(session)
+        summary_store = SummaryStore(data_dir=data_dir)
+        wiki_store = WikiStore(session, data_dir=data_dir)
+        
+        summarizer = MemorySummarizer(
+            message_store,
+            summary_store,
+            llm,
+            wiki_store=wiki_store,
+            companion_name=companion.name,
+            companion_model=companion.llm_model,
+        )
+        
+        def progress_callback(period: str, status: str) -> None:
+            print(f"  {period}: {status}")
+        
+        print(f"=== Re-consolidating {summary_type} summaries ===")
+        print(f"From: {from_period}")
+        if summary_type == "daily":
+            print(f"Until: {until_period or '(yesterday — today is excluded as incomplete)'}")
+        else:
+            print(f"Until: {until_period or '(current period)'}")
+        print()
+        
+        if summary_type == "daily":
+            from_date = _parse_target_date(from_period)
+            until_date = _parse_target_date(until_period) if until_period else None
+            results = await summarizer.reconsolidate_daily_from(
+                chat_id,
+                from_date,
+                until_date=until_date,
+                on_progress=progress_callback,
+            )
+            print()
+            print(f"Re-consolidated {len(results)} daily summaries.")
+            
+        elif summary_type == "weekly":
+            from_week = _parse_week_period(from_period)
+            until_week = _parse_week_period(until_period) if until_period else None
+            results = await summarizer.reconsolidate_weekly_from(
+                chat_id,
+                from_week,
+                until_period=until_week,
+                on_progress=progress_callback,
+            )
+            print()
+            print(f"Re-consolidated {len(results)} weekly summaries.")
+            
+        elif summary_type == "monthly":
+            from_month = _parse_month_period(from_period)
+            until_month = _parse_month_period(until_period) if until_period else None
+            results = await summarizer.reconsolidate_monthly_from(
+                chat_id,
+                from_month,
+                until_period=until_month,
+                on_progress=progress_callback,
+            )
+            print()
+            print(f"Re-consolidated {len(results)} monthly summaries.")
+
+
 async def _print_prompt(chat_id: str, data_dir: str, llm: LLMProvider, clock: Clock) -> None:
     from mai_companion.mcp_servers.manager import MCPManager
     from mai_companion.mcp_servers.wiki_server import WikiMCPServer
@@ -648,6 +824,9 @@ async def _run(args: argparse.Namespace) -> None:
         if args.summaries:
             _print_summaries(chat_id, settings.memory_data_dir)
             return
+        if args.list_consolidations:
+            _print_consolidations(chat_id, settings.memory_data_dir)
+            return
         if args.seed:
             count = await _seed_messages(chat_id, args.seed)
             print(f"Seeded {count} messages into chat '{chat_id}'.")
@@ -673,6 +852,22 @@ async def _run(args: argparse.Namespace) -> None:
 
         if args.show_prompt:
             await _print_prompt(chat_id, settings.memory_data_dir, llm, clock)
+            return
+
+        if args.reconsolidate:
+            if not args.from_period:
+                raise SystemExit(
+                    "Error: --from is required for reconsolidation. "
+                    "Specify the starting period."
+                )
+            await _run_reconsolidation(
+                chat_id,
+                args.reconsolidate,
+                args.from_period,
+                args.until_period,
+                settings.memory_data_dir,
+                llm,
+            )
             return
 
         messenger = ConsoleMessenger()
