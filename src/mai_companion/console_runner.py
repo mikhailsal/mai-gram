@@ -340,6 +340,11 @@ def _print_summaries(chat_id: str, data_dir: str) -> None:
 
 
 async def _print_prompt(chat_id: str, data_dir: str, llm: LLMProvider, clock: Clock) -> None:
+    from mai_companion.mcp_servers.manager import MCPManager
+    from mai_companion.mcp_servers.wiki_server import WikiMCPServer
+    from mai_companion.mcp_servers.messages_server import MessagesMCPServer
+    from mai_companion.mcp_servers.sleep_server import SleepMCPServer
+
     async with get_session() as session:
         result = await session.execute(select(Companion).where(Companion.id == chat_id))
         companion = result.scalar_one_or_none()
@@ -359,12 +364,37 @@ async def _print_prompt(chat_id: str, data_dir: str, llm: LLMProvider, clock: Cl
         )
         context = await prompt_builder.build_context(companion, mood, clock=clock)
 
+        # Get available tools
+        mcp_manager = MCPManager()
+        mcp_manager.register_server("wiki", WikiMCPServer(wiki_store, chat_id))
+        mcp_manager.register_server("messages", MessagesMCPServer(message_store, chat_id))
+        mcp_manager.register_server("sleep", SleepMCPServer())
+        tools = await mcp_manager.list_all_tools()
+
     print("--- Prompt Preview ---")
     print(context[0].content)
     print("")
+    print("--- Available Tools ---")
+    for tool in tools:
+        print(f"- {tool.name}: {tool.description}")
+    print("")
     print("--- Message Context ---")
     for msg in context[1:]:
-        print(f"[{msg.role.value}] {msg.content}")
+        # Print the message content
+        if msg.role.value == "tool":
+            # Tool result message - show with its tool_call_id
+            print(f"[tool result:{msg.tool_call_id}] {msg.content}")
+        else:
+            print(f"[{msg.role.value}] {msg.content}")
+        # If assistant message has tool calls, show them
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                try:
+                    args_dict = json.loads(tc.arguments)
+                    args_text = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
+                except (json.JSONDecodeError, TypeError):
+                    args_text = tc.arguments
+                print(f"[tool call:{tc.id}] {tc.name}({args_text})")
     token_count = await llm.count_tokens(context)
     print("")
     print(f"Approx tokens: {token_count}")

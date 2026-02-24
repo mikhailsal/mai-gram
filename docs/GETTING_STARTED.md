@@ -133,6 +133,9 @@ docker compose restart
 # Run in foreground (logs visible, Ctrl+C to stop)
 python -m mai_companion.main
 
+# Run with auto-reload (recommended for development)
+python -m mai_companion.main --reload
+
 # Run in background (Linux/macOS)
 python -m mai_companion.main &
 
@@ -145,6 +148,28 @@ ps aux | grep mai_companion
 # Stop background process
 pkill -f "python -m mai_companion.main"
 ```
+
+### Development Mode (Auto-Reload)
+
+When developing, use `--reload` to automatically restart the bot when you change Python files:
+
+```bash
+python -m mai_companion.main --reload
+```
+
+This watches the `src/` directory for `.py` file changes. When a change is detected, the bot gracefully shuts down and restarts with the new code. You'll see output like:
+
+```
+🔄 Auto-reload enabled — watching /path/to/src for changes
+   The bot will restart automatically when you save a .py file.
+
+2024-01-15 10:30:00 - INFO - mAI Companion starting up...
+...
+🔄 Detected changes in: src/mai_companion/bot/handler.py
+   Restarting bot process...
+```
+
+> **Note:** `--reload` is for development only. For production, run without `--reload` or use systemd (see below).
 
 ### Startup Output
 

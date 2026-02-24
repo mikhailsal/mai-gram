@@ -1,14 +1,19 @@
 """Entry point for mAI Companion.
 
 Initializes the database, LLM provider, Telegram bot, and starts the application.
+
+Supports ``--reload`` for development: watches ``src/`` for Python file changes
+and automatically restarts the bot process when code is modified.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import signal
 import sys
+from pathlib import Path
 from typing import Any
 
 from mai_companion.bot.handler import BotHandler
@@ -144,12 +149,81 @@ async def run() -> None:
         await shutdown()
 
 
+# ---------------------------------------------------------------------------
+# Auto-reload support
+# ---------------------------------------------------------------------------
+
+def _run_with_reload() -> None:
+    """Run the bot inside a watchfiles-managed process that restarts on code changes.
+
+    Uses ``watchfiles.run_process`` to watch the ``src/`` directory for ``.py``
+    file changes.  When a change is detected the bot process is gracefully
+    stopped (SIGINT → SIGKILL after timeout) and a fresh process is spawned.
+    """
+    try:
+        from watchfiles import PythonFilter, run_process
+    except ImportError:
+        print(
+            "ERROR: 'watchfiles' is required for --reload mode.\n"
+            "Install it with: pip install watchfiles",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    src_dir = Path(__file__).resolve().parent.parent  # src/
+    project_root = src_dir.parent  # project root
+
+    print(f"🔄 Auto-reload enabled — watching {src_dir} for changes")
+    print("   The bot will restart automatically when you save a .py file.\n")
+
+    def _on_reload(changes: set[tuple[Any, str]]) -> None:
+        changed_files = [path for _, path in changes]
+        short = [str(Path(p).relative_to(project_root)) for p in changed_files]
+        print(f"\n🔄 Detected changes in: {', '.join(short)}")
+        print("   Restarting bot process...\n")
+
+    # Build the command string — watchfiles splits it via shlex internally.
+    command = f"{sys.executable} -m mai_companion.main"
+
+    run_process(
+        src_dir,
+        target=command,
+        target_type="command",
+        watch_filter=PythonFilter(),
+        callback=_on_reload,
+        grace_period=2,  # Wait 2s after start before watching (let bot initialize)
+        sigint_timeout=5,  # Give 5s for graceful shutdown before SIGKILL
+    )
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the main entry point."""
+    parser = argparse.ArgumentParser(
+        prog="mai-companion",
+        description="mAI Companion — Telegram bot service.",
+    )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help=(
+            "Enable auto-reload: watch src/ for Python file changes and "
+            "restart the bot automatically. Useful during development."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Start the mAI Companion service."""
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        pass  # Already handled
+    args = _parse_args()
+
+    if args.reload:
+        _run_with_reload()
+    else:
+        try:
+            asyncio.run(run())
+        except KeyboardInterrupt:
+            pass  # Already handled
 
 
 if __name__ == "__main__":

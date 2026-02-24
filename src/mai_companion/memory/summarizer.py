@@ -8,24 +8,52 @@ from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
 from mai_companion.memory.messages import MessageStore
 from mai_companion.memory.summaries import SummaryStore
 
+# Map raw role values to proper terminology
+_ROLE_LABELS = {
+    "user": "Human",
+    "assistant": "AI",
+    "tool": "Tool",
+    "system": "System",
+}
+
+
+def _role_to_label(role: str) -> str:
+    """Convert raw role value to proper terminology label."""
+    return _ROLE_LABELS.get(role, role)
+
 _DAILY_SUMMARY_PROMPT = """You are a neutral memory summarizer.
 
 Summarize the conversation snippets into concise factual memory notes.
 Do not roleplay. Do not use personality.
 Preserve key facts, events, preferences, plans, and unresolved questions.
-Write in the same language as the conversation."""
+Write in the same language as the conversation.
+
+IMPORTANT terminology:
+- Refer to the human participant as "Human" (or equivalent in the conversation's language)
+- Refer to the AI participant as "AI" (or equivalent in the conversation's language)
+- NEVER use terms like "user", "assistant", "bot", or "agent"."""
 
 _WEEKLY_SUMMARY_PROMPT = """You are a neutral memory summarizer.
 
 You are given several daily summaries from the same ISO week.
 Create one concise weekly summary with recurring topics and important facts.
-Write in the same language as the source summaries."""
+Write in the same language as the source summaries.
+
+IMPORTANT terminology:
+- Refer to the human participant as "Human" (or equivalent in the conversation's language)
+- Refer to the AI participant as "AI" (or equivalent in the conversation's language)
+- NEVER use terms like "user", "assistant", "bot", or "agent"."""
 
 _MONTHLY_SUMMARY_PROMPT = """You are a neutral memory summarizer.
 
 You are given several weekly summaries from the same month.
 Create one concise monthly summary that keeps durable memory signal.
-Write in the same language as the source summaries."""
+Write in the same language as the source summaries.
+
+IMPORTANT terminology:
+- Refer to the human participant as "Human" (or equivalent in the conversation's language)
+- Refer to the AI participant as "AI" (or equivalent in the conversation's language)
+- NEVER use terms like "user", "assistant", "bot", or "agent"."""
 
 
 class MemorySummarizer:
@@ -53,7 +81,7 @@ class MemorySummarizer:
             return None
 
         transcript = "\n".join(
-            f"[{msg.timestamp.strftime('%H:%M')}] {msg.role}: {msg.content}" for msg in messages
+            f"[{msg.timestamp.strftime('%H:%M')}] {_role_to_label(msg.role)}: {msg.content}" for msg in messages
         )
         response = await self._llm.generate(
             [
