@@ -7,11 +7,11 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func as sql_func, select
 
 from mai_companion.bot.handler import BotHandler
 from mai_companion.bot.onboarding import OnboardingSession, OnboardingState
@@ -64,6 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help='Seed messages from JSONL ({"role":"user","content":"...","date":"YYYY-MM-DD"}).',
     )
     parser.add_argument("--debug", action="store_true", help="Enable structured LLM debug logging.")
+    parser.add_argument("--list", action="store_true", help="List all chat IDs with message counts.")
     return parser
 
 
@@ -95,6 +96,43 @@ def _format_time(value: datetime | None) -> str:
     else:
         dt = value.astimezone(timezone.utc)
     return dt.strftime("%H:%M:%S")
+
+
+async def _print_chat_list() -> None:
+    """List all chat IDs with message counts and last message dates."""
+    async with get_session() as session:
+        # Query companions with message stats
+        query = (
+            select(
+                Companion.id,
+                Companion.name,
+                sql_func.count(Message.id).label("message_count"),
+                sql_func.max(Message.timestamp).label("last_message"),
+            )
+            .outerjoin(Message, Companion.id == Message.companion_id)
+            .group_by(Companion.id)
+            .order_by(sql_func.max(Message.timestamp).desc().nulls_last())
+        )
+        result = await session.execute(query)
+        rows = list(result.all())
+
+    print("=== All Chats ===")
+    if not rows:
+        print("(no chats found)")
+        return
+
+    # Calculate column widths
+    id_width = max(len("Chat ID"), max(len(row.id) for row in rows))
+    name_width = max(len("Name"), max(len(row.name or "") for row in rows))
+
+    # Print header
+    print(f"{'Chat ID':<{id_width}}  {'Name':<{name_width}}  {'Messages':>8}  Last Message")
+    print("-" * (id_width + name_width + 35))
+
+    for row in rows:
+        last_msg = _format_timestamp(row.last_message) if row.last_message else "(no messages)"
+        name = row.name or ""
+        print(f"{row.id:<{id_width}}  {name:<{name_width}}  {row.message_count:>8}  {last_msg}")
 
 
 async def _print_history(chat_id: str) -> None:
@@ -573,8 +611,19 @@ def _incoming_command(chat_id: str, user_id: str, command: str) -> IncomingMessa
 
 async def _run(args: argparse.Namespace) -> None:
     settings = get_settings()
-    user_id = _resolve_user_id(args, settings)
     state_store = ConsoleStateStore()
+
+    # Handle --list before requiring chat_id
+    if args.list:
+        engine = await init_db(settings.database_url, echo=settings.debug)
+        await run_migrations(engine)
+        try:
+            await _print_chat_list()
+        finally:
+            await close_db()
+        return
+
+    user_id = _resolve_user_id(args, settings)
     chat_id = _resolve_chat_id(args, state_store)
     if args.date is not None and not args.replay:
         clock = state_store.set_target_date(chat_id, args.date)
