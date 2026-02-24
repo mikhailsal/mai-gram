@@ -52,6 +52,9 @@ class IncomingMessage:
         If message_type is CALLBACK, the callback data string.
     timestamp:
         When the message was sent.
+    bot_id:
+        Identifier of the bot that received this message (e.g., Telegram bot username).
+        Used to distinguish companions created via different bots by the same human.
     raw:
         The original platform-specific message object for advanced use cases.
     """
@@ -66,6 +69,7 @@ class IncomingMessage:
     command_args: str | None = None
     callback_data: str | None = None
     timestamp: datetime | None = None
+    bot_id: str = ""
     raw: Any = field(default=None, repr=False, compare=False)
 
 

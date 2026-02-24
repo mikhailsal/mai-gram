@@ -10,7 +10,9 @@ Configuration is managed through environment variables, which can be set in a `.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | — | Telegram Bot API token |
+| `TELEGRAM_BOT_TOKEN` | Yes | — | Primary Telegram Bot API token |
+| `TELEGRAM_BOT_TOKEN_2` | No | — | Second Telegram bot token (for multi-bot) |
+| `TELEGRAM_BOT_TOKEN_3` | No | — | Third Telegram bot token (for multi-bot) |
 | `OPENROUTER_API_KEY` | Yes | — | OpenRouter API key |
 | `LLM_MODEL` | No | `openai/gpt-4o` | LLM model identifier |
 | `DATABASE_URL` | No | `sqlite+aiosqlite:///./data/mai_companion.db` | Database connection |
@@ -24,7 +26,7 @@ Configuration is managed through environment variables, which can be set in a `.
 
 ### `TELEGRAM_BOT_TOKEN`
 
-Your Telegram Bot API token from [@BotFather](https://t.me/BotFather).
+Your primary Telegram Bot API token from [@BotFather](https://t.me/BotFather).
 
 ```bash
 TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
@@ -50,6 +52,25 @@ OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 1. Create an account at [openrouter.ai](https://openrouter.ai)
 2. Add credits (pay-as-you-go)
 3. Generate an API key in your dashboard
+
+---
+
+## Multi-Bot Settings
+
+### `TELEGRAM_BOT_TOKEN_2` / `TELEGRAM_BOT_TOKEN_3`
+
+Additional Telegram bot tokens for running multiple bots simultaneously. Each bot acts as a separate "window" where a human can create an independent companion.
+
+```bash
+TELEGRAM_BOT_TOKEN_2=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_BOT_TOKEN_3=0987654321:ZYXwvuTSRqpoNMLkjiHGFedcBA
+```
+
+**Default:** Empty (only the primary bot runs)
+
+When configured, the application starts a separate `TelegramMessenger` and `BotHandler` for each token. Each companion is identified by a composite ID (`user_id@bot_username`), ensuring full isolation between bots.
+
+See [GETTING_STARTED.md](GETTING_STARTED.md#multi-bot-setup-optional) for a detailed setup guide.
 
 ---
 
@@ -287,6 +308,11 @@ LOG_LEVEL=INFO
 # === Required ===
 TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
 OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# === Multi-Bot (Optional) ===
+# Additional bots for multiple companions per human
+TELEGRAM_BOT_TOKEN_2=
+TELEGRAM_BOT_TOKEN_3=
 
 # === Recommended ===
 # Restrict access to your Telegram user ID

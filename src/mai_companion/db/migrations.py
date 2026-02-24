@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Coroutine
 
 from sqlalchemy import select, text
@@ -39,7 +40,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 def register_migration(
@@ -255,6 +256,97 @@ async def _migrate_v7(conn: AsyncConnection) -> None:
         logger.info("Schema v7: added tool_call_id column to messages")
     else:
         logger.info("Schema v7: tool_call_id column already exists, skipping")
+
+
+@register_migration(8, "Migrate companion IDs to multi-bot format (user_id@bot_id)")
+async def _migrate_v8(conn: AsyncConnection) -> None:
+    """Version 8: rename companion IDs from plain chat_id to user_id@bot_id.
+
+    The system now supports multiple Telegram bots, so each companion is
+    identified by the composite ``user_id@bot_id``. Existing companions
+    were created under the primary bot, so we append ``@<primary_bot_username>``
+    to their IDs.
+
+    We resolve the primary bot username from the TELEGRAM_BOT_TOKEN at
+    migration time. If the token is not set (e.g. running in console mode),
+    we skip the migration since there's nothing to rename.
+    """
+    import requests
+
+    from mai_companion.config import get_settings
+
+    settings = get_settings()
+    token = settings.telegram_bot_token.strip()
+    if not token:
+        logger.info("Schema v8: no TELEGRAM_BOT_TOKEN set, skipping companion ID migration")
+        return
+
+    # Resolve the primary bot username from the Telegram API
+    try:
+        resp = requests.get(
+            f"https://api.telegram.org/bot{token}/getMe",
+            timeout=10,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.warning("Schema v8: Telegram API returned error, skipping: %s", data)
+            return
+        bot_username = data["result"].get("username")
+        if not bot_username:
+            logger.warning("Schema v8: bot has no username, skipping")
+            return
+    except Exception as e:
+        logger.warning("Schema v8: failed to resolve bot username: %s", e)
+        return
+
+    # Find all companions whose IDs don't already contain '@'
+    result = await conn.execute(text("SELECT id FROM companions WHERE id NOT LIKE '%@%'"))
+    old_ids = [row[0] for row in result.fetchall()]
+
+    if not old_ids:
+        logger.info("Schema v8: no legacy companion IDs to migrate")
+        return
+
+    # Rename each companion and all related records
+    data_dir = Path(settings.memory_data_dir)
+    for old_id in old_ids:
+        new_id = f"{old_id}@{bot_username}"
+        logger.info("Schema v8: renaming companion '%s' -> '%s'", old_id, new_id)
+
+        # Update the companion record itself
+        await conn.execute(
+            text("UPDATE companions SET id = :new_id WHERE id = :old_id"),
+            {"new_id": new_id, "old_id": old_id},
+        )
+        # Update all foreign key references
+        for table in [
+            "messages",
+            "mood_states",
+            "relationship_events",
+            "daily_summaries",
+            "knowledge_entries",
+            "shared_activities",
+        ]:
+            await conn.execute(
+                text(f"UPDATE {table} SET companion_id = :new_id WHERE companion_id = :old_id"),
+                {"new_id": new_id, "old_id": old_id},
+            )
+
+        # Rename the data directory (wiki, summaries, etc.)
+        old_dir = data_dir / old_id
+        new_dir = data_dir / new_id
+        if old_dir.exists() and not new_dir.exists():
+            old_dir.rename(new_dir)
+            logger.info("Schema v8: renamed data dir '%s' -> '%s'", old_dir, new_dir)
+
+        # Rename debug logs directory if it exists
+        old_debug = data_dir / "debug_logs" / old_id
+        new_debug = data_dir / "debug_logs" / new_id
+        if old_debug.exists() and not new_debug.exists():
+            old_debug.rename(new_debug)
+            logger.info("Schema v8: renamed debug dir '%s' -> '%s'", old_debug, new_debug)
+
+    logger.info("Schema v8: migrated %d companion(s) to multi-bot format", len(old_ids))
 
 
 # -- Migration runner --

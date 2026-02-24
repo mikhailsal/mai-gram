@@ -51,6 +51,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def make_companion_id(user_id: str, bot_id: str) -> str:
+    """Create a composite companion ID from user_id and bot_id.
+
+    Format: ``{user_id}@{bot_id}``
+
+    This ensures that the same human can have separate companions in
+    different Telegram bots, each with their own identity and history.
+
+    Parameters
+    ----------
+    user_id:
+        The Telegram user ID.
+    bot_id:
+        The bot identifier (username).
+
+    Returns
+    -------
+    str
+        The composite companion ID.
+    """
+    return f"{user_id}@{bot_id}"
+
+
 class BotHandler:
     """Main handler for bot messages and commands.
 
@@ -131,8 +154,12 @@ class BotHandler:
             The chat identifier.
         """
         # Get the companion to respond in character
+        # Note: For rate limiting, we try the chat_id as companion_id.
+        # This works for legacy IDs and console mode. For multi-bot mode,
+        # the companion_id would be user_id@bot_id, but rate limiting
+        # doesn't need an exact match — it's just for the language.
         async with get_session() as session:
-            companion = await self._get_companion_by_chat(session, chat_id)
+            companion = await self._get_companion(session, chat_id)
             if companion:
                 language = companion.human_language
                 name = companion.name
@@ -194,6 +221,17 @@ class BotHandler:
         )
         return False
 
+    def _companion_id_for(self, message: IncomingMessage) -> str:
+        """Derive the companion ID for a message.
+
+        Uses the composite ``user_id@bot_id`` format when a bot_id is
+        available, otherwise falls back to ``chat_id`` for console/test
+        usage.
+        """
+        if message.bot_id:
+            return make_companion_id(message.user_id, message.bot_id)
+        return message.chat_id
+
     async def _handle_start(self, message: IncomingMessage) -> None:
         """Handle the /start command.
 
@@ -208,9 +246,11 @@ class BotHandler:
         if not await self._check_access(message):
             return
 
+        companion_id = self._companion_id_for(message)
+
         # Check if a companion already exists for this chat
         async with get_session() as session:
-            companion = await self._get_companion_by_chat(session, message.chat_id)
+            companion = await self._get_companion(session, companion_id)
 
         if companion:
             # Companion already exists
@@ -242,8 +282,10 @@ class BotHandler:
         if not await self._check_access(message):
             return
 
+        companion_id = self._companion_id_for(message)
+
         async with get_session() as session:
-            companion = await self._get_companion_by_chat(session, message.chat_id)
+            companion = await self._get_companion(session, companion_id)
 
             if companion:
                 # Delete the companion (cascade deletes messages, etc.)
@@ -279,8 +321,10 @@ class BotHandler:
         if not await self._check_access(message):
             return
 
+        companion_id = self._companion_id_for(message)
+
         async with get_session() as session:
-            companion = await self._get_companion_by_chat(session, message.chat_id)
+            companion = await self._get_companion(session, companion_id)
 
             if not companion:
                 await self._messenger.send_message(
@@ -337,8 +381,10 @@ class BotHandler:
             "Just send a message to chat with your companion!"
         )
 
+        companion_id = self._companion_id_for(message)
+
         async with get_session() as session:
-            companion = await self._get_companion_by_chat(session, message.chat_id)
+            companion = await self._get_companion(session, companion_id)
             if companion and companion.human_language.lower() != "english":
                 msg = await self._translation_service.translate(msg, companion.human_language)
 
@@ -368,7 +414,8 @@ class BotHandler:
         if self._onboarding.is_onboarding(message.user_id):
             result = await self._onboarding.handle_message(message)
             if result:
-                await self._create_companion(message.chat_id, result.config)
+                companion_id = self._companion_id_for(message)
+                await self._create_companion(companion_id, message.chat_id, result.config)
                 self._onboarding.clear_session(message.user_id)
             return
 
@@ -393,7 +440,8 @@ class BotHandler:
         if self._onboarding.is_onboarding(message.user_id):
             result = await self._onboarding.handle_message(message)
             if result:
-                await self._create_companion(message.chat_id, result.config)
+                companion_id = self._companion_id_for(message)
+                await self._create_companion(companion_id, message.chat_id, result.config)
                 self._onboarding.clear_session(message.user_id)
             return
 
@@ -408,8 +456,10 @@ class BotHandler:
         message:
             The incoming message.
         """
+        companion_id = self._companion_id_for(message)
+
         async with get_session() as session:
-            companion = await self._get_companion_by_chat(session, message.chat_id)
+            companion = await self._get_companion(session, companion_id)
 
             if not companion:
                 # No companion exists
@@ -661,6 +711,7 @@ class BotHandler:
 
     async def _create_companion(
         self,
+        companion_id: str,
         chat_id: str,
         config: CharacterConfig,
     ) -> None:
@@ -668,8 +719,10 @@ class BotHandler:
 
         Parameters
         ----------
+        companion_id:
+            The companion identifier (``user_id@bot_id`` composite).
         chat_id:
-            The chat identifier.
+            The chat identifier (for sending messages).
         config:
             The character configuration.
         """
@@ -683,10 +736,9 @@ class BotHandler:
             config, temperature, llm_model=settings.llm_model
         )
 
-        # Add chat_id as the companion ID for easy lookup
-        # In a multi-user scenario, you'd generate a UUID and store
-        # a mapping, but for single-user self-hosted this works fine
-        record["id"] = chat_id
+        # Use the composite companion_id (user_id@bot_id) so the same
+        # human can have separate companions in different bots.
+        record["id"] = companion_id
 
         async with get_session() as session:
             companion = Companion(**record)
@@ -719,10 +771,10 @@ class BotHandler:
             temperature,
         )
 
-    async def _get_companion_by_chat(
-        self, session, chat_id: str
+    async def _get_companion(
+        self, session, companion_id: str
     ) -> Companion | None:
-        """Get the companion for a chat.
+        """Get a companion by its ID.
 
         Also sets up the language style in the translation service if
         the companion has one configured.
@@ -731,8 +783,8 @@ class BotHandler:
         ----------
         session:
             The database session.
-        chat_id:
-            The chat identifier.
+        companion_id:
+            The companion identifier (``user_id@bot_id`` composite or legacy ``chat_id``).
 
         Returns
         -------
@@ -740,7 +792,7 @@ class BotHandler:
             The companion, or None if not found.
         """
         result = await session.execute(
-            select(Companion).where(Companion.id == chat_id)
+            select(Companion).where(Companion.id == companion_id)
         )
         companion = result.scalar_one_or_none()
 

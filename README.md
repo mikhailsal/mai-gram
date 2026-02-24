@@ -21,6 +21,7 @@ Two companions communicate in chat — an AI and a human. The AI can refer to it
 | **Unique Personality** | 13 configurable traits that affect behavior, not just tone. Your companion is truly one-of-a-kind. |
 | **Dynamic Mood** | Emotional state shifts based on conversation and time — happy, frustrated, serene, excited. |
 | **Self-Sufficiency** | Can disagree, refuse requests, express opinions. Treats you as an equal, not a master. |
+| **Multiple Companions** | Run up to 3 Telegram bots — each one hosts a different companion with its own personality and memory. |
 | **Self-Hosted** | All data stays on your hardware. You own everything. |
 
 ---
@@ -88,22 +89,22 @@ Then message your Telegram bot — it will guide you through creating your compa
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Your Server                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │  Telegram   │  │   Memory    │  │    Personality      │  │
-│  │  Interface  │◄─┤   System    │◄─┤    + Mood System    │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │             │
-│         └────────────────┴─────────────────────┘             │
-│                          │                                   │
-│                   ┌──────▼──────┐                            │
-│                   │   LLM API   │ (OpenRouter)               │
-│                   └─────────────┘                            │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                         Your Server                           │
+│  ┌──────────────────┐  ┌─────────────┐  ┌─────────────────┐  │
+│  │  Telegram Bots   │  │   Memory    │  │   Personality   │  │
+│  │  (@bot_1, @bot_2 │◄─┤   System    │◄─┤   + Mood System │  │
+│  │   @bot_3)        │  └──────┬──────┘  └────────┬────────┘  │
+│  └──────┬───────────┘        │                   │            │
+│         └────────────────────┴───────────────────┘            │
+│                              │                                │
+│                       ┌──────▼──────┐                         │
+│                       │   LLM API   │ (OpenRouter)            │
+│                       └─────────────┘                         │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-The AI lives on your server, communicates via Telegram, and uses OpenRouter for language model inference. All conversation history, personality data, and memories stay on your hardware.
+The AI lives on your server, communicates via Telegram (supporting up to 3 bots for multiple companions), and uses OpenRouter for language model inference. All conversation history, personality data, and memories stay on your hardware.
 
 ➡️ **[Full architecture →](docs/ARCHITECTURE.md)**
 
@@ -137,7 +138,7 @@ The AI lives on your server, communicates via Telegram, and uses OpenRouter for 
 
 mAI Companion is under active development. Current implementation includes:
 
-- ✅ Telegram integration
+- ✅ Telegram integration (multi-bot support — up to 3 bots)
 - ✅ Character creation (onboarding) flow
 - ✅ Personality system (Wave 1: 6 traits)
 - ✅ Dynamic mood system

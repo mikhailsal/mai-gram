@@ -6,9 +6,9 @@ Whether your companion is running via Telegram or Console mode, the `mai-chat` C
 
 ---
 
-## Finding Your Chat ID
+## Finding Your Companion ID
 
-Every companion is identified by a **chat ID**. For Telegram, this is your Telegram user ID (the same number shown in your `ALLOWED_USERS` config).
+Every companion is identified by a **companion ID**. For Telegram, this is a composite of your Telegram user ID and the bot's username in the format `user_id@bot_username`.
 
 To find it, check the application logs when you send a message:
 
@@ -16,26 +16,40 @@ To find it, check the application logs when you send a message:
 mai_companion.bot.middleware - INFO - Incoming message: platform=telegram chat=186215217 ...
 ```
 
-The number after `chat=` is your chat ID. You'll use this with all `mai-chat` inspection commands.
+The number after `chat=` is your user ID. Combined with the bot username, your companion ID is:
+
+```
+186215217@my_companion_bot
+```
+
+You can also list all known companions:
+
+```bash
+mai-chat --list
+```
+
+You'll use the companion ID with all `mai-chat` inspection commands.
+
+> **Note:** If you have multiple bots, each bot has a separate companion ID (e.g., `186215217@my_bot_1`, `186215217@my_bot_2`). Console-mode companions use a simple ID without the `@bot_username` suffix.
 
 ---
 
 ## Inspecting Telegram Conversations
 
-The `mai-chat` CLI can inspect data from **any** companion — including those running via Telegram. All inspection commands use the `-c` flag to specify the chat ID.
+The `mai-chat` CLI can inspect data from **any** companion — including those running via Telegram. All inspection commands use the `-c` flag to specify the companion ID.
 
 ### View Conversation History
 
 See all messages exchanged between the human and the companion:
 
 ```bash
-mai-chat -c <chat-id> --history
+mai-chat -c <companion-id> --history
 ```
 
 Example output:
 
 ```
-=== History: 186215217 ===
+=== History: 186215217@my_companion_bot ===
 [2026-02-09 17:12:40] ASSISTANT: Здарова. Чё как сам?
 [2026-02-09 17:12:50] USER: Норм
 [2026-02-09 17:12:52] ASSISTANT: Это хорошо, братан. Чё мутишь там?
@@ -46,13 +60,13 @@ Example output:
 Check what the companion has stored in its long-term knowledge base:
 
 ```bash
-mai-chat -c <chat-id> --wiki
+mai-chat -c <companion-id> --wiki
 ```
 
 Example output:
 
 ```
-=== Wiki: 186215217 ===
+=== Wiki: 186215217@my_companion_bot ===
 - (9999) human_name: Alexander
 - (8000) favorite_food: pizza
 - (5000) hobby: programming
@@ -65,7 +79,7 @@ If the output shows `(no wiki entries)`, the companion hasn't saved any knowledg
 See the daily, weekly, and monthly conversation summaries:
 
 ```bash
-mai-chat -c <chat-id> --summaries
+mai-chat -c <companion-id> --summaries
 ```
 
 ### Replay Conversation with Tool Events
@@ -74,10 +88,10 @@ The replay view shows messages interleaved with tool calls (wiki writes, searche
 
 ```bash
 # Replay all conversations
-mai-chat -c <chat-id> --replay
+mai-chat -c <companion-id> --replay
 
 # Replay a specific date
-mai-chat -c <chat-id> --replay --date 2026-02-19
+mai-chat -c <companion-id> --replay --date 2026-02-19
 ```
 
 > **Note:** Wiki tool calls (create, edit) are always visible in replay because they are logged to a dedicated changelog. Other tool calls (search_messages, sleep, etc.) only appear when the conversation was run with `--debug` mode enabled (see [Debug Logging](#debug-logging) below).
@@ -87,7 +101,7 @@ mai-chat -c <chat-id> --replay --date 2026-02-19
 See exactly what the LLM receives — the full system prompt, personality, wiki context, memory summaries, and recent messages:
 
 ```bash
-mai-chat -c <chat-id> --show-prompt
+mai-chat -c <companion-id> --show-prompt
 ```
 
 This is invaluable for understanding why the companion behaves a certain way. The output includes:
@@ -108,10 +122,10 @@ This is invaluable for understanding why the companion behaves a certain way. Th
 When using `mai-chat` interactively, add `--debug` to capture full LLM request/response details:
 
 ```bash
-mai-chat -c <chat-id> --debug "Hello, how are you?"
+mai-chat -c <companion-id> --debug "Hello, how are you?"
 ```
 
-This creates structured JSONL log files in `data/debug_logs/<chat-id>/` with:
+This creates structured JSONL log files in `data/debug_logs/<companion-id>/` with:
 
 - Full LLM request (messages, tools, temperature)
 - Full LLM response (content, tool calls, token usage)
@@ -138,10 +152,10 @@ Debug logs are stored as JSONL (one JSON object per line):
 
 ```bash
 # View today's debug log
-cat data/debug_logs/<chat-id>/2026-02-19.jsonl | python -m json.tool
+cat data/debug_logs/<companion-id>/2026-02-19.jsonl | python -m json.tool
 
 # Search for tool calls
-grep '"entry_type": "tool_result"' data/debug_logs/<chat-id>/2026-02-19.jsonl
+grep '"entry_type": "tool_result"' data/debug_logs/<companion-id>/2026-02-19.jsonl
 ```
 
 Each entry has an `entry_type` field:
@@ -179,7 +193,7 @@ LOG_LEVEL=DEBUG python -m mai_companion.main
 
 1. Check wiki entries:
    ```bash
-   mai-chat -c <chat-id> --wiki
+   mai-chat -c <companion-id> --wiki
    ```
 2. If empty, the LLM didn't actually call the wiki tool — it just *said* it remembered. This can happen with some models that "pretend" instead of using tools.
 
@@ -188,7 +202,7 @@ LOG_LEVEL=DEBUG python -m mai_companion.main
 Inspect the full prompt to see what context the LLM receives:
 
 ```bash
-mai-chat -c <chat-id> --show-prompt
+mai-chat -c <companion-id> --show-prompt
 ```
 
 Check for:
@@ -213,7 +227,7 @@ Common causes:
 ### "I want to see what happened on a specific day"
 
 ```bash
-mai-chat -c <chat-id> --replay --date 2026-02-19
+mai-chat -c <companion-id> --replay --date 2026-02-19
 ```
 
 ---
@@ -227,10 +241,10 @@ data/
 ├── mai_companion.db              # SQLite database (messages, companions, moods, wiki metadata)
 ├── chroma_data/                  # Vector store for semantic search
 ├── debug_logs/
-│   └── <chat-id>/
+│   └── <companion-id>/
 │       ├── 2026-02-19.jsonl      # Debug logs for that date
 │       └── ...
-└── <chat-id>/
+└── <user_id>@<bot_username>/      # One directory per companion
     ├── wiki/                     # Knowledge base entries (markdown files)
     │   ├── 9999_human-name.md
     │   └── 5000_favorite-food.md
@@ -257,20 +271,20 @@ By default, `mai-chat` runs in **test mode** — the AI companion is informed th
 
 ```bash
 # Test mode (default) — AI knows it's a test
-mai-chat -c <chat-id> "Hello"
+mai-chat -c <companion-id> "Hello"
 
 # Real mode — for genuine conversations via CLI
-mai-chat -c <chat-id> --real "Hello"
+mai-chat -c <companion-id> --real "Hello"
 ```
 
 When inspecting prompts, you can see the difference:
 
 ```bash
 # Shows prompt with test mode notice
-mai-chat -c <chat-id> --show-prompt
+mai-chat -c <companion-id> --show-prompt
 
 # Shows prompt without test mode notice
-mai-chat -c <chat-id> --show-prompt --real
+mai-chat -c <companion-id> --show-prompt --real
 ```
 
 ---
@@ -281,19 +295,19 @@ If you've updated the consolidation prompts or want to regenerate summaries with
 
 ```bash
 # List all consolidations with version history
-mai-chat -c <chat-id> --list-consolidations
+mai-chat -c <companion-id> --list-consolidations
 
 # Re-consolidate daily summaries from a date (excludes today as incomplete)
-mai-chat -c <chat-id> --reconsolidate daily --from 2026-02-20
+mai-chat -c <companion-id> --reconsolidate daily --from 2026-02-20
 
 # Re-consolidate with specific end date
-mai-chat -c <chat-id> --reconsolidate daily --from 2026-02-20 --until 2026-02-22
+mai-chat -c <companion-id> --reconsolidate daily --from 2026-02-20 --until 2026-02-22
 
 # Re-consolidate weekly summaries
-mai-chat -c <chat-id> --reconsolidate weekly --from 2024-W03
+mai-chat -c <companion-id> --reconsolidate weekly --from 2024-W03
 
 # Re-consolidate monthly summaries
-mai-chat -c <chat-id> --reconsolidate monthly --from 2024-01
+mai-chat -c <companion-id> --reconsolidate monthly --from 2024-01
 ```
 
 **Important notes:**
@@ -305,13 +319,13 @@ mai-chat -c <chat-id> --reconsolidate monthly --from 2024-01
 ### Viewing Version History
 
 ```bash
-mai-chat -c <chat-id> --list-consolidations
+mai-chat -c <companion-id> --list-consolidations
 ```
 
 Example output:
 
 ```
-=== Consolidations for 186215217 ===
+=== Consolidations for 186215217@my_companion_bot ===
 
 Daily Summaries:
   2026-02-23  [2 versions]

@@ -75,6 +75,8 @@ python -m mai_companion.main
 4. Choose a username (must end in `bot`, e.g., `my_ai_companion_bot`)
 5. Copy the **API token** — you'll need this
 
+> **Want multiple companions?** You can create up to 3 Telegram bots, each acting as a separate "window" for a different companion. The same human can have a different AI personality in each bot. See [Multi-Bot Setup](#multi-bot-setup-optional) below.
+
 ### Step 2: Get an OpenRouter API Key
 
 1. Go to [openrouter.ai](https://openrouter.ai)
@@ -91,6 +93,10 @@ Edit your `.env` file:
 # Required
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 OPENROUTER_API_KEY=your_openrouter_api_key_here
+
+# Optional: Additional bots for multiple companions (see Multi-Bot Setup)
+TELEGRAM_BOT_TOKEN_2=
+TELEGRAM_BOT_TOKEN_3=
 
 # Optional: Restrict access to specific Telegram users
 # Get your ID by messaging @userinfobot on Telegram
@@ -180,8 +186,17 @@ When the application starts successfully, you'll see:
 2024-01-15 10:30:00 - INFO - Database ready
 2024-01-15 10:30:00 - INFO - LLM provider initialized (model: openai/gpt-4o)
 2024-01-15 10:30:00 - INFO - Access control enabled: 1 user(s) allowed
-2024-01-15 10:30:01 - INFO - Telegram messenger started successfully
-2024-01-15 10:30:01 - INFO - mAI Companion is running! Press Ctrl+C to stop.
+2024-01-15 10:30:01 - INFO - Bot 1/1 started: @my_ai_companion_bot
+2024-01-15 10:30:01 - INFO - mAI Companion is running with 1 bot(s)! Press Ctrl+C to stop.
+```
+
+With multiple bots configured, you'll see each one start:
+
+```
+2024-01-15 10:30:01 - INFO - Bot 1/3 started: @my_ai_companion_bot
+2024-01-15 10:30:01 - INFO - Bot 2/3 started: @my_second_bot
+2024-01-15 10:30:01 - INFO - Bot 3/3 started: @my_third_bot
+2024-01-15 10:30:01 - INFO - mAI Companion is running with 3 bot(s)! Press Ctrl+C to stop.
 ```
 
 ### Running as a System Service (Linux)
@@ -310,26 +325,63 @@ This is useful for:
 
 ---
 
+## Multi-Bot Setup (Optional)
+
+mAI Companion supports running **multiple Telegram bots simultaneously**. Each bot acts as a separate "window" for a different companion. The same human can create a unique AI personality in each bot — different name, traits, language, and memories.
+
+### Why Multiple Bots?
+
+Having multiple companions in a single chat would create confusion — mixed histories, overlapping contexts, and an unnatural experience. Separate bots keep each companion's conversation clean and independent, just like messaging different friends.
+
+### How It Works
+
+1. Create additional bots via [@BotFather](https://t.me/BotFather) (up to 3 total)
+2. Add their tokens to your `.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=your_primary_bot_token
+TELEGRAM_BOT_TOKEN_2=your_second_bot_token
+TELEGRAM_BOT_TOKEN_3=your_third_bot_token
+```
+
+3. Restart the application — all bots start automatically
+
+Each companion is identified by a composite ID: `user_id@bot_username` (e.g., `186215217@my_ai_companion_bot`). This ensures that the same human's companions in different bots are fully independent — separate personality, memory, wiki, and conversation history.
+
+### Example
+
+```
+Bot 1 (@my_companion_bot)     → "Luna" — warm, creative, speaks English
+Bot 2 (@my_second_bot)        → "Кай" — direct, analytical, speaks Russian
+Bot 3 (@my_third_bot)         → "Hana" — gentle, curious, speaks Japanese
+```
+
+All three run from a single mAI Companion instance on your server.
+
+---
+
 ## Directory Structure
 
 After running, your `data/` directory will contain:
 
 ```
 data/
-├── mai_companion.db          # SQLite database (messages, companions, moods)
-├── chroma_data/              # Vector store for semantic search
-└── <companion-id>/
-    ├── wiki/                 # Knowledge base entries
+├── mai_companion.db                    # SQLite database (messages, companions, moods)
+├── chroma_data/                        # Vector store for semantic search
+└── <user_id>@<bot_username>/           # One directory per companion
+    ├── wiki/                           # Knowledge base entries
     │   ├── 0900_human-name.md
     │   └── 0500_favorite-food.md
     └── summaries/
-        ├── daily/            # Daily conversation summaries
+        ├── daily/                      # Daily conversation summaries
         │   ├── 2024-01-15.md
         │   ├── 2024-01-16.md
-        │   └── .versions/    # Previous versions (from re-consolidation)
-        ├── weekly/           # Weekly rollups
-        └── monthly/          # Monthly rollups
+        │   └── .versions/              # Previous versions (from re-consolidation)
+        ├── weekly/                     # Weekly rollups
+        └── monthly/                    # Monthly rollups
 ```
+
+> **Note:** Companion directories use the format `<user_id>@<bot_username>` (e.g., `186215217@my_ai_companion_bot`). For companions created via the console runner (without a Telegram bot), the directory is simply the `chat_id`.
 
 ---
 

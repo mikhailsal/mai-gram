@@ -44,13 +44,15 @@ from mai_companion.messenger.base import (
 logger = logging.getLogger(__name__)
 
 
-def _convert_update_to_message(update: Update) -> IncomingMessage | None:
+def _convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingMessage | None:
     """Convert a Telegram Update to our IncomingMessage format.
 
     Parameters
     ----------
     update:
         The Telegram update object.
+    bot_id:
+        Identifier of the bot that received this update.
 
     Returns
     -------
@@ -68,6 +70,7 @@ def _convert_update_to_message(update: Update) -> IncomingMessage | None:
             message_type=MessageType.CALLBACK,
             callback_data=query.data,
             timestamp=datetime.now(timezone.utc),
+            bot_id=bot_id,
             raw=update,
         )
 
@@ -114,6 +117,7 @@ def _convert_update_to_message(update: Update) -> IncomingMessage | None:
         command=command,
         command_args=command_args,
         timestamp=message.date,
+        bot_id=bot_id,
         raw=update,
     )
 
@@ -179,13 +183,18 @@ class TelegramMessenger(Messenger):
     ----------
     token:
         The Telegram Bot API token from @BotFather.
+    bot_id:
+        A short identifier for this bot (e.g., the bot username).
+        Used to distinguish companions created via different bots.
+        If not provided, it will be resolved from the Telegram API on start.
     """
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, *, bot_id: str = "") -> None:
         if not token:
             raise MessengerError("Telegram bot token must not be empty")
 
         self._token = token
+        self._bot_id = bot_id
         self._app: Application | None = None
         self._message_handlers: list[MessageHandler] = []
         self._callback_handlers: list[MessageHandler] = []
@@ -197,6 +206,11 @@ class TelegramMessenger(Messenger):
         return "telegram"
 
     @property
+    def bot_id(self) -> str:
+        """Return the bot identifier (username)."""
+        return self._bot_id
+
+    @property
     def bot(self) -> Bot:
         """Return the underlying Telegram Bot instance."""
         if self._app is None:
@@ -205,7 +219,7 @@ class TelegramMessenger(Messenger):
 
     async def start(self) -> None:
         """Start the Telegram bot and begin polling for updates."""
-        logger.info("Starting Telegram messenger...")
+        logger.info("Starting Telegram messenger (bot_id=%s)...", self._bot_id or "(resolving)")
 
         # Build the application with increased timeouts for network resilience
         # Default timeouts are 5 seconds which is too aggressive for unstable networks
@@ -221,6 +235,12 @@ class TelegramMessenger(Messenger):
             .get_updates_connect_timeout(15.0)  # Polling connect timeout
             .build()
         )
+
+        # Resolve bot_id from Telegram API if not provided
+        if not self._bot_id:
+            bot_info = await self._app.bot.get_me()
+            self._bot_id = bot_info.username or str(bot_info.id)
+            logger.info("Resolved bot_id: %s", self._bot_id)
 
         # Register command handlers
         for command, handler in self._command_handlers.items():
@@ -461,7 +481,7 @@ class TelegramMessenger(Messenger):
         async def wrapper(
             update: Update, context: ContextTypes.DEFAULT_TYPE
         ) -> None:
-            msg = _convert_update_to_message(update)
+            msg = _convert_update_to_message(update, bot_id=self._bot_id)
             if msg:
                 await handler(msg)
 
@@ -471,7 +491,7 @@ class TelegramMessenger(Messenger):
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Handle incoming text messages."""
-        msg = _convert_update_to_message(update)
+        msg = _convert_update_to_message(update, bot_id=self._bot_id)
         if msg:
             for handler in self._message_handlers:
                 await handler(msg)
@@ -480,7 +500,7 @@ class TelegramMessenger(Messenger):
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Handle callback queries (button presses)."""
-        msg = _convert_update_to_message(update)
+        msg = _convert_update_to_message(update, bot_id=self._bot_id)
         if msg:
             # Acknowledge the callback to remove the loading indicator
             if update.callback_query:

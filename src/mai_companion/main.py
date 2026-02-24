@@ -25,13 +25,13 @@ from mai_companion.messenger.telegram import TelegramMessenger
 logger = logging.getLogger(__name__)
 
 # Global references for graceful shutdown
-_messenger: TelegramMessenger | None = None
+_messengers: list[TelegramMessenger] = []
 _llm_provider: OpenRouterProvider | None = None
 
 
 async def startup() -> None:
     """Initialize all application subsystems."""
-    global _messenger, _llm_provider
+    global _llm_provider
 
     settings = get_settings()
 
@@ -44,7 +44,8 @@ async def startup() -> None:
     logger.info("mAI Companion starting up...")
 
     # Validate required settings
-    if not settings.telegram_bot_token:
+    bot_tokens = settings.get_all_bot_tokens()
+    if not bot_tokens:
         logger.error("TELEGRAM_BOT_TOKEN is required. Set it in .env or environment.")
         sys.exit(1)
 
@@ -69,19 +70,6 @@ async def startup() -> None:
     )
     logger.info("LLM provider initialized (model: %s)", settings.llm_model)
 
-    # Initialize Telegram messenger
-    _messenger = TelegramMessenger(settings.telegram_bot_token)
-
-    # Create and wire up the bot handler with memory/tooling settings.
-    _handler = BotHandler(
-        _messenger,
-        _llm_provider,
-        memory_data_dir=settings.memory_data_dir,
-        summary_threshold=settings.summary_threshold,
-        wiki_context_limit=settings.wiki_context_limit,
-        short_term_limit=settings.short_term_limit,
-        tool_max_iterations=settings.tool_max_iterations,
-    )
     logger.info(
         "Memory subsystem configured: data_dir=%s threshold=%s wiki_limit=%s short_term_limit=%s tool_iterations=%s",
         settings.memory_data_dir,
@@ -91,22 +79,48 @@ async def startup() -> None:
         settings.tool_max_iterations,
     )
 
-    # Start the messenger (begins polling)
-    await _messenger.start()
+    # Initialize and start a Telegram messenger + handler for each bot token
+    for i, token in enumerate(bot_tokens, start=1):
+        messenger = TelegramMessenger(token)
 
-    logger.info("mAI Companion is running! Press Ctrl+C to stop.")
+        # Create and wire up the bot handler with memory/tooling settings.
+        _handler = BotHandler(
+            messenger,
+            _llm_provider,
+            memory_data_dir=settings.memory_data_dir,
+            summary_threshold=settings.summary_threshold,
+            wiki_context_limit=settings.wiki_context_limit,
+            short_term_limit=settings.short_term_limit,
+            tool_max_iterations=settings.tool_max_iterations,
+        )
+
+        # Start the messenger (begins polling).
+        # The bot_id (username) is resolved automatically from the Telegram API.
+        await messenger.start()
+        _messengers.append(messenger)
+        logger.info(
+            "Bot %d/%d started: @%s",
+            i,
+            len(bot_tokens),
+            messenger.bot_id,
+        )
+
+    logger.info(
+        "mAI Companion is running with %d bot(s)! Press Ctrl+C to stop.",
+        len(_messengers),
+    )
 
 
 async def shutdown() -> None:
     """Gracefully shut down all application subsystems."""
-    global _messenger, _llm_provider
+    global _llm_provider
 
     logger.info("mAI Companion shutting down...")
 
-    # Stop the messenger
-    if _messenger:
-        await _messenger.stop()
-        _messenger = None
+    # Stop all messengers
+    for messenger in _messengers:
+        await messenger.stop()
+    _messengers.clear()
 
     # Close the LLM provider
     if _llm_provider:
@@ -137,8 +151,8 @@ async def run() -> None:
         await startup()
 
         # Keep running until shutdown
-        # The Telegram bot runs in the background via polling
-        while _messenger is not None:
+        # The Telegram bots run in the background via polling
+        while _messengers:
             await asyncio.sleep(1)
 
     except KeyboardInterrupt:

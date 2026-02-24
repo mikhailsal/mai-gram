@@ -9,27 +9,33 @@ This document explains the system's components, data flow, and design decisions.
 ## System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              Your Server                                 │
-│                                                                          │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐ │
-│  │   Messenger  │     │    Core      │     │      Personality         │ │
-│  │   Layer      │◄───►│   Engine     │◄───►│      System              │ │
-│  │  (Telegram)  │     │              │     │  (Traits + Mood)         │ │
-│  └──────────────┘     └──────┬───────┘     └──────────────────────────┘ │
-│                              │                                           │
-│                              ▼                                           │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐ │
-│  │   Memory     │◄───►│   Prompt     │◄───►│      LLM Provider        │ │
-│  │   System     │     │   Builder    │     │     (OpenRouter)         │ │
-│  └──────────────┘     └──────────────┘     └──────────────────────────┘ │
-│                                                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                        Storage Layer                              │   │
-│  │   SQLite (messages, companions, moods)  │  Files (wiki, summaries)│   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                              Your Server                                  │
+│                                                                           │
+│  ┌────────────────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │   Messenger Layer      │  │    Core      │  │    Personality       │  │
+│  │  ┌──────────────────┐  │  │   Engine     │  │    System            │  │
+│  │  │ @bot_1 (Telegram)│◄─┼─►│              │◄►│  (Traits + Mood)    │  │
+│  │  ├──────────────────┤  │  │  BotHandler  │  └──────────────────────┘  │
+│  │  │ @bot_2 (Telegram)│◄─┤  │  (per bot)   │                            │
+│  │  ├──────────────────┤  │  └──────┬───────┘                            │
+│  │  │ @bot_3 (Telegram)│◄─┘        │                                     │
+│  │  └──────────────────┘           ▼                                     │
+│  └────────────────────────┘  ┌──────────────┐  ┌──────────────────────┐  │
+│                              │   Prompt     │  │    LLM Provider      │  │
+│  ┌──────────────┐            │   Builder    │◄►│   (OpenRouter)       │  │
+│  │   Memory     │◄──────────►│              │  │   (shared)           │  │
+│  │   System     │            └──────────────┘  └──────────────────────┘  │
+│  └──────────────┘                                                        │
+│                                                                           │
+│  ┌──────────────────────────────────────────────────────────────────┐    │
+│  │                        Storage Layer                              │    │
+│  │   SQLite (messages, companions, moods)  │  Files (wiki, summaries)│    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+The system supports **multiple Telegram bots** running simultaneously. Each bot has its own `TelegramMessenger` and `BotHandler` instance, while the LLM provider and database are shared. This allows a single human to have independent companions in different bots.
 
 ---
 
@@ -52,14 +58,28 @@ This document explains the system's components, data flow, and design decisions.
 
 The messenger layer abstracts communication channels. Currently supports:
 
-- **Telegram** (`telegram.py`) — Primary interface via python-telegram-bot
+- **Telegram** (`telegram.py`) — Primary interface via python-telegram-bot (supports multiple bot instances)
 - **Console** (`console.py`) — For testing and development
+
+### Multi-Bot Architecture
+
+Each Telegram bot token creates a separate `TelegramMessenger` + `BotHandler` pair:
+
+```
+                    ┌─ TelegramMessenger(@bot_1) ─ BotHandler ─┐
+                    │                                            │
+Human ──Telegram──►├─ TelegramMessenger(@bot_2) ─ BotHandler ─┼──► Shared LLM
+                    │                                            │
+                    └─ TelegramMessenger(@bot_3) ─ BotHandler ─┘
+```
+
+Each messenger resolves its `bot_id` (username) from the Telegram API on startup. This `bot_id` is injected into every `IncomingMessage`, enabling the handler to construct a **composite companion ID**: `user_id@bot_username`.
 
 ### Message Flow
 
 ```
-Human Message → Telegram API → Messenger → Handler → Core Engine
-                                                          ↓
+Human Message → Telegram API → Messenger(@bot_id) → Handler → Core Engine
+                                                                    ↓
 Human ← Telegram API ← Messenger ← Handler ← AI Response
 ```
 
@@ -69,6 +89,19 @@ Human ← Telegram API ← Messenger ← Handler ← AI Response
 class Messenger(Protocol):
     async def send_message(self, message: OutgoingMessage) -> SendResult: ...
     async def edit_message(self, chat_id: str, message_id: str, text: str) -> bool: ...
+```
+
+The `IncomingMessage` dataclass includes a `bot_id` field that identifies which bot received the message:
+
+```python
+@dataclass(frozen=True, slots=True)
+class IncomingMessage:
+    platform: str
+    chat_id: str
+    user_id: str
+    bot_id: str = ""   # Bot username (e.g., "my_companion_bot")
+    message_id: str
+    # ...
 ```
 
 This allows future support for WhatsApp, Signal, or other platforms.
@@ -338,10 +371,17 @@ def compute_temperature(traits: dict[str, float]) -> float:
 
 SQLite with SQLAlchemy async.
 
+### Companion Identification
+
+Companions are identified by a **composite ID** in the format `user_id@bot_username` (e.g., `186215217@my_companion_bot`). This ensures that the same human can have independent companions in different bots, each with its own personality, memory, and conversation history.
+
+For companions created via the console runner (without a Telegram bot), the ID is simply the `chat_id`.
+
 ### Core Tables
 
 ```sql
 -- Companions (AI entities)
+-- id format: "user_id@bot_username" (e.g., "186215217@my_companion_bot")
 CREATE TABLE companions (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -395,11 +435,12 @@ CREATE TABLE knowledge_entries (
 
 ```
 1. Telegram receives message
-   └─► Messenger extracts text, user_id, chat_id
+   └─► Messenger extracts text, user_id, chat_id, bot_id
+   └─► Companion ID derived: user_id@bot_id
 
 2. Handler processes message
    └─► Saves to message store
-   └─► Retrieves companion config
+   └─► Retrieves companion config (by composite ID)
    └─► Gets current mood
 
 3. Mood system analyzes sentiment
@@ -512,11 +553,20 @@ mai-companion/
 - Pay-as-you-go pricing
 - Human controls their own API key
 
+### Why Multiple Bots Instead of One?
+
+- One companion per chat keeps conversation history clean
+- No confusion between different AI personalities in the same thread
+- Each bot has its own context, memory, and personality
+- Feels like messaging different friends, not switching modes
+- Composite ID (`user_id@bot_username`) ensures full isolation
+
 ### Why Async?
 
 - Telegram API is I/O bound
 - LLM calls have high latency
 - Database operations can block
+- Multiple bots run concurrently in the same event loop
 - Async enables responsive handling
 
 ---

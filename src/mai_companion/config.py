@@ -21,7 +21,15 @@ class Settings(BaseSettings):
     # -- Telegram --
     telegram_bot_token: str = Field(
         default="",
-        description="Telegram Bot API token from @BotFather",
+        description="Telegram Bot API token from @BotFather (primary bot)",
+    )
+    telegram_bot_token_2: str = Field(
+        default="",
+        description="Telegram Bot API token for second bot (optional)",
+    )
+    telegram_bot_token_3: str = Field(
+        default="",
+        description="Telegram Bot API token for third bot (optional)",
     )
 
     # -- OpenRouter --
@@ -125,6 +133,26 @@ class Settings(BaseSettings):
         if not self.allowed_users.strip():
             return set()
         return {uid.strip() for uid in self.allowed_users.split(",") if uid.strip()}
+
+    def get_all_bot_tokens(self) -> list[str]:
+        """Return all configured Telegram bot tokens.
+
+        Returns a list of non-empty bot tokens. The primary token is always
+        first, followed by any additional tokens.
+
+        Returns
+        -------
+        list[str]
+            List of bot tokens (at least one if the app is configured).
+        """
+        tokens = []
+        if self.telegram_bot_token.strip():
+            tokens.append(self.telegram_bot_token.strip())
+        if self.telegram_bot_token_2.strip():
+            tokens.append(self.telegram_bot_token_2.strip())
+        if self.telegram_bot_token_3.strip():
+            tokens.append(self.telegram_bot_token_3.strip())
+        return tokens
 
 
 def get_settings() -> Settings:
