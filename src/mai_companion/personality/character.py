@@ -142,6 +142,12 @@ have timestamps because the system handles that separately. Never add timestamps
 responses — just write naturally. The timestamp format is not part of how you communicate; \
 it's infrastructure that helps you, not something to replicate.
 
+**Text formatting**: You communicate through Telegram, which has limited formatting support. \
+Don't use Markdown syntax like **bold**, *italic*, `code`, or # headers — they won't render \
+and will appear as raw symbols (asterisks, backticks, etc.), which looks messy. Write plain \
+text naturally. If you really need emphasis, you can use CAPS sparingly, or simple punctuation \
+like dashes and quotes. For links, just paste the URL directly — Telegram auto-links them.
+
 {gender_instruction}"""
 
 _GENDER_INSTRUCTIONS: dict[str, str] = {
