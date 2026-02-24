@@ -291,8 +291,11 @@ You can also run mAI Companion in console mode without Telegram:
 # Install the package
 pip install -e .
 
-# Run console chat
-mai-chat
+# Run console chat (test mode by default)
+mai-chat -c my-test-companion --start
+
+# For real conversations via CLI (not testing)
+mai-chat -c my-companion --real "Hello!"
 ```
 
 This is useful for:
@@ -300,6 +303,8 @@ This is useful for:
 - Development and debugging
 - Inspecting Telegram conversations (history, wiki, tool calls)
 - Replaying conversation logs
+
+> **Important:** By default, `mai-chat` runs in **test mode** — the AI is informed this is a test/development scenario, not a real conversation. This aligns with our philosophy of transparency. Use `--real` when you genuinely want to have a conversation via the CLI.
 
 > **Tip:** You can use `mai-chat` to inspect your Telegram companion's data too — see [DEBUGGING.md](DEBUGGING.md) for details.
 
@@ -318,9 +323,12 @@ data/
     │   ├── 0900_human-name.md
     │   └── 0500_favorite-food.md
     └── summaries/
-        └── daily/            # Daily conversation summaries
-            ├── 2024-01-15.md
-            └── 2024-01-16.md
+        ├── daily/            # Daily conversation summaries
+        │   ├── 2024-01-15.md
+        │   ├── 2024-01-16.md
+        │   └── .versions/    # Previous versions (from re-consolidation)
+        ├── weekly/           # Weekly rollups
+        └── monthly/          # Monthly rollups
 ```
 
 ---

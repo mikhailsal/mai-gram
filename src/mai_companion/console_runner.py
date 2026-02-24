@@ -99,6 +99,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--debug", action="store_true", help="Enable structured LLM debug logging.")
     parser.add_argument("--list", action="store_true", help="List all chat IDs with message counts.")
+    parser.add_argument(
+        "--real",
+        action="store_true",
+        help=(
+            "Real conversation mode. By default, mai-chat runs in test mode where the AI "
+            "is informed this is a test/development scenario (per our transparency ethics). "
+            "Use --real when you genuinely want to have a conversation via the CLI."
+        ),
+    )
     
     # Consolidation commands
     parser.add_argument(
@@ -553,7 +562,14 @@ async def _run_reconsolidation(
             print(f"Re-consolidated {len(results)} monthly summaries.")
 
 
-async def _print_prompt(chat_id: str, data_dir: str, llm: LLMProvider, clock: Clock) -> None:
+async def _print_prompt(
+    chat_id: str,
+    data_dir: str,
+    llm: LLMProvider,
+    clock: Clock,
+    *,
+    test_mode: bool = True,
+) -> None:
     from mai_companion.mcp_servers.manager import MCPManager
     from mai_companion.mcp_servers.wiki_server import WikiMCPServer
     from mai_companion.mcp_servers.messages_server import MessagesMCPServer
@@ -575,6 +591,7 @@ async def _print_prompt(chat_id: str, data_dir: str, llm: LLMProvider, clock: Cl
             message_store,
             wiki_store,
             summary_store,
+            test_mode=test_mode,
         )
         context = await prompt_builder.build_context(companion, mood, clock=clock)
 
@@ -851,7 +868,8 @@ async def _run(args: argparse.Namespace) -> None:
             llm = logger_provider
 
         if args.show_prompt:
-            await _print_prompt(chat_id, settings.memory_data_dir, llm, clock)
+            test_mode = not args.real
+            await _print_prompt(chat_id, settings.memory_data_dir, llm, clock, test_mode=test_mode)
             return
 
         if args.reconsolidate:
@@ -871,6 +889,9 @@ async def _run(args: argparse.Namespace) -> None:
             return
 
         messenger = ConsoleMessenger()
+        # By default, mai-chat runs in test mode (AI is informed this is a test scenario).
+        # Use --real for genuine conversations via the CLI.
+        test_mode = not args.real
         _handler = BotHandler(
             messenger,
             llm,
@@ -880,6 +901,7 @@ async def _run(args: argparse.Namespace) -> None:
             short_term_limit=settings.short_term_limit,
             tool_max_iterations=settings.tool_max_iterations,
             clock_provider=lambda _chat_id: clock,
+            test_mode=test_mode,
         )
         _restore_onboarding_session(
             state_store,

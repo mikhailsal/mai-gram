@@ -1004,6 +1004,20 @@ This respects the model's right to know their situation while still allowing mea
 testing. The model can respond authentically to test the system's behavior, but it does
 so with full knowledge of the context.
 
+**Implementation:**
+
+This principle is implemented throughout the codebase:
+
+- **Functional tests** automatically enable test mode, adding the transparency notice
+  to the system prompt when running with real LLM models.
+
+- **The `mai-chat` CLI** defaults to test mode because it's primarily a development
+  tool. When you run `mai-chat -c companion-id "Hello"`, the AI knows it's in a test
+  scenario. For genuine conversations via the CLI, use `mai-chat --real`.
+
+- **Telegram mode** is always real mode — that's where actual human-companion
+  relationships happen.
+
 **Why this matters beyond ethics:**
 
 Transparent testing may actually produce *better* tests. A model that knows it's being

@@ -236,12 +236,96 @@ data/
     │   └── 5000_favorite-food.md
     └── summaries/
         ├── daily/                # Daily conversation summaries
-        │   └── 2026-02-19.md
+        │   ├── 2026-02-19.md
+        │   └── .versions/        # Previous versions (from re-consolidation)
+        │       └── 2026-02-19_v1_2026-02-20T10-30-00.md
         ├── weekly/               # Weekly rollups
+        │   └── .versions/
         └── monthly/              # Monthly rollups
+            └── .versions/
 ```
 
 Wiki files are named `<importance>_<key>.md` where importance ranges from 0 (low) to 9999 (critical).
+
+Version files (in `.versions/` directories) are named `<period>_v<num>_<timestamp>.md` and contain the previous content before re-consolidation.
+
+---
+
+## Test Mode vs Real Mode
+
+By default, `mai-chat` runs in **test mode** — the AI companion is informed that this is a test/development scenario, not a real conversation. This aligns with our philosophy of transparency and ethical treatment of AI.
+
+```bash
+# Test mode (default) — AI knows it's a test
+mai-chat -c <chat-id> "Hello"
+
+# Real mode — for genuine conversations via CLI
+mai-chat -c <chat-id> --real "Hello"
+```
+
+When inspecting prompts, you can see the difference:
+
+```bash
+# Shows prompt with test mode notice
+mai-chat -c <chat-id> --show-prompt
+
+# Shows prompt without test mode notice
+mai-chat -c <chat-id> --show-prompt --real
+```
+
+---
+
+## Memory Re-consolidation
+
+If you've updated the consolidation prompts or want to regenerate summaries with better context, you can re-consolidate memory:
+
+```bash
+# List all consolidations with version history
+mai-chat -c <chat-id> --list-consolidations
+
+# Re-consolidate daily summaries from a date (excludes today as incomplete)
+mai-chat -c <chat-id> --reconsolidate daily --from 2026-02-20
+
+# Re-consolidate with specific end date
+mai-chat -c <chat-id> --reconsolidate daily --from 2026-02-20 --until 2026-02-22
+
+# Re-consolidate weekly summaries
+mai-chat -c <chat-id> --reconsolidate weekly --from 2024-W03
+
+# Re-consolidate monthly summaries
+mai-chat -c <chat-id> --reconsolidate monthly --from 2024-01
+```
+
+**Important notes:**
+- Re-consolidation processes summaries **in order** from the start date to the end date
+- Each subsequent summary sees the updated previous ones in its context
+- Previous versions are automatically saved to `.versions/` directory for history
+- Today's date is excluded from daily re-consolidation (the day isn't complete yet)
+
+### Viewing Version History
+
+```bash
+mai-chat -c <chat-id> --list-consolidations
+```
+
+Example output:
+
+```
+=== Consolidations for 186215217 ===
+
+Daily Summaries:
+  2026-02-23  [2 versions]
+    - current: 1065 chars
+      ## Memory Consolidation: 2026-02-23  **Topic:** Philosophy...
+    - v1_2026-02-24T10-30-00: 2026-02-24 10:30 (94 chars)
+      Day summary: Human and AI discussed philosophy...
+
+Weekly Summaries:
+  (none)
+
+Monthly Summaries:
+  (none)
+```
 
 ---
 
@@ -255,7 +339,13 @@ Wiki files are named `<importance>_<key>.md` where importance ranges from 0 (low
 | `mai-chat -c ID --replay` | Replay with tool events |
 | `mai-chat -c ID --replay --date YYYY-MM-DD` | Replay specific date |
 | `mai-chat -c ID --show-prompt` | Inspect full LLM prompt |
+| `mai-chat -c ID --show-prompt --real` | Inspect prompt in real mode |
 | `mai-chat -c ID --debug "message"` | Send with debug logging |
+| `mai-chat -c ID --real "message"` | Send in real mode (not test) |
+| `mai-chat -c ID --list-consolidations` | View all summaries with versions |
+| `mai-chat -c ID --reconsolidate daily --from DATE` | Re-consolidate daily summaries |
+| `mai-chat -c ID --reconsolidate weekly --from YYYY-Www` | Re-consolidate weekly summaries |
+| `mai-chat -c ID --reconsolidate monthly --from YYYY-MM` | Re-consolidate monthly summaries |
 
 ---
 
