@@ -21,12 +21,16 @@ def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
     if keyboard is None:
         return []
 
+    # Handle Telegram InlineKeyboardMarkup object (has inline_keyboard attribute)
+    if hasattr(keyboard, "inline_keyboard"):
+        keyboard = keyboard.inline_keyboard
+
     # Telegram InlineKeyboardMarkup-like dict payload.
     if isinstance(keyboard, dict) and isinstance(keyboard.get("inline_keyboard"), list):
         keyboard = keyboard["inline_keyboard"]
 
     rows: list[Any]
-    if isinstance(keyboard, list):
+    if isinstance(keyboard, (list, tuple)):
         rows = keyboard
     else:
         return []
@@ -34,11 +38,15 @@ def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
     buttons: list[tuple[str, str]] = []
     for row in rows:
         if isinstance(row, tuple) and len(row) == 2:
-            text, callback = row
-            buttons.append((str(text), str(callback)))
-            continue
+            # Check if it's a (text, callback) tuple or a row of buttons
+            first, second = row
+            if isinstance(first, str) and isinstance(second, str):
+                buttons.append((first, second))
+                continue
+            # Otherwise treat as a row of button objects
+            row = list(row)
 
-        if not isinstance(row, list):
+        if not isinstance(row, (list, tuple)):
             continue
 
         for item in row:
@@ -50,6 +58,14 @@ def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
             if isinstance(item, dict):
                 text = item.get("text")
                 callback = item.get("callback_data")
+                if text is not None and callback is not None:
+                    buttons.append((str(text), str(callback)))
+                continue
+
+            # Handle Telegram InlineKeyboardButton objects (have text and callback_data attrs)
+            if hasattr(item, "text") and hasattr(item, "callback_data"):
+                text = item.text
+                callback = item.callback_data
                 if text is not None and callback is not None:
                     buttons.append((str(text), str(callback)))
     return buttons
