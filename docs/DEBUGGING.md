@@ -80,7 +80,7 @@ mai-chat -c <chat-id> --replay
 mai-chat -c <chat-id> --replay --date 2026-02-19
 ```
 
-> **Note:** Tool events only appear in replay when the conversation was run with `--debug` mode enabled (see [Debug Logging](#debug-logging) below).
+> **Note:** Wiki tool calls (create, edit) are always visible in replay because they are logged to a dedicated changelog. Other tool calls (search_messages, sleep, etc.) only appear when the conversation was run with `--debug` mode enabled (see [Debug Logging](#debug-logging) below).
 
 ### Inspect the LLM Prompt
 

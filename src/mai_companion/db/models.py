@@ -247,7 +247,16 @@ class RelationshipEvent(Base):
 
 
 class Message(Base):
-    """Individual conversation message (user or companion)."""
+    """Individual conversation message (user or companion).
+
+    Messages can represent:
+    - User messages (role='user')
+    - Assistant messages (role='assistant'), optionally with tool_calls
+    - Tool result messages (role='tool') with tool_call_id
+
+    Tool calls are stored as JSON to preserve the full conversation flow,
+    allowing the AI to "remember" that it used tools in past conversations.
+    """
 
     __tablename__ = "messages"
 
@@ -255,7 +264,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        doc="Message role: 'user', 'assistant', or 'system'",
+        doc="Message role: 'user', 'assistant', 'tool', or 'system'",
     )
     content: Mapped[str] = mapped_column(
         Text,
@@ -276,6 +285,21 @@ class Message(Base):
         nullable=False,
         default=False,
         doc="Whether this message was self-initiated by the companion",
+    )
+    tool_calls: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        doc=(
+            "JSON-serialized list of tool calls made by the assistant. "
+            "Format: [{id, name, arguments}, ...]. Only set for role='assistant'."
+        ),
+    )
+    tool_call_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        default=None,
+        doc="ID of the tool call this message is responding to. Only set for role='tool'.",
     )
 
     companion: Mapped[Companion] = relationship(back_populates="messages")

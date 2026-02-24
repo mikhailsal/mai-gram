@@ -39,7 +39,7 @@ class Migration:
 _MIGRATIONS: list[Migration] = []
 
 # Current schema version (matches the highest migration version)
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 def register_migration(
@@ -223,6 +223,38 @@ async def _migrate_v6(conn: AsyncConnection) -> None:
         logger.info("Schema v6: added llm_model column to companions")
     else:
         logger.info("Schema v6: llm_model column already exists, skipping")
+
+
+@register_migration(7, "Add tool_calls and tool_call_id to messages")
+async def _migrate_v7(conn: AsyncConnection) -> None:
+    """Version 7: add tool_calls and tool_call_id columns to messages table.
+
+    This enables storing the full conversation flow including tool calls,
+    so the AI can "remember" that it used tools in past conversations.
+    This prevents behavioral drift where the AI stops using tools because
+    it has no memory of ever having done so.
+
+    - tool_calls: JSON array of tool calls for assistant messages
+    - tool_call_id: ID linking tool result messages to their calls
+    """
+    result = await conn.execute(text("PRAGMA table_info(messages)"))
+    columns = {row[1] for row in result.fetchall()}
+
+    if "tool_calls" not in columns:
+        await conn.execute(
+            text("ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT NULL")
+        )
+        logger.info("Schema v7: added tool_calls column to messages")
+    else:
+        logger.info("Schema v7: tool_calls column already exists, skipping")
+
+    if "tool_call_id" not in columns:
+        await conn.execute(
+            text("ALTER TABLE messages ADD COLUMN tool_call_id VARCHAR(100) DEFAULT NULL")
+        )
+        logger.info("Schema v7: added tool_call_id column to messages")
+    else:
+        logger.info("Schema v7: tool_call_id column already exists, skipping")
 
 
 # -- Migration runner --

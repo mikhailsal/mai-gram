@@ -36,8 +36,19 @@ class MessageStore:
         *,
         timestamp: datetime | None = None,
         is_proactive: bool = False,
+        tool_calls: str | None = None,
+        tool_call_id: str | None = None,
     ) -> Message:
-        """Persist a message and return the saved ORM object."""
+        """Persist a message and return the saved ORM object.
+
+        Parameters
+        ----------
+        tool_calls:
+            JSON-serialized list of tool calls for assistant messages.
+            Format: [{"id": "...", "name": "...", "arguments": "..."}, ...]
+        tool_call_id:
+            ID of the tool call this message responds to (for role='tool').
+        """
         if timestamp is not None:
             result = await self._session.execute(
                 select(Message.timestamp)
@@ -62,6 +73,8 @@ class MessageStore:
             role=role,
             content=content,
             is_proactive=is_proactive,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
         )
         if timestamp is not None:
             message.timestamp = timestamp

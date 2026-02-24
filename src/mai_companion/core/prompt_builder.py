@@ -9,12 +9,13 @@ in earlier versions of the application.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
 from mai_companion.clock import Clock
-from mai_companion.db.models import Companion
-from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole
+from mai_companion.db.models import Companion, Message
+from mai_companion.llm.provider import ChatMessage, LLMProvider, MessageRole, ToolCall
 from mai_companion.memory.knowledge_base import WikiStore
 from mai_companion.memory.messages import MessageStore
 from mai_companion.memory.summaries import StoredSummary, SummaryStore
@@ -74,17 +75,8 @@ class PromptBuilder:
 
         llm_history = []
         for msg in sorted(recent_messages, key=lambda item: item.id):
-            role = MessageRole.USER if msg.role == "user" else MessageRole.ASSISTANT
-            if msg.role == "user":
-                # Timestamps on user messages help the companion understand
-                # when things were said (time gaps, time of day, etc.)
-                content = f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}"
-            else:
-                # Do NOT prepend timestamps to assistant messages — the LLM
-                # will imitate the pattern and embed timestamps in its own
-                # responses, which then snowball on subsequent context builds.
-                content = msg.content
-            llm_history.append(ChatMessage(role=role, content=content))
+            chat_msg = self._message_to_chat_message(msg)
+            llm_history.append(chat_msg)
 
         warned = False
         while True:
@@ -123,6 +115,57 @@ class PromptBuilder:
                 daily.pop(0)
                 continue
             return context
+
+    def _message_to_chat_message(self, msg: Message) -> ChatMessage:
+        """Convert a stored Message to a ChatMessage for LLM context.
+
+        Handles all message types including tool calls and tool results,
+        so the AI can "see" its own tool usage in past conversations.
+        """
+        # Determine role
+        if msg.role == "user":
+            role = MessageRole.USER
+            # Timestamps on user messages help the companion understand
+            # when things were said (time gaps, time of day, etc.)
+            content = f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}"
+            return ChatMessage(role=role, content=content)
+
+        if msg.role == "tool":
+            # Tool result message
+            return ChatMessage(
+                role=MessageRole.TOOL,
+                content=msg.content,
+                tool_call_id=msg.tool_call_id,
+            )
+
+        # Assistant message - may have tool calls
+        role = MessageRole.ASSISTANT
+        # Do NOT prepend timestamps to assistant messages — the LLM
+        # will imitate the pattern and embed timestamps in its own
+        # responses, which then snowball on subsequent context builds.
+        content = msg.content
+
+        # Parse tool calls if present
+        tool_calls: list[ToolCall] | None = None
+        if msg.tool_calls:
+            try:
+                raw_calls = json.loads(msg.tool_calls)
+                tool_calls = [
+                    ToolCall(
+                        id=tc["id"],
+                        name=tc["name"],
+                        arguments=tc["arguments"],
+                    )
+                    for tc in raw_calls
+                ]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                # If parsing fails, treat as regular message without tool calls
+                logger.warning(
+                    "Failed to parse tool_calls JSON for message %s", msg.id
+                )
+                tool_calls = None
+
+        return ChatMessage(role=role, content=content, tool_calls=tool_calls)
 
     def _build_system_prompt(
         self,

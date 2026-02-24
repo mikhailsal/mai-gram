@@ -174,6 +174,27 @@ class TestWikiStore:
         assert entry.key == "human_name_2026"
         assert (tmp_path / companion_id / "wiki" / "9999_human_name_2026.md").exists()
 
+    async def test_key_sanitization_cyrillic(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        """Ensure Cyrillic (and other Unicode) keys are preserved."""
+        companion_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+
+        # Cyrillic key
+        entry = await store.create_entry(
+            companion_id, "Любимый цвет", "Синий", 3000
+        )
+        assert entry.key == "любимый_цвет"
+        assert (tmp_path / companion_id / "wiki" / "3000_любимый_цвет.md").exists()
+
+        # CJK key (Chinese)
+        entry2 = await store.create_entry(
+            companion_id, "名前", "太郎", 9999
+        )
+        assert entry2.key == "名前"
+        assert (tmp_path / companion_id / "wiki" / "9999_名前.md").exists()
+
     async def test_edit_restores_missing_file(
         self, session: AsyncSession, tmp_path: Path
     ) -> None:

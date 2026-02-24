@@ -55,7 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", action="store_true", help="Dispatch /start onboarding command.")
     parser.add_argument("--date", type=_parse_target_date, help="Virtual target date (YYYY-MM-DD).")
     parser.add_argument("--history", action="store_true", help="Show conversation history.")
-    parser.add_argument("--replay", action="store_true", help="Replay conversation by day with tool events.")
+    parser.add_argument("--replay", action="store_true", help="Replay conversation by day with tool calls (wiki always, others need --debug).")
     parser.add_argument("--wiki", action="store_true", help="Show wiki entries.")
     parser.add_argument("--summaries", action="store_true", help="Show stored summaries.")
     parser.add_argument("--show-prompt", action="store_true", help="Print assembled LLM prompt.")
@@ -119,28 +119,19 @@ def _load_tool_events(
     data_dir: str,
     target_date: date | None = None,
 ) -> dict[date, list[tuple[datetime, str]]]:
-    debug_dir = Path(data_dir) / "debug_logs" / chat_id
-    if not debug_dir.exists():
-        return {}
-
     events: dict[date, list[tuple[datetime, str]]] = defaultdict(list)
-    if target_date is not None:
-        candidate_paths = [debug_dir / f"{target_date.isoformat()}.jsonl"]
-    else:
-        candidate_paths = sorted(debug_dir.glob("*.jsonl"))
 
-    for path in candidate_paths:
-        if not path.exists():
-            continue
-        for raw in path.read_text(encoding="utf-8").splitlines():
+    # Load from wiki changelog (always available, written by WikiMCPServer)
+    wiki_changelog = Path(data_dir) / chat_id / "wiki" / "changelog.jsonl"
+    has_wiki_changelog = wiki_changelog.exists()
+    if has_wiki_changelog:
+        for raw in wiki_changelog.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if not line:
                 continue
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
-                continue
-            if payload.get("entry_type") != "tool_result":
                 continue
 
             timestamp_raw = payload.get("timestamp")
@@ -155,17 +146,72 @@ def _load_tool_events(
             if target_date is not None and event_date != target_date:
                 continue
 
-            tool_name = str(payload.get("tool_name", "unknown_tool"))
-            arguments = payload.get("arguments")
-            if isinstance(arguments, str):
-                arg_text = arguments
-            elif isinstance(arguments, dict):
-                arg_text = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
-            else:
-                arg_text = ""
-
-            display = f"[tool] {tool_name}({arg_text})" if arg_text else f"[tool] {tool_name}()"
+            action = payload.get("action", "unknown")
+            key = payload.get("key", "")
+            # Map changelog actions to tool names
+            tool_name = f"wiki_{action}"
+            args_parts = [f"key={key!r}"]
+            if "content" in payload:
+                content = payload["content"]
+                # Truncate long content for display
+                if len(content) > 50:
+                    content = content[:47] + "..."
+                args_parts.append(f"content={content!r}")
+            if "importance" in payload:
+                args_parts.append(f"importance={payload['importance']}")
+            arg_text = ", ".join(args_parts)
+            display = f"[tool] {tool_name}({arg_text})"
             events[event_date].append((timestamp, display))
+
+    # Load from debug logs (only available when --debug was used)
+    debug_dir = Path(data_dir) / "debug_logs" / chat_id
+    if debug_dir.exists():
+        if target_date is not None:
+            candidate_paths = [debug_dir / f"{target_date.isoformat()}.jsonl"]
+        else:
+            candidate_paths = sorted(debug_dir.glob("*.jsonl"))
+
+        for path in candidate_paths:
+            if not path.exists():
+                continue
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("entry_type") != "tool_result":
+                    continue
+
+                timestamp_raw = payload.get("timestamp")
+                if not isinstance(timestamp_raw, str):
+                    continue
+                try:
+                    timestamp = datetime.fromisoformat(timestamp_raw.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                timestamp = timestamp.astimezone(timezone.utc)
+                event_date = timestamp.date()
+                if target_date is not None and event_date != target_date:
+                    continue
+
+                tool_name = str(payload.get("tool_name", "unknown_tool"))
+                # Skip wiki tools if already loaded from changelog to avoid duplicates
+                if has_wiki_changelog and tool_name.startswith("wiki_"):
+                    continue
+
+                arguments = payload.get("arguments")
+                if isinstance(arguments, str):
+                    arg_text = arguments
+                elif isinstance(arguments, dict):
+                    arg_text = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
+                else:
+                    arg_text = ""
+
+                display = f"[tool] {tool_name}({arg_text})" if arg_text else f"[tool] {tool_name}()"
+                events[event_date].append((timestamp, display))
 
     return events
 
@@ -224,9 +270,46 @@ async def _print_replay(chat_id: str, *, data_dir: str, target_date: date | None
                 ts = ts.replace(tzinfo=timezone.utc)
             else:
                 ts = ts.astimezone(timezone.utc)
-            timeline.append((ts, "message", f"[{_format_time(ts)}] {item.role.upper()}: {item.content}"))
-        for tool_ts, tool_line in tool_events.get(day, []):
-            timeline.append((tool_ts, "tool", f"           {tool_line}"))
+
+            # Format the message line
+            content = item.content.rstrip() if item.content else ""
+            if item.role == "tool":
+                # Tool result message
+                tool_id = item.tool_call_id or "unknown"
+                content_preview = content[:50] + "..." if len(content) > 50 else content
+                timeline.append((ts, "tool_result", f"[tool result:{tool_id}] {content_preview}"))
+            else:
+                timeline.append((ts, "message", f"[{_format_time(ts)}] {item.role.upper()}: {content}"))
+
+                # If this assistant message has tool calls, show them
+                if item.role == "assistant" and item.tool_calls:
+                    try:
+                        tool_calls_data = json.loads(item.tool_calls)
+                        for tc in tool_calls_data:
+                            tc_name = tc.get("name", "unknown")
+                            tc_args = tc.get("arguments", "")
+                            # Parse arguments if it's a JSON string
+                            if isinstance(tc_args, str) and tc_args.strip():
+                                try:
+                                    args_dict = json.loads(tc_args)
+                                    args_text = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
+                                except json.JSONDecodeError:
+                                    args_text = tc_args
+                            else:
+                                args_text = ""
+                            tc_line = f"[tool] {tc_name}({args_text})" if args_text else f"[tool] {tc_name}()"
+                            timeline.append((ts, "tool_call", tc_line))
+                    except json.JSONDecodeError:
+                        pass  # Skip malformed tool_calls JSON
+
+        # Add tool events from changelog/debug logs ONLY if no tool calls in DB
+        # This provides backwards compatibility for old data
+        has_db_tool_calls = any(
+            (item.tool_calls or item.role == "tool") for item in messages_by_day[day]
+        )
+        if not has_db_tool_calls:
+            for tool_ts, tool_line in tool_events.get(day, []):
+                timeline.append((tool_ts, "tool", tool_line))
 
         timeline.sort(key=lambda event: (event[0], 0 if event[1] == "message" else 1))
         for _, _, line in timeline:

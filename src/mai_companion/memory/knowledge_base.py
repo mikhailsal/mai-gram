@@ -227,8 +227,22 @@ class WikiStore:
 
     @staticmethod
     def _sanitize_key(key: str) -> str:
-        normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", key.strip().lower())
+        """Sanitize a wiki key for use as a filename.
+
+        Preserves Unicode letters (Cyrillic, CJK, etc.) while removing
+        characters that are problematic for filesystems.
+        """
+        # Strip and lowercase
+        normalized = key.strip().lower()
+
+        # Replace filesystem-unsafe characters with underscores.
+        # Keep: Unicode letters (\w includes them), digits, underscores, hyphens.
+        # The \w pattern in Python regex with no ASCII flag matches Unicode letters.
+        normalized = re.sub(r"[^\w\-]+", "_", normalized, flags=re.UNICODE)
+
+        # Collapse multiple underscores and strip leading/trailing underscores
         normalized = re.sub(r"_+", "_", normalized).strip("_")
+
         if not normalized:
             raise ValueError("Wiki key becomes empty after sanitization")
         return normalized

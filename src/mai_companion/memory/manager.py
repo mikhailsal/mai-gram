@@ -40,7 +40,18 @@ class MemoryManager:
         clock: Clock | None = None,
         is_proactive: bool = False,
         trigger_summary: bool = False,
+        tool_calls: str | None = None,
+        tool_call_id: str | None = None,
     ) -> Message:
+        """Save a message to the conversation history.
+
+        Parameters
+        ----------
+        tool_calls:
+            JSON-serialized list of tool calls for assistant messages.
+        tool_call_id:
+            ID of the tool call this message responds to (for role='tool').
+        """
         effective_timestamp = timestamp or (clock.now() if clock is not None else None)
         message = await self._message_store.save_message(
             companion_id,
@@ -48,6 +59,8 @@ class MemoryManager:
             content,
             timestamp=effective_timestamp,
             is_proactive=is_proactive,
+            tool_calls=tool_calls,
+            tool_call_id=tool_call_id,
         )
         if trigger_summary:
             day = (effective_timestamp or message.timestamp).date()

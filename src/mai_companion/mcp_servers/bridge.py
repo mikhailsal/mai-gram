@@ -67,6 +67,14 @@ def mcp_result_to_openai(result: Any) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+def serialize_tool_calls(tool_calls: list[ToolCall]) -> str:
+    """Serialize tool calls to JSON for database storage."""
+    return json.dumps(
+        [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
+        ensure_ascii=False,
+    )
+
+
 async def run_with_tools(
     llm: LLMProvider,
     manager: MCPManager,
@@ -79,6 +87,7 @@ async def run_with_tools(
     tool_choice: str | dict | None = "auto",
     on_tool_result: Callable[..., Awaitable[None] | None] | None = None,
     on_intermediate_content: Callable[[str], Awaitable[None] | None] | None = None,
+    on_assistant_tool_call: Callable[..., Awaitable[None] | None] | None = None,
 ) -> LLMResponse:
     """Run an agentic loop: LLM -> tools -> LLM until completion.
 
@@ -89,6 +98,10 @@ async def run_with_tools(
         enables multi-message behaviour: the text is dispatched as a
         standalone message *before* the tool executes, so the human
         sees it immediately.
+    on_assistant_tool_call:
+        Called when the assistant produces a message with tool calls.
+        Receives: content (str), tool_calls_json (str).
+        Use this to persist the assistant's tool-calling decision to the database.
     """
     if max_iterations < 1:
         raise ValueError("max_iterations must be >= 1")
@@ -128,6 +141,17 @@ async def run_with_tools(
                 cb_result = on_intermediate_content(response.content.strip())
                 if inspect.isawaitable(cb_result):
                     await cb_result
+
+        # Notify caller about the assistant's tool-calling decision for persistence.
+        # This allows the full conversation flow (including tool calls) to be saved.
+        if on_assistant_tool_call is not None:
+            tool_calls_json = serialize_tool_calls(response.tool_calls)
+            cb_result = on_assistant_tool_call(
+                content=response.content or "",
+                tool_calls_json=tool_calls_json,
+            )
+            if inspect.isawaitable(cb_result):
+                await cb_result
 
         conversation.append(
             ChatMessage(

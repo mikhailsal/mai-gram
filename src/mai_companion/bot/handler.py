@@ -478,9 +478,9 @@ class BotHandler:
             mood = await mood_manager.get_current_mood(companion.id, traits)
 
             llm_messages = await prompt_builder.build_context(companion, mood, clock=clock)
-            tool_result_observer = getattr(self._llm, "record_tool_execution", None)
-            if not callable(tool_result_observer):
-                tool_result_observer = None
+            debug_tool_observer = getattr(self._llm, "record_tool_execution", None)
+            if not callable(debug_tool_observer):
+                debug_tool_observer = None
 
             # Callback to deliver intermediate messages (multi-message support).
             # When the LLM produces text alongside a tool call (e.g. sleep),
@@ -495,6 +495,48 @@ class BotHandler:
                 )
                 await self._messenger.send_typing_indicator(message.chat_id)
 
+            # Callback to save assistant messages with tool calls to the database.
+            # This ensures the AI "remembers" that it used tools in past conversations.
+            async def _save_assistant_tool_call(content: str, tool_calls_json: str) -> None:
+                await memory_manager.save_message(
+                    companion.id,
+                    "assistant",
+                    content,
+                    clock=clock,
+                    is_proactive=False,
+                    tool_calls=tool_calls_json,
+                )
+
+            # Callback to save tool results to the database and optionally log for debug.
+            async def _save_tool_result(
+                tool_call_id: str,
+                tool_name: str,
+                arguments: str,
+                result: str | None,
+                error: str | None,
+                server_name: str | None,
+            ) -> None:
+                # Save tool result message to database
+                result_content = error if error else (result or "")
+                await memory_manager.save_message(
+                    companion.id,
+                    "tool",
+                    result_content,
+                    clock=clock,
+                    is_proactive=False,
+                    tool_call_id=tool_call_id,
+                )
+                # Also call debug logger if available
+                if debug_tool_observer is not None:
+                    debug_tool_observer(
+                        tool_call_id=tool_call_id,
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        result=result,
+                        error=error,
+                        server_name=server_name,
+                    )
+
             # Generate response using the companion's bound model.
             # The model is the companion's "soul" -- captured at creation time
             # to protect their identity from casual model changes in .env.
@@ -506,24 +548,20 @@ class BotHandler:
                     model=companion.llm_model,
                     temperature=companion.temperature,
                     max_iterations=self._tool_max_iterations,
-                    on_tool_result=tool_result_observer,
+                    on_tool_result=_save_tool_result,
                     on_intermediate_content=_send_intermediate,
+                    on_assistant_tool_call=_save_assistant_tool_call,
                 )
                 response_text = response.content
 
-                # Save all parts (intermediate + final) as individual messages
-                # so the conversation history reflects the multi-message flow.
-                for part in intermediate_parts:
-                    await memory_manager.save_message(
-                        companion.id,
-                        "assistant",
-                        part,
-                        clock=clock,
-                        is_proactive=False,
-                    )
+                # NOTE: Intermediate messages that came with tool calls are now
+                # saved via _save_assistant_tool_call (with tool_calls field set).
+                # We no longer save them separately here to avoid duplicates.
+                # The intermediate_parts list is still used for UI delivery only.
 
                 # Save the companion's final response (may be empty if
                 # everything was delivered via intermediate messages).
+                # This is the response WITHOUT tool calls (the final answer).
                 if response_text and response_text.strip():
                     await memory_manager.save_message(
                         companion.id,
