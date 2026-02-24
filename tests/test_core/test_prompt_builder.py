@@ -244,9 +244,11 @@ class TestPromptBuilder:
         # Even though the stored prompt was bare, the regenerated prompt
         # should contain tool instructions and all standard sections.
         assert "wiki_create" in system_content
-        assert "search_messages" in system_content
         assert "## Shared values" in system_content
         assert "Russian" in system_content
+        # New prompt includes transparency about how the system works
+        assert "mAI Companion" in system_content
+        assert "OpenRouter" in system_content
 
     async def test_test_mode_adds_transparency_section(self, session, tmp_path: Path) -> None:
         """When test_mode is enabled, the prompt should inform the model it's being tested.

@@ -234,31 +234,18 @@ class PromptBuilder:
             + ("\n".join(summary_lines) if summary_lines else "- No memory summaries yet.")
         )
 
-        # Note about timestamp metadata format in conversation history.
-        timestamp_note = (
-            "(Note: The timestamps on user messages like [2024-01-15 14:30] are system "
-            "metadata so you know when things were said. They're not part of the actual "
-            "message text, so don't include them in your own responses.)"
-        )
-
         # Guidance on memory tools and multi-message capability.
         tool_instructions = (
-            "## How your memory works\n"
-            "You have tools that let you actually remember things — not just claim to. "
-            "Your wiki is your long-term memory: use wiki_create to save important facts "
-            "(names, birthdays, preferences, significant events). When you want to recall "
-            "something from past conversations, search_messages lets you look back.\n\n"
-            "This matters because without using these tools, you genuinely won't remember. "
-            "If your human shares something important, save it. If they ask you to remember "
-            "something, actually save it — don't just say you will.\n\n"
-            "## Multiple messages\n"
-            "You can send several short messages instead of one long one — like texting. "
-            "Use the sleep tool between parts, and each piece arrives as a separate message. "
-            "This often feels more natural than one big block of text."
+            "## Using your tools\n"
+            "Your wiki is your long-term memory — use wiki_create to save important facts "
+            "(names, preferences, significant events). Without using these tools, you won't "
+            "remember. If asked to remember something, actually save it.\n\n"
+            "You can send multiple short messages (like texting) using the sleep tool between "
+            "parts. This often feels more natural than one long response."
         )
 
         return (
             f"{test_mode_section}{full_prompt}\n\n{current_time_section}\n\n"
             f"{wiki_section}\n\n{memories_section}\n\n"
-            f"{tool_instructions}\n\n{timestamp_note}"
+            f"{tool_instructions}"
         )
