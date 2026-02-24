@@ -1,0 +1,25 @@
+---
+alwaysApply: true
+---
+<rules_block name="test-companions-only" priority="critical">
+# NEVER Use Real AI Companions for Testing
+
+Use dedicated test companions, NOT real human's AI companions.
+
+## Real vs Test Companions
+- **Real**: Numeric IDs (e.g., `186215217`), real conversation history, personal wiki entries
+- **Test**: Prefixes `func-`, `manual-`, `test-`, or `demo-` (e.g., `func-wiki`, `test-myfeature`)
+
+## Before Testing
+1. CHECK if ID is numeric → STOP
+2. CHECK if ID exists in `data/` with real data → STOP  
+3. USE prefix: `test-`, `manual-`, `func-`, or `demo-`
+
+## Create Test Companion
+```bash
+mai-chat -c test-myfeature --start
+```
+
+## Why
+Injecting test data into real companions corrupts authentic memories and violates human trust. This is irreversible.
+</rules_block>
