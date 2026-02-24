@@ -87,25 +87,37 @@ class MessageStore:
         self,
         companion_id: str,
         *,
-        limit: int = 30,
+        limit: int = 50,
         now: datetime | None = None,
+        exclude_consolidated_dates: list[date] | None = None,
     ) -> list[Message]:
-        """Return recent messages + all messages from today, deduplicated.
+        """Return all messages from today.
+
+        Past days should have daily summaries; raw messages from past days
+        are not included to avoid duplication. If a past day lacks a summary,
+        the backfill mechanism in PromptBuilder will create one before
+        building the context.
 
         The final result is ordered by message id descending (newest first).
+
+        Parameters
+        ----------
+        limit:
+            Unused (kept for API compatibility). Today's messages have no limit.
+        now:
+            Current time (for determining "today"). Defaults to UTC now.
+        exclude_consolidated_dates:
+            Unused (kept for API compatibility). Only today's messages are
+            returned, which are never excluded.
         """
+        del limit, exclude_consolidated_dates  # Unused, kept for compatibility
+
         current = now or datetime.now(timezone.utc)
-        today_start = datetime.combine(current.date(), time.min)
+        today = current.date()
+        today_start = datetime.combine(today, time.min)
         tomorrow_start = today_start + timedelta(days=1)
 
-        recent_result = await self._session.execute(
-            select(Message)
-            .where(Message.companion_id == companion_id)
-            .order_by(desc(Message.id))
-            .limit(limit)
-        )
-        recent_messages = list(recent_result.scalars().all())
-
+        # Fetch ALL messages from today (no limit)
         today_result = await self._session.execute(
             select(Message)
             .where(
@@ -119,13 +131,7 @@ class MessageStore:
         )
         today_messages = list(today_result.scalars().all())
 
-        by_id: dict[int, Message] = {}
-        for message in recent_messages:
-            by_id[message.id] = message
-        for message in today_messages:
-            by_id[message.id] = message
-
-        return sorted(by_id.values(), key=lambda message: message.id, reverse=True)
+        return today_messages
 
     async def search(
         self,
@@ -341,3 +347,46 @@ class MessageStore:
         messages = list(result.scalars().all())
 
         return messages, total_count
+
+    async def get_dates_with_messages(
+        self,
+        companion_id: str,
+        *,
+        before_date: date | None = None,
+    ) -> list[date]:
+        """Return all unique dates that have messages.
+
+        Parameters
+        ----------
+        before_date:
+            If provided, only return dates strictly before this date.
+            Useful for getting past days (excluding today).
+
+        Returns
+        -------
+        List of dates in ascending order.
+        """
+        conditions = [Message.companion_id == companion_id]
+        if before_date is not None:
+            cutoff = datetime.combine(before_date, time.min)
+            conditions.append(Message.timestamp < cutoff)
+
+        # Fetch all timestamps and extract unique dates in Python
+        # (more portable than SQL date casting across different databases)
+        result = await self._session.execute(
+            select(Message.timestamp)
+            .where(and_(*conditions))
+            .order_by(Message.timestamp.asc())
+        )
+        timestamps = [row[0] for row in result.all()]
+
+        # Extract unique dates
+        seen: set[date] = set()
+        dates: list[date] = []
+        for ts in timestamps:
+            d = ts.date() if isinstance(ts, datetime) else ts
+            if d not in seen:
+                seen.add(d)
+                dates.append(d)
+
+        return dates

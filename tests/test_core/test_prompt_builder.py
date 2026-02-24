@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -92,12 +92,19 @@ class TestPromptBuilder:
         message_store = MessageStore(session)
         wiki_store = WikiStore(session, data_dir=tmp_path)
         summary_store = SummaryStore(data_dir=tmp_path)
-        await message_store.save_message(companion.id, "user", "Hello")
-        summary_store.save_daily(companion.id, datetime.now(timezone.utc).date(), "memory")
+
+        # Use consistent dates: message is from "today" (2026-02-19),
+        # daily summary is from a previous day (2026-02-18)
+        fixed_now = datetime(2026, 2, 19, 14, 35, tzinfo=timezone.utc)
+        await message_store.save_message(
+            companion.id, "user", "Hello", timestamp=fixed_now
+        )
+        # Summary for a previous day - won't exclude today's messages
+        from datetime import date
+        summary_store.save_daily(companion.id, date(2026, 2, 18), "memory")
         await wiki_store.create_entry(companion.id, "human_name", "Alex", 9999)
         builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
 
-        fixed_now = datetime(2026, 2, 19, 14, 35, tzinfo=timezone.utc)
         context = await builder.build_context(companion, _mood(), current_time=fixed_now)
 
         assert context[0].role.value == "system"
@@ -111,11 +118,17 @@ class TestPromptBuilder:
         message_store = MessageStore(session)
         wiki_store = WikiStore(session, data_dir=tmp_path)
         summary_store = SummaryStore(data_dir=tmp_path)
-        await message_store.save_message(companion.id, "user", "first")
-        await message_store.save_message(companion.id, "assistant", "second")
+
+        # Use consistent timestamps: messages are from "today" (fixed_now's date)
+        fixed_now = datetime(2026, 2, 19, 14, 35, tzinfo=timezone.utc)
+        await message_store.save_message(
+            companion.id, "user", "first", timestamp=fixed_now - timedelta(minutes=5)
+        )
+        await message_store.save_message(
+            companion.id, "assistant", "second", timestamp=fixed_now - timedelta(minutes=4)
+        )
         builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
 
-        fixed_now = datetime(2026, 2, 19, 14, 35, tzinfo=timezone.utc)
         context = await builder.build_context(companion, _mood(), current_time=fixed_now)
 
         history_contents = [m.content for m in context[1:]]
@@ -292,3 +305,59 @@ class TestPromptBuilder:
         # No test mode section should be present
         assert "## IMPORTANT: Test/Debug Scenario" not in system_content
         assert "simulated test inputs" not in system_content.lower()
+
+    async def test_only_today_messages_in_context(
+        self, session, tmp_path: Path
+    ) -> None:
+        """Only today's messages appear in context; past days use summaries.
+
+        The prompt builder only includes messages from today. Past days
+        should have daily summaries (backfill ensures no gaps exist).
+        """
+        from datetime import date
+
+        companion = await _create_companion(session)
+        message_store = MessageStore(session)
+        wiki_store = WikiStore(session, data_dir=tmp_path)
+        summary_store = SummaryStore(data_dir=tmp_path)
+
+        # "Today" is Feb 20
+        fixed_now = datetime(2026, 2, 20, 14, 0, tzinfo=timezone.utc)
+
+        # Message from Feb 18 (past day - should not appear in message context)
+        feb18 = datetime(2026, 2, 18, 10, 0, tzinfo=timezone.utc)
+        await message_store.save_message(
+            companion.id, "user", "Message from Feb 18", timestamp=feb18
+        )
+
+        # Message from Feb 19 (past day - should not appear in message context)
+        feb19 = datetime(2026, 2, 19, 10, 0, tzinfo=timezone.utc)
+        await message_store.save_message(
+            companion.id, "user", "Message from Feb 19", timestamp=feb19
+        )
+
+        # Message from Feb 20 "today" (should appear in message context)
+        await message_store.save_message(
+            companion.id, "user", "Message from today", timestamp=fixed_now
+        )
+
+        # Create daily summaries for past days
+        summary_store.save_daily(companion.id, date(2026, 2, 18), "Summary for Feb 18")
+        summary_store.save_daily(companion.id, date(2026, 2, 19), "Summary for Feb 19")
+
+        builder = PromptBuilder(_MockLLM(), message_store, wiki_store, summary_store)
+        context = await builder.build_context(companion, _mood(), current_time=fixed_now)
+
+        # Extract message contents from context (skip system message)
+        message_contents = [m.content for m in context[1:]]
+
+        # Past days' messages should NOT appear in message context
+        assert not any("Feb 18" in content for content in message_contents)
+        assert not any("Feb 19" in content for content in message_contents)
+
+        # Today's message should appear in message context
+        assert any("today" in content for content in message_contents)
+
+        # Summaries for past days should appear in the system prompt
+        assert "Summary for Feb 18" in context[0].content
+        assert "Summary for Feb 19" in context[0].content

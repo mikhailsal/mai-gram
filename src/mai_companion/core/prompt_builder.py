@@ -63,9 +63,11 @@ class PromptBuilder:
             companion.id, limit=self._wiki_context_limit
         )
         summaries = self._summary_store.get_all_summaries(companion.id)
+
+        # Get today's messages. Past days are covered by daily summaries
+        # (backfill ensures no gaps exist before we reach this point).
         recent_messages = await self._message_store.get_short_term(
             companion.id,
-            limit=self._short_term_limit,
             now=now,
         )
 

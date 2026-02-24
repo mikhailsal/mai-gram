@@ -578,6 +578,53 @@ class MemorySummarizer:
         await self.generate_daily_summary(companion_id, day)
         return True
 
+    async def backfill_missing_summaries(
+        self,
+        companion_id: str,
+        *,
+        today: date | None = None,
+    ) -> list[date]:
+        """Create daily summaries for all past days that have messages but no summary.
+
+        This ensures that no conversation history is lost due to:
+        - Days that didn't reach the message threshold
+        - Historical data from before consolidation was implemented
+        - Any other gaps in the consolidation process
+
+        Parameters
+        ----------
+        companion_id:
+            The companion to backfill summaries for.
+        today:
+            Current date. Defaults to UTC today. Today is excluded since
+            the day is not yet complete.
+
+        Returns
+        -------
+        List of dates that were backfilled.
+        """
+        current_day = today or datetime.now(timezone.utc).date()
+
+        # Get all dates with messages (excluding today)
+        dates_with_messages = await self._message_store.get_dates_with_messages(
+            companion_id, before_date=current_day
+        )
+
+        # Get dates that already have summaries
+        dates_with_summaries = set(self._summary_store.list_dailies(companion_id))
+
+        # Find gaps: dates with messages but no summary
+        missing_dates = [d for d in dates_with_messages if d not in dates_with_summaries]
+
+        # Generate summaries for missing dates (in chronological order)
+        backfilled: list[date] = []
+        for target_date in missing_dates:
+            summary = await self.generate_daily_summary(companion_id, target_date)
+            if summary:
+                backfilled.append(target_date)
+
+        return backfilled
+
     # ---------------------------------------------------------------------------
     # Re-consolidation methods
     # ---------------------------------------------------------------------------

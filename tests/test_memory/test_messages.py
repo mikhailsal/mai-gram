@@ -33,43 +33,58 @@ class TestMessageStore:
         assert messages[0].role == "user"
         assert isinstance(messages[0].timestamp, datetime)
 
-    async def test_short_term_limit(self, session: AsyncSession) -> None:
-        companion_id = await _create_companion(session)
-        store = MessageStore(session)
+    async def test_short_term_returns_only_today(self, session: AsyncSession) -> None:
+        """get_short_term only returns messages from today.
 
-        base = datetime(2026, 1, 1, 12, 0, 0)
-        for i in range(40):
-            await store.save_message(
-                companion_id,
-                "user",
-                f"msg-{i}",
-                timestamp=base + timedelta(minutes=i),
-            )
-
-        messages = await store.get_short_term(companion_id, limit=30, now=datetime(2026, 1, 2, 8, 0))
-        assert len(messages) == 30
-        assert messages[0].content == "msg-39"
-        assert messages[-1].content == "msg-10"
-
-    async def test_short_term_includes_all_today(self, session: AsyncSession) -> None:
+        Past days should have daily summaries (via backfill mechanism).
+        Raw messages from past days are not included to avoid duplication.
+        """
         companion_id = await _create_companion(session)
         store = MessageStore(session)
 
         today = datetime(2026, 2, 14, 9, 0, 0)
         yesterday = today - timedelta(days=1)
 
+        # Create messages from yesterday
         for i in range(5):
             await store.save_message(
                 companion_id, "assistant", f"y-{i}", timestamp=yesterday + timedelta(minutes=i)
             )
+        # Create messages from today
         for i in range(35):
             await store.save_message(
                 companion_id, "user", f"t-{i}", timestamp=today + timedelta(minutes=i)
             )
 
-        messages = await store.get_short_term(companion_id, limit=30, now=today)
+        messages = await store.get_short_term(companion_id, now=today)
+
+        # Only today's messages should be returned
         assert len(messages) == 35
-        assert all(message.content.startswith("t-") for message in messages)
+        assert all(m.content.startswith("t-") for m in messages)
+
+    async def test_short_term_all_today_messages(self, session: AsyncSession) -> None:
+        """All of today's messages are included with no limit.
+
+        Even if there are many messages, all are returned since the AI
+        needs full visibility of the current conversation.
+        """
+        companion_id = await _create_companion(session)
+        store = MessageStore(session)
+        now = datetime(2026, 2, 14, 9, 0, 0)
+
+        # Create many messages for today
+        for i in range(100):
+            await store.save_message(
+                companion_id,
+                "user",
+                f"msg-{i}",
+                timestamp=now + timedelta(minutes=i),
+            )
+
+        messages = await store.get_short_term(companion_id, now=now)
+
+        # All 100 messages should be returned (no limit)
+        assert len(messages) == 100
 
     async def test_short_term_deduplication(self, session: AsyncSession) -> None:
         companion_id = await _create_companion(session)

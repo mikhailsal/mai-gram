@@ -475,6 +475,20 @@ class BotHandler:
                 trigger_summary=True,
             )
 
+            # Backfill any missing daily summaries for past days.
+            # This ensures no conversation history is lost, even for days
+            # that didn't reach the message threshold or historical data.
+            backfilled = await summarizer.backfill_missing_summaries(
+                companion.id, today=clock.today()
+            )
+            if backfilled:
+                logger.info(
+                    "Backfilled %d missing daily summaries for companion %s: %s",
+                    len(backfilled),
+                    companion.id,
+                    [d.isoformat() for d in backfilled],
+                )
+
             # Get current mood
             traits = json.loads(companion.personality_traits)
             mood_manager = MoodManager(session)

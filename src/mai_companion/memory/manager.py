@@ -72,12 +72,18 @@ class MemoryManager:
         return message
 
     async def get_short_term(
-        self, companion_id: str, *, limit: int = 30, clock: Clock | None = None
+        self,
+        companion_id: str,
+        *,
+        limit: int = 30,
+        clock: Clock | None = None,
+        exclude_consolidated_dates: list[date] | None = None,
     ) -> list[Message]:
         return await self._message_store.get_short_term(
             companion_id,
             limit=limit,
             now=clock.now() if clock is not None else None,
+            exclude_consolidated_dates=exclude_consolidated_dates,
         )
 
     async def search_messages(self, companion_id: str, query: str, *, limit: int = 20) -> list[Message]:
