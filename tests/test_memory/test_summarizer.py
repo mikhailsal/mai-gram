@@ -120,17 +120,26 @@ class TestMemorySummarizer:
             for item in summary_store.get_all_summaries(companion_id)
         )
 
-    def test_summarizer_prompt_is_neutral(self) -> None:
+    def test_summarizer_prompt_has_context_awareness(self) -> None:
+        """Test that the summarizer prompt template includes context placeholders."""
         from mai_companion.memory import summarizer as module
 
-        assert "personality" in module._DAILY_SUMMARY_PROMPT.lower()
-        assert "roleplay" in module._DAILY_SUMMARY_PROMPT.lower()
-        assert "name" not in module._DAILY_SUMMARY_PROMPT.lower()
+        # The new prompt should include placeholders for companion context
+        template = module._DAILY_SUMMARY_PROMPT_TEMPLATE
+        assert "{companion_name}" in template
+        assert "{context_section}" in template
+        assert "{philosophy_section}" in template
+        # Should preserve emotional content, not just facts
+        assert "emotional" in template.lower()
+        # Should mention the same-model empathy
+        philosophy = module._PHILOSOPHY_STATEMENT
+        assert "same model" in philosophy.lower()
+        assert "{model_name}" in philosophy
 
     def test_summarizer_preserves_language(self) -> None:
         from mai_companion.memory import summarizer as module
 
-        assert "same language as the conversation" in module._DAILY_SUMMARY_PROMPT
+        assert "same language as the conversation" in module._DAILY_SUMMARY_PROMPT_TEMPLATE
 
     async def test_threshold_trigger(self, session, tmp_path: Path) -> None:
         companion_id = await _create_companion(session)

@@ -431,6 +431,9 @@ class BotHandler:
                 summary_store,
                 self._llm,
                 summary_threshold=self._summary_threshold,
+                wiki_store=wiki_store,
+                companion_name=companion.name,
+                companion_model=companion.llm_model,
             )
             forgetting_engine = ForgettingEngine(summary_store, summarizer)
             memory_manager = MemoryManager(
