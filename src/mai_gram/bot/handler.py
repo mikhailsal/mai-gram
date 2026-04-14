@@ -95,6 +95,7 @@ class BotHandler:
         self._message_logger = MessageLogger(log_content=False)
         self._test_mode = test_mode
         self._setup_sessions: dict[str, SetupSession] = {}
+        self._response_message_ids: dict[str, list[str]] = {}
 
         settings = get_settings()
         self._memory_data_dir = memory_data_dir or settings.memory_data_dir
@@ -532,6 +533,7 @@ class BotHandler:
             show_tool_calls = chat.show_tool_calls
             show_reasoning = chat.show_reasoning
             tg_chat_id = message.chat_id
+            sent_msg_ids: list[str] = []
 
             async def _on_tool_call_display(
                 *, content: str, tool_calls_json: str
@@ -553,9 +555,11 @@ class BotHandler:
                         args_str = str(args)
                     lines.append(f"🔧 {name}({args_str})")
                 if lines:
-                    await self._messenger.send_message(
+                    r = await self._messenger.send_message(
                         OutgoingMessage(text="\n".join(lines), chat_id=tg_chat_id)
                     )
+                    if r.success and r.message_id:
+                        sent_msg_ids.append(r.message_id)
 
             async def _on_tool_result_display(
                 *,
@@ -575,9 +579,11 @@ class BotHandler:
                     if len(result_str) > 200:
                         result_str = result_str[:200] + "…"
                     text = f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
-                await self._messenger.send_message(
+                r = await self._messenger.send_message(
                     OutgoingMessage(text=text, chat_id=tg_chat_id)
                 )
+                if r.success and r.message_id:
+                    sent_msg_ids.append(r.message_id)
 
             response_text: str | None = None
             response_reasoning: str | None = None
@@ -600,6 +606,25 @@ class BotHandler:
                     on_assistant_tool_call=_on_tool_call_display,
                     on_tool_result=_on_tool_result_display,
                 ):
+                    if chunk.turn_complete:
+                        if placeholder_msg_id:
+                            turn_text = self._build_intermediate_display(
+                                "".join(content_parts),
+                                "".join(reasoning_parts),
+                                show_reasoning,
+                            )
+                            if turn_text.strip():
+                                await self._messenger.edit_message(
+                                    tg_chat_id, placeholder_msg_id, turn_text,
+                                )
+                            sent_msg_ids.append(placeholder_msg_id)
+                        content_parts.clear()
+                        reasoning_parts.clear()
+                        placeholder_msg_id = None
+                        last_edit_time = 0.0
+                        last_display_len = 0
+                        continue
+
                     if chunk.reasoning:
                         reasoning_parts.append(chunk.reasoning)
                     if chunk.content:
@@ -667,6 +692,8 @@ class BotHandler:
                 response_text = "Error generating response. Please try again."
                 placeholder_msg_id = None
 
+        self._response_message_ids[tg_chat_id] = sent_msg_ids
+
         import html as _html
 
         from mai_gram.messenger.telegram import build_inline_keyboard
@@ -696,6 +723,20 @@ class BotHandler:
                 show_reasoning=show_reasoning,
                 keyboard=regen_kb,
             )
+
+    @staticmethod
+    def _build_intermediate_display(
+        content: str, reasoning: str, show_reasoning: bool
+    ) -> str:
+        """Build display text for an intermediate turn (before tool calls)."""
+        display = ""
+        if show_reasoning and reasoning.strip():
+            display = f"\U0001f4ad Reasoning:\n{reasoning.strip()}"
+            if content.strip():
+                display += "\n\n\u2500\u2500\u2500\n\n" + content
+        elif content.strip():
+            display = content
+        return display
 
     async def _send_response(
         self,
@@ -772,6 +813,11 @@ class BotHandler:
                 await session.delete(msg)
             await session.flush()
 
+        # Delete intermediate messages (tool calls, results, intermediate content)
+        prev_msg_ids = self._response_message_ids.pop(message.chat_id, [])
+        for mid in prev_msg_ids:
+            await self._messenger.delete_message(message.chat_id, mid)
+
         # Delete the Telegram message with the regen button
         if message.raw and hasattr(message.raw, "callback_query"):
             cb_msg = message.raw.callback_query.message
@@ -829,7 +875,59 @@ class BotHandler:
             )
             extra_params = self._settings.get_model_params(chat.llm_model)
             show_reasoning = chat.show_reasoning
+            show_tool_calls = chat.show_tool_calls
             tg_chat_id = message.chat_id
+            sent_msg_ids: list[str] = []
+
+            async def _on_tool_call_display(
+                *, content: str, tool_calls_json: str
+            ) -> None:
+                if not show_tool_calls:
+                    return
+                try:
+                    calls = json.loads(tool_calls_json)
+                except (json.JSONDecodeError, TypeError):
+                    return
+                lines = []
+                for tc in calls:
+                    name = tc.get("name", "?")
+                    args = tc.get("arguments", "{}")
+                    try:
+                        args_dict = json.loads(args) if isinstance(args, str) else args
+                        args_str = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
+                    except (json.JSONDecodeError, TypeError, AttributeError):
+                        args_str = str(args)
+                    lines.append(f"🔧 {name}({args_str})")
+                if lines:
+                    r = await self._messenger.send_message(
+                        OutgoingMessage(text="\n".join(lines), chat_id=tg_chat_id)
+                    )
+                    if r.success and r.message_id:
+                        sent_msg_ids.append(r.message_id)
+
+            async def _on_tool_result_display(
+                *,
+                tool_call_id: str,
+                tool_name: str,
+                arguments: str,
+                result: object,
+                error: str | None,
+                server_name: str | None,
+            ) -> None:
+                if not show_tool_calls:
+                    return
+                if error:
+                    text = f"❌ {tool_name}: {error}"
+                else:
+                    result_str = str(result) if result is not None else ""
+                    if len(result_str) > 200:
+                        result_str = result_str[:200] + "…"
+                    text = f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
+                r = await self._messenger.send_message(
+                    OutgoingMessage(text=text, chat_id=tg_chat_id)
+                )
+                if r.success and r.message_id:
+                    sent_msg_ids.append(r.message_id)
 
             response_text: str | None = None
             response_reasoning: str | None = None
@@ -847,7 +945,28 @@ class BotHandler:
                     model=chat.llm_model,
                     max_iterations=self._tool_max_iterations,
                     extra_params=extra_params or None,
+                    on_assistant_tool_call=_on_tool_call_display,
+                    on_tool_result=_on_tool_result_display,
                 ):
+                    if chunk.turn_complete:
+                        if placeholder_msg_id:
+                            turn_text = self._build_intermediate_display(
+                                "".join(content_parts),
+                                "".join(reasoning_parts),
+                                show_reasoning,
+                            )
+                            if turn_text.strip():
+                                await self._messenger.edit_message(
+                                    tg_chat_id, placeholder_msg_id, turn_text,
+                                )
+                            sent_msg_ids.append(placeholder_msg_id)
+                        content_parts.clear()
+                        reasoning_parts.clear()
+                        placeholder_msg_id = None
+                        last_edit_time = 0.0
+                        last_display_len = 0
+                        continue
+
                     if chunk.reasoning:
                         reasoning_parts.append(chunk.reasoning)
                     if chunk.content:
@@ -914,6 +1033,8 @@ class BotHandler:
                 logger.exception("Failed to regenerate response")
                 response_text = "Error generating response. Please try again."
                 placeholder_msg_id = None
+
+        self._response_message_ids[tg_chat_id] = sent_msg_ids
 
         import html as _html
 

@@ -330,6 +330,8 @@ async def run_with_tools_stream(
                 yield StreamChunk(content="", finish_reason=finish_reason)
             return
 
+        yield StreamChunk(content="", turn_complete=True)
+
         full_content = "".join(content_parts)
         full_reasoning = "".join(reasoning_parts) or None
 

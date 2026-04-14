@@ -87,6 +87,7 @@ class StreamChunk:
     finish_reason: str | None = None
     reasoning: str | None = None
     tool_calls_delta: list[dict] | None = None
+    turn_complete: bool = False
 
 
 # ---------------------------------------------------------------------------
