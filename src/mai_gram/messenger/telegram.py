@@ -199,6 +199,7 @@ class TelegramMessenger(Messenger):
         self._message_handlers: list[MessageHandler] = []
         self._callback_handlers: list[MessageHandler] = []
         self._command_handlers: dict[str, MessageHandler] = {}
+        self._command_descriptions: dict[str, str] = {}
 
     @property
     def platform_name(self) -> str:
@@ -266,6 +267,23 @@ class TelegramMessenger(Messenger):
         # Initialize the application
         await self._app.initialize()
         await self._app.start()
+
+        # Register commands with Telegram so they appear in the "/" menu
+        if self._command_descriptions:
+            from telegram import BotCommand
+
+            bot_commands = [
+                BotCommand(cmd, desc)
+                for cmd, desc in self._command_descriptions.items()
+            ]
+            try:
+                await self._app.bot.set_my_commands(bot_commands)
+                logger.info(
+                    "Registered %d command(s) with Telegram",
+                    len(bot_commands),
+                )
+            except TelegramError as e:
+                logger.warning("Failed to set bot commands: %s", e)
 
         # Start polling in the background
         await self._app.updater.start_polling(drop_pending_updates=True)
@@ -445,10 +463,12 @@ class TelegramMessenger(Messenger):
         self._message_handlers.append(handler)
 
     def register_command_handler(
-        self, command: str, handler: MessageHandler
+        self, command: str, handler: MessageHandler, *, description: str = "",
     ) -> None:
         """Register a handler for a specific command."""
         self._command_handlers[command] = handler
+        if description:
+            self._command_descriptions[command] = description
 
     def register_callback_handler(self, handler: MessageHandler) -> None:
         """Register a handler for callback queries (button presses)."""

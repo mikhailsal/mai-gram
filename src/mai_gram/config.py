@@ -151,6 +151,39 @@ class Settings(BaseSettings):
         models_section = data.get("models", {})
         return models_section.get("default", self.llm_model)
 
+    def get_model_params(self, model_id: str) -> dict:
+        """Load per-model parameter overrides from the TOML config.
+
+        Returns a dict of extra parameters (provider, reasoning, temperature, etc.)
+        that should be merged into the OpenRouter request body for this model.
+        Returns an empty dict if no overrides are defined.
+        """
+        config_path = Path(self.models_config_path)
+        if not config_path.exists():
+            return {}
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+        models_section = data.get("models", {})
+        return dict(models_section.get(model_id, {}))
+
+    def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
+        """Load tool enable/disable lists from the models config.
+
+        Returns (enabled, disabled) where each is a list of tool names
+        or None if not configured. If enabled is set, only those tools
+        are allowed (whitelist). If disabled is set, those tools are
+        blocked (blacklist). enabled takes precedence over disabled.
+        """
+        config_path = Path(self.models_config_path)
+        if not config_path.exists():
+            return None, None
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+        tools_section = data.get("tools", {})
+        enabled = tools_section.get("enabled")
+        disabled = tools_section.get("disabled")
+        return enabled, disabled
+
     def get_available_prompts(self) -> dict[str, str]:
         """Load available system prompt templates from the prompts directory.
 

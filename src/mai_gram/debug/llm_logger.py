@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from mai_gram.debug.cost_tracker import SessionCostTracker
-from mai_gram.llm.provider import ChatMessage, LLMProvider, LLMResponse, StreamChunk, ToolCall, ToolDefinition
+from mai_gram.llm.provider import (
+    ChatMessage,
+    LLMProvider,
+    LLMResponse,
+    ToolCall,
+    ToolDefinition,
+)
 
 
 def _utc_now_iso() -> str:
@@ -95,6 +101,7 @@ class LLMLoggerProvider(LLMProvider):
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> LLMResponse:
         self._sequence += 1
         timestamp = self._timestamp_iso()
@@ -105,6 +112,7 @@ class LLMLoggerProvider(LLMProvider):
             max_tokens=max_tokens,
             tools=tools,
             tool_choice=tool_choice,
+            extra_params=extra_params,
         )
 
         self._calls_total += 1
@@ -162,6 +170,7 @@ class LLMLoggerProvider(LLMProvider):
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ):
         async for chunk in self._provider.generate_stream(
             messages,
@@ -170,6 +179,7 @@ class LLMLoggerProvider(LLMProvider):
             max_tokens=max_tokens,
             tools=tools,
             tool_choice=tool_choice,
+            extra_params=extra_params,
         ):
             yield chunk
 

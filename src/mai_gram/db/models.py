@@ -9,17 +9,16 @@ Defines all database tables:
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
     Text,
-    Boolean,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -68,6 +67,24 @@ class Chat(Base):
         nullable=True,
         default=None,
         doc="Optional display name for this chat",
+    )
+    show_reasoning: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Whether to display LLM reasoning in Telegram messages",
+    )
+    show_tool_calls: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Whether to display tool call details in Telegram messages",
+    )
+    send_datetime: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        doc="Whether to prepend date/time to user messages sent to the LLM",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -134,6 +151,12 @@ class Message(Base):
         nullable=True,
         default=None,
         doc="ID of the tool call this message is responding to. Only set for role='tool'.",
+    )
+    reasoning: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        doc="LLM reasoning/thinking content. Only set for role='assistant'.",
     )
 
     chat: Mapped[Chat] = relationship(back_populates="messages")

@@ -235,7 +235,7 @@ class Messenger(ABC):
 
     @abstractmethod
     def register_command_handler(
-        self, command: str, handler: MessageHandler
+        self, command: str, handler: MessageHandler, *, description: str = "",
     ) -> None:
         """Register a handler for a specific command.
 
@@ -245,6 +245,10 @@ class Messenger(ABC):
             The command name (without leading slash).
         handler:
             Async function that will be called when the command is received.
+        description:
+            Human-readable description shown in command autocomplete menus
+            (e.g. Telegram's ``/`` menu). Ignored on platforms that don't
+            support it.
         """
 
     @abstractmethod

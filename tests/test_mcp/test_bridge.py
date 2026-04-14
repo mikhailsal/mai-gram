@@ -56,6 +56,7 @@ class _MockLLMProvider(LLMProvider):
         max_tokens: int | None = None,
         tools: list[Any] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> LLMResponse:
         self.calls.append(list(messages))
         self.last_tools = tools
@@ -71,8 +72,9 @@ class _MockLLMProvider(LLMProvider):
         max_tokens: int | None = None,
         tools: list[Any] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        del messages, model, temperature, max_tokens, tools, tool_choice
+        del messages, model, temperature, max_tokens, tools, tool_choice, extra_params
         if False:  # pragma: no cover
             yield StreamChunk(content="")
 

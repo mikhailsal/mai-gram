@@ -8,8 +8,8 @@ AsyncConnection and performs schema changes.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import Callable, Coroutine
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -32,7 +32,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 def register_migration(
@@ -52,6 +52,37 @@ def register_migration(
 async def _migrate_v1(conn: AsyncConnection) -> None:
     """Version 1: initial schema. Tables created by Base.metadata.create_all."""
     logger.info("Schema v1: initial tables verified")
+
+
+@register_migration(2, "Add reasoning column and chat toggle columns")
+async def _migrate_v2(conn: AsyncConnection) -> None:
+    """Version 2: add Message.reasoning, Chat.show_reasoning/show_tool_calls/send_datetime."""
+    existing_tables: dict[str, list[str]] = {}
+    for table_name in ("messages", "chats"):
+        result = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+        existing_tables[table_name] = [row[1] for row in result.fetchall()]
+
+    if "reasoning" not in existing_tables["messages"]:
+        await conn.execute(text("ALTER TABLE messages ADD COLUMN reasoning TEXT"))
+        logger.info("Added messages.reasoning column")
+
+    if "show_reasoning" not in existing_tables["chats"]:
+        await conn.execute(
+            text("ALTER TABLE chats ADD COLUMN show_reasoning BOOLEAN NOT NULL DEFAULT 0")
+        )
+        logger.info("Added chats.show_reasoning column")
+
+    if "show_tool_calls" not in existing_tables["chats"]:
+        await conn.execute(
+            text("ALTER TABLE chats ADD COLUMN show_tool_calls BOOLEAN NOT NULL DEFAULT 0")
+        )
+        logger.info("Added chats.show_tool_calls column")
+
+    if "send_datetime" not in existing_tables["chats"]:
+        await conn.execute(
+            text("ALTER TABLE chats ADD COLUMN send_datetime BOOLEAN NOT NULL DEFAULT 1")
+        )
+        logger.info("Added chats.send_datetime column")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

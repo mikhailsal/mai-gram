@@ -138,7 +138,9 @@ class ConsoleMessenger(Messenger):
     def register_message_handler(self, handler: MessageHandler) -> None:
         self._message_handlers.append(handler)
 
-    def register_command_handler(self, command: str, handler: MessageHandler) -> None:
+    def register_command_handler(
+        self, command: str, handler: MessageHandler, *, description: str = "",
+    ) -> None:
         self._command_handlers[command] = handler
 
     def register_callback_handler(self, handler: MessageHandler) -> None:

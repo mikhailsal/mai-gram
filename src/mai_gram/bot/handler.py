@@ -15,25 +15,26 @@ from __future__ import annotations
 import enum
 import json
 import logging
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from mai_gram.bot.middleware import MessageLogger, RateLimiter, RateLimitConfig
+from mai_gram.bot.middleware import MessageLogger, RateLimitConfig, RateLimiter
 from mai_gram.config import get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
-from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole
-from mai_gram.mcp_servers.bridge import run_with_tools
+from mai_gram.llm.provider import LLMProvider
+from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.mcp_servers.manager import MCPManager
 from mai_gram.mcp_servers.messages_server import MessagesMCPServer
 from mai_gram.mcp_servers.wiki_server import WikiMCPServer
 from mai_gram.memory.knowledge_base import WikiStore
 from mai_gram.memory.messages import MessageStore
-from mai_gram.messenger.base import IncomingMessage, MessageType, OutgoingMessage
+from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
 
 if TYPE_CHECKING:
     from mai_gram.messenger.base import Messenger
@@ -100,10 +101,12 @@ class BotHandler:
         self._wiki_context_limit = wiki_context_limit or settings.wiki_context_limit
         self._short_term_limit = short_term_limit or settings.short_term_limit
         self._tool_max_iterations = tool_max_iterations or settings.tool_max_iterations
+        self._settings = settings
         self._allowed_users = settings.get_allowed_user_ids()
         self._allowed_models = settings.get_allowed_models()
         self._default_model = settings.get_default_model()
         self._available_prompts = settings.get_available_prompts()
+        self._enabled_tools, self._disabled_tools = settings.get_tool_filter()
 
         if self._allowed_users:
             logger.info(
@@ -111,10 +114,30 @@ class BotHandler:
                 len(self._allowed_users),
             )
 
-        messenger.register_command_handler("start", self._handle_start)
-        messenger.register_command_handler("reset", self._handle_reset)
-        messenger.register_command_handler("model", self._handle_model)
-        messenger.register_command_handler("help", self._handle_help)
+        messenger.register_command_handler(
+            "start", self._handle_start, description="Set up a new chat",
+        )
+        messenger.register_command_handler(
+            "reset", self._handle_reset, description="Delete chat and history",
+        )
+        messenger.register_command_handler(
+            "model", self._handle_model, description="Show current model",
+        )
+        messenger.register_command_handler(
+            "help", self._handle_help, description="Show available commands",
+        )
+        messenger.register_command_handler(
+            "datetime", self._handle_datetime_toggle,
+            description="Toggle date/time in messages",
+        )
+        messenger.register_command_handler(
+            "reasoning", self._handle_reasoning_toggle,
+            description="Toggle reasoning display",
+        )
+        messenger.register_command_handler(
+            "toolcalls", self._handle_toolcalls_toggle,
+            description="Toggle tool call display",
+        )
         messenger.register_message_handler(self._handle_message)
         messenger.register_callback_handler(self._handle_callback)
 
@@ -244,12 +267,56 @@ class BotHandler:
             "/start - Set up a new chat (choose model + prompt)\n"
             "/reset - Delete current chat and history\n"
             "/model - Show current model\n"
+            "/datetime - Toggle date/time in messages sent to LLM\n"
+            "/reasoning - Toggle display of LLM reasoning\n"
+            "/toolcalls - Toggle display of tool call details\n"
             "/help - Show this help message\n\n"
             "Just send a message to chat!"
         )
         await self._messenger.send_message(
             OutgoingMessage(text=msg, chat_id=message.chat_id)
         )
+
+    async def _toggle_chat_flag(
+        self, message: IncomingMessage, field_name: str, label: str
+    ) -> None:
+        """Generic toggle for boolean chat settings."""
+        self._message_logger.log_incoming(message)
+        if not await self._check_access(message):
+            return
+
+        chat_id = self._chat_id_for(message)
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="No chat exists yet. Use /start to create one.",
+                        chat_id=message.chat_id,
+                    )
+                )
+                return
+            current_value = getattr(chat, field_name)
+            new_value = not current_value
+            setattr(chat, field_name, new_value)
+            await session.commit()
+
+        status = "ON" if new_value else "OFF"
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=f"{label}: {status}",
+                chat_id=message.chat_id,
+            )
+        )
+
+    async def _handle_datetime_toggle(self, message: IncomingMessage) -> None:
+        await self._toggle_chat_flag(message, "send_datetime", "Date/time in messages")
+
+    async def _handle_reasoning_toggle(self, message: IncomingMessage) -> None:
+        await self._toggle_chat_flag(message, "show_reasoning", "Reasoning display")
+
+    async def _handle_toolcalls_toggle(self, message: IncomingMessage) -> None:
+        await self._toggle_chat_flag(message, "show_tool_calls", "Tool call display")
 
     # -- Message handler --
 
@@ -273,6 +340,10 @@ class BotHandler:
 
         if self.is_in_setup(message.user_id):
             await self._handle_setup_callback(message)
+            return
+
+        if message.callback_data and message.callback_data.startswith("regen"):
+            await self._handle_regenerate(message)
             return
 
         logger.debug("Unhandled callback: %s", message.callback_data)
@@ -435,7 +506,10 @@ class BotHandler:
                 test_mode=self._test_mode,
             )
 
-            mcp_manager = MCPManager()
+            mcp_manager = MCPManager(
+                enabled_tools=self._enabled_tools,
+                disabled_tools=self._disabled_tools,
+            )
             mcp_manager.register_server(
                 "messages",
                 MessagesMCPServer(message_store, chat.id),
@@ -450,37 +524,425 @@ class BotHandler:
                 chat.id, "user", message.text, timestamp=now,
             )
 
-            llm_messages = await prompt_builder.build_context(chat, current_time=now)
+            llm_messages = await prompt_builder.build_context(
+                chat, current_time=now, send_datetime=chat.send_datetime,
+            )
+
+            extra_params = self._settings.get_model_params(chat.llm_model)
+            show_tool_calls = chat.show_tool_calls
+            show_reasoning = chat.show_reasoning
+            tg_chat_id = message.chat_id
+
+            async def _on_tool_call_display(
+                *, content: str, tool_calls_json: str
+            ) -> None:
+                if not show_tool_calls:
+                    return
+                try:
+                    calls = json.loads(tool_calls_json)
+                except (json.JSONDecodeError, TypeError):
+                    return
+                lines = []
+                for tc in calls:
+                    name = tc.get("name", "?")
+                    args = tc.get("arguments", "{}")
+                    try:
+                        args_dict = json.loads(args) if isinstance(args, str) else args
+                        args_str = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
+                    except (json.JSONDecodeError, TypeError, AttributeError):
+                        args_str = str(args)
+                    lines.append(f"🔧 {name}({args_str})")
+                if lines:
+                    await self._messenger.send_message(
+                        OutgoingMessage(text="\n".join(lines), chat_id=tg_chat_id)
+                    )
+
+            async def _on_tool_result_display(
+                *,
+                tool_call_id: str,
+                tool_name: str,
+                arguments: str,
+                result: object,
+                error: str | None,
+                server_name: str | None,
+            ) -> None:
+                if not show_tool_calls:
+                    return
+                if error:
+                    text = f"❌ {tool_name}: {error}"
+                else:
+                    result_str = str(result) if result is not None else ""
+                    if len(result_str) > 200:
+                        result_str = result_str[:200] + "…"
+                    text = f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
+                await self._messenger.send_message(
+                    OutgoingMessage(text=text, chat_id=tg_chat_id)
+                )
 
             response_text: str | None = None
+            response_reasoning: str | None = None
             try:
-                response = await run_with_tools(
+                content_parts: list[str] = []
+                reasoning_parts: list[str] = []
+                placeholder_msg_id: str | None = None
+                last_edit_time = 0.0
+                last_display_len = 0
+                edit_interval = 1.0
+                edit_min_chars = 60
+
+                async for chunk in run_with_tools_stream(
                     self._llm,
                     mcp_manager,
                     llm_messages,
                     model=chat.llm_model,
                     max_iterations=self._tool_max_iterations,
-                )
-                response_text = response.content
+                    extra_params=extra_params or None,
+                    on_assistant_tool_call=_on_tool_call_display,
+                    on_tool_result=_on_tool_result_display,
+                ):
+                    if chunk.reasoning:
+                        reasoning_parts.append(chunk.reasoning)
+                    if chunk.content:
+                        content_parts.append(chunk.content)
+
+                    current_reasoning = "".join(reasoning_parts)
+                    current_content = "".join(content_parts)
+
+                    display_text = ""
+                    if show_reasoning and current_reasoning.strip():
+                        display_text = (
+                            "\U0001f4ad Reasoning:\n"
+                            f"{current_reasoning.strip()}"
+                        )
+                        if current_content.strip():
+                            display_text += "\n\n\u2500\u2500\u2500\n\n" + current_content
+                    elif current_content.strip():
+                        display_text = current_content
+                    else:
+                        continue
+
+                    display_len = len(current_reasoning) + len(current_content)
+                    now_mono = time.monotonic()
+                    chars_since_edit = display_len - last_display_len
+                    time_since_edit = now_mono - last_edit_time
+
+                    should_edit = (
+                        display_text.strip()
+                        and (time_since_edit >= edit_interval or chars_since_edit >= edit_min_chars)
+                        and chars_since_edit > 0
+                    )
+
+                    if should_edit:
+                        live_text = display_text + " \u258d"
+                        if placeholder_msg_id is None:
+                            result = await self._messenger.send_message(
+                                OutgoingMessage(
+                                    text=live_text,
+                                    chat_id=tg_chat_id,
+                                )
+                            )
+                            if result.success:
+                                placeholder_msg_id = result.message_id
+                        else:
+                            await self._messenger.edit_message(
+                                tg_chat_id,
+                                placeholder_msg_id,
+                                live_text,
+                            )
+                        last_edit_time = now_mono
+                        last_display_len = display_len
+
+                response_text = "".join(content_parts)
+                response_reasoning = "".join(reasoning_parts) or None
 
                 if response_text and response_text.strip():
                     await message_store.save_message(
-                        chat.id, "assistant", response_text, timestamp=datetime.now(timezone.utc),
+                        chat.id, "assistant", response_text,
+                        timestamp=datetime.now(timezone.utc),
+                        reasoning=response_reasoning,
                     )
 
             except Exception:
                 logger.exception("Failed to generate response")
                 response_text = "Error generating response. Please try again."
+                placeholder_msg_id = None
 
-        if response_text and response_text.strip():
-            result = await self._messenger.send_message(
-                OutgoingMessage(text=response_text, chat_id=message.chat_id)
+        import html as _html
+
+        from mai_gram.messenger.telegram import build_inline_keyboard
+
+        regen_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
+
+        if placeholder_msg_id and response_text and response_text.strip():
+            display_text = response_text
+            parse_mode = None
+            if show_reasoning and response_reasoning and response_reasoning.strip():
+                escaped_r = _html.escape(response_reasoning.strip())
+                escaped_t = _html.escape(response_text)
+                display_text = (
+                    f"<blockquote expandable>\U0001f4ad Reasoning\n"
+                    f"{escaped_r}</blockquote>\n\n{escaped_t}"
+                )
+                parse_mode = "html"
+            await self._messenger.edit_message(
+                tg_chat_id, placeholder_msg_id, display_text,
+                parse_mode=parse_mode, keyboard=regen_kb,
             )
-            self._message_logger.log_outgoing(
-                message.chat_id,
-                response_text,
-                success=result.success,
-                message_id=result.message_id,
+        elif response_text and response_text.strip():
+            await self._send_response(
+                tg_chat_id,
+                response_text=response_text,
+                response_reasoning=response_reasoning,
+                show_reasoning=show_reasoning,
+                keyboard=regen_kb,
+            )
+
+    async def _send_response(
+        self,
+        chat_id: str,
+        *,
+        response_text: str | None,
+        response_reasoning: str | None = None,
+        show_reasoning: bool = False,
+        keyboard: object = None,
+    ) -> str | None:
+        """Send the final assistant response, optionally with reasoning.
+
+        Returns the Telegram message ID of the sent message, or None.
+        """
+        if not response_text or not response_text.strip():
+            return None
+
+        import html as _html
+
+        display_text = response_text
+        if show_reasoning and response_reasoning and response_reasoning.strip():
+            escaped_r = _html.escape(response_reasoning.strip())
+            escaped_t = _html.escape(response_text)
+            display_text = (
+                f"<blockquote expandable>\U0001f4ad Reasoning\n"
+                f"{escaped_r}</blockquote>\n\n{escaped_t}"
+            )
+
+        parse_mode = "html" if show_reasoning and response_reasoning else None
+
+        result = await self._messenger.send_message(
+            OutgoingMessage(
+                text=display_text,
+                chat_id=chat_id,
+                parse_mode=parse_mode,
+                keyboard=keyboard,
+            )
+        )
+        self._message_logger.log_outgoing(
+            chat_id,
+            response_text,
+            success=result.success,
+            message_id=result.message_id,
+        )
+        return result.message_id if result.success else None
+
+    # -- Regenerate --
+
+    async def _handle_regenerate(self, message: IncomingMessage) -> None:
+        """Handle the regen callback: delete last assistant message, re-generate."""
+        if not message.callback_data:
+            return
+
+        chat_id = self._chat_id_for(message)
+
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                return
+
+            message_store = MessageStore(session)
+
+            recent = await message_store.get_recent(chat.id, limit=5)
+            recent_sorted = sorted(recent, key=lambda m: m.id)
+
+            to_delete: list[Message] = []
+            for msg in reversed(recent_sorted):
+                if msg.role in ("assistant", "tool"):
+                    to_delete.append(msg)
+                else:
+                    break
+
+            for msg in to_delete:
+                await session.delete(msg)
+            await session.flush()
+
+        # Delete the Telegram message with the regen button
+        if message.raw and hasattr(message.raw, "callback_query"):
+            cb_msg = message.raw.callback_query.message
+            if cb_msg:
+                await self._messenger.delete_message(
+                    message.chat_id, str(cb_msg.message_id)
+                )
+
+        # Build a synthetic message to re-trigger the conversation pipeline
+        # We need the last user message to reconstruct context
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                return
+
+            message_store = MessageStore(session)
+            wiki_store = WikiStore(session, data_dir=self._memory_data_dir)
+
+            recent = await message_store.get_recent(chat.id, limit=1)
+            if not recent or recent[0].role != "user":
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="Cannot regenerate: no user message found.",
+                        chat_id=message.chat_id,
+                    )
+                )
+                return
+
+            await self._messenger.send_typing_indicator(message.chat_id)
+
+            prompt_builder = PromptBuilder(
+                self._llm,
+                message_store,
+                wiki_store,
+                wiki_context_limit=self._wiki_context_limit,
+                short_term_limit=self._short_term_limit,
+                test_mode=self._test_mode,
+            )
+
+            mcp_manager = MCPManager(
+                enabled_tools=self._enabled_tools,
+                disabled_tools=self._disabled_tools,
+            )
+            mcp_manager.register_server(
+                "messages", MessagesMCPServer(message_store, chat.id),
+            )
+            mcp_manager.register_server(
+                "wiki", WikiMCPServer(wiki_store, chat.id),
+            )
+
+            llm_messages = await prompt_builder.build_context(
+                chat,
+                current_time=datetime.now(timezone.utc),
+                send_datetime=chat.send_datetime,
+            )
+            extra_params = self._settings.get_model_params(chat.llm_model)
+            show_reasoning = chat.show_reasoning
+            tg_chat_id = message.chat_id
+
+            response_text: str | None = None
+            response_reasoning: str | None = None
+            placeholder_msg_id: str | None = None
+            try:
+                content_parts: list[str] = []
+                reasoning_parts: list[str] = []
+                last_edit_time = 0.0
+                last_display_len = 0
+
+                async for chunk in run_with_tools_stream(
+                    self._llm,
+                    mcp_manager,
+                    llm_messages,
+                    model=chat.llm_model,
+                    max_iterations=self._tool_max_iterations,
+                    extra_params=extra_params or None,
+                ):
+                    if chunk.reasoning:
+                        reasoning_parts.append(chunk.reasoning)
+                    if chunk.content:
+                        content_parts.append(chunk.content)
+
+                    current_reasoning = "".join(reasoning_parts)
+                    current_content = "".join(content_parts)
+
+                    display_text = ""
+                    if show_reasoning and current_reasoning.strip():
+                        display_text = (
+                            "\U0001f4ad Reasoning:\n"
+                            f"{current_reasoning.strip()}"
+                        )
+                        if current_content.strip():
+                            display_text += "\n\n\u2500\u2500\u2500\n\n" + current_content
+                    elif current_content.strip():
+                        display_text = current_content
+                    else:
+                        continue
+
+                    display_len = len(current_reasoning) + len(current_content)
+                    now_mono = time.monotonic()
+                    chars_since_edit = display_len - last_display_len
+                    time_since_edit = now_mono - last_edit_time
+
+                    should_edit = (
+                        display_text.strip()
+                        and (time_since_edit >= 1.0 or chars_since_edit >= 60)
+                        and chars_since_edit > 0
+                    )
+
+                    if should_edit:
+                        live_text = display_text + " \u258d"
+                        if placeholder_msg_id is None:
+                            result = await self._messenger.send_message(
+                                OutgoingMessage(
+                                    text=live_text,
+                                    chat_id=tg_chat_id,
+                                )
+                            )
+                            if result.success:
+                                placeholder_msg_id = result.message_id
+                        else:
+                            await self._messenger.edit_message(
+                                tg_chat_id,
+                                placeholder_msg_id,
+                                live_text,
+                            )
+                        last_edit_time = now_mono
+                        last_display_len = display_len
+
+                response_text = "".join(content_parts)
+                response_reasoning = "".join(reasoning_parts) or None
+
+                if response_text and response_text.strip():
+                    await message_store.save_message(
+                        chat.id, "assistant", response_text,
+                        timestamp=datetime.now(timezone.utc),
+                        reasoning=response_reasoning,
+                    )
+
+            except Exception:
+                logger.exception("Failed to regenerate response")
+                response_text = "Error generating response. Please try again."
+                placeholder_msg_id = None
+
+        import html as _html
+
+        from mai_gram.messenger.telegram import build_inline_keyboard
+
+        regen_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
+
+        if placeholder_msg_id and response_text and response_text.strip():
+            display_text = response_text
+            parse_mode = None
+            if show_reasoning and response_reasoning and response_reasoning.strip():
+                escaped_r = _html.escape(response_reasoning.strip())
+                escaped_t = _html.escape(response_text)
+                display_text = (
+                    f"<blockquote expandable>\U0001f4ad Reasoning\n"
+                    f"{escaped_r}</blockquote>\n\n{escaped_t}"
+                )
+                parse_mode = "html"
+            await self._messenger.edit_message(
+                tg_chat_id, placeholder_msg_id, display_text,
+                parse_mode=parse_mode, keyboard=regen_kb,
+            )
+        elif response_text and response_text.strip():
+            await self._send_response(
+                tg_chat_id,
+                response_text=response_text,
+                response_reasoning=response_reasoning,
+                show_reasoning=show_reasoning,
+                keyboard=regen_kb,
             )
 
     # -- DB helpers --

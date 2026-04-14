@@ -45,8 +45,10 @@ class PromptBuilder:
         chat: Chat,
         *,
         current_time: datetime | None = None,
+        send_datetime: bool = True,
     ) -> list[ChatMessage]:
         """Build full model context: system message + message history."""
+        self._send_datetime = send_datetime
         now = current_time or datetime.now(timezone.utc)
 
         wiki_entries = await self._wiki_store.get_top_entries(
@@ -111,7 +113,10 @@ class PromptBuilder:
     def _message_to_chat_message(self, msg: Message) -> ChatMessage:
         """Convert a stored Message to a ChatMessage for LLM context."""
         if msg.role == "user":
-            content = f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}"
+            if getattr(self, "_send_datetime", True):
+                content = f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}"
+            else:
+                content = msg.content
             return ChatMessage(role=MessageRole.USER, content=content)
 
         if msg.role == "tool":
@@ -122,6 +127,7 @@ class PromptBuilder:
             )
 
         content = msg.content
+        reasoning = msg.reasoning if msg.reasoning else None
         tool_calls: list[ToolCall] | None = None
         if msg.tool_calls:
             try:
@@ -133,7 +139,12 @@ class PromptBuilder:
             except (json.JSONDecodeError, KeyError, TypeError):
                 logger.warning("Failed to parse tool_calls for message %s", msg.id)
 
-        return ChatMessage(role=MessageRole.ASSISTANT, content=content, tool_calls=tool_calls)
+        return ChatMessage(
+            role=MessageRole.ASSISTANT,
+            content=content,
+            tool_calls=tool_calls,
+            reasoning=reasoning,
+        )
 
     def _build_system_prompt(
         self,
@@ -144,11 +155,14 @@ class PromptBuilder:
         prompt_now = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
         prompt_now = prompt_now.astimezone(timezone.utc)
 
-        time_section = (
-            f"Current date and time: "
-            f"{prompt_now.strftime('%A, %B')} {prompt_now.day}, "
-            f"{prompt_now.year}, {prompt_now.strftime('%H:%M')} UTC."
-        )
+        send_dt = getattr(self, "_send_datetime", True)
+        time_section = ""
+        if send_dt:
+            time_section = (
+                f"Current date and time: "
+                f"{prompt_now.strftime('%A, %B')} {prompt_now.day}, "
+                f"{prompt_now.year}, {prompt_now.strftime('%H:%M')} UTC."
+            )
 
         test_section = ""
         if self._test_mode:
@@ -171,9 +185,9 @@ class PromptBuilder:
             "Use search_messages to find past conversations."
         )
 
-        return (
-            f"{test_section}{chat.system_prompt}\n\n"
-            f"{time_section}\n\n"
-            f"{wiki_section}\n\n"
-            f"{tool_instructions}"
-        )
+        parts = [f"{test_section}{chat.system_prompt}"]
+        if time_section:
+            parts.append(time_section)
+        parts.append(wiki_section)
+        parts.append(tool_instructions)
+        return "\n\n".join(parts)

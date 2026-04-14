@@ -6,11 +6,12 @@ import argparse
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
 
-from sqlalchemy import func as sql_func, select
+from sqlalchemy import func as sql_func
+from sqlalchemy import select
 
 from mai_gram.bot.handler import BotHandler
 from mai_gram.config import get_settings
@@ -191,8 +192,8 @@ async def _print_prompt(
     test_mode: bool = True,
 ) -> None:
     from mai_gram.mcp_servers.manager import MCPManager
-    from mai_gram.mcp_servers.wiki_server import WikiMCPServer
     from mai_gram.mcp_servers.messages_server import MessagesMCPServer
+    from mai_gram.mcp_servers.wiki_server import WikiMCPServer
 
     async with get_session() as session:
         result = await session.execute(select(Chat).where(Chat.id == chat_id))
@@ -206,7 +207,9 @@ async def _print_prompt(
         prompt_builder = PromptBuilder(
             llm, message_store, wiki_store, test_mode=test_mode,
         )
-        context = await prompt_builder.build_context(chat)
+        context = await prompt_builder.build_context(
+            chat, send_datetime=chat.send_datetime,
+        )
 
         mcp_manager = MCPManager()
         mcp_manager.register_server("wiki", WikiMCPServer(wiki_store, chat_id))
@@ -241,19 +244,50 @@ async def _print_prompt(
 
 # -- Import command --
 
+def _extract_messages_from_proxy_request(data: dict) -> list[dict]:
+    """Extract messages from an AI Proxy v2 request JSON.
+
+    The proxy format stores the full request/response cycle. Messages come
+    from ``request_body.messages`` and the assistant's response is appended
+    from ``response_body.choices[0].message``.
+    """
+    request_body = data.get("request_body") or data.get("client_request_body")
+    if not isinstance(request_body, dict):
+        raise SystemExit("Error: proxy request JSON has no request_body.")
+
+    messages = request_body.get("messages")
+    if not isinstance(messages, list):
+        raise SystemExit("Error: proxy request_body has no messages array.")
+
+    result = list(messages)
+
+    response_body = data.get("response_body") or data.get("client_response_body")
+    if isinstance(response_body, dict):
+        choices = response_body.get("choices", [])
+        if choices and isinstance(choices[0], dict):
+            resp_message = choices[0].get("message", {})
+            if isinstance(resp_message, dict) and resp_message.get("role") == "assistant":
+                result.append(resp_message)
+
+    timestamp = data.get("timestamp")
+    if isinstance(timestamp, str):
+        for msg in result:
+            if isinstance(msg, dict) and "timestamp" not in msg:
+                msg["timestamp"] = timestamp
+
+    return result
+
+
 async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
-    """Import a dialogue from a JSON file in OpenAI chat completion format.
+    """Import a dialogue from a JSON file.
 
-    Expected format: a JSON array of message objects:
-    [
-        {"role": "system", "content": "..."},
-        {"role": "user", "content": "...", "timestamp": "2024-01-15T14:30:00Z"},
-        {"role": "assistant", "content": "...", "reasoning": "...", "tool_calls": [...]},
-        {"role": "tool", "content": "...", "tool_call_id": "..."},
-        ...
-    ]
+    Supports two formats:
+    1. Array of message objects (OpenAI chat completion format):
+       [{"role": "user", "content": "..."}, ...]
+    2. AI Proxy v2 request JSON (object with request_body.messages):
+       {"request_body": {"messages": [...]}, "response_body": {"choices": [...]}}
 
-    Reasoning content is prepended to the message content in a [reasoning] block.
+    Reasoning content is stored in the dedicated reasoning column.
     """
     path = Path(json_path)
     if not path.exists():
@@ -263,6 +297,15 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Error: invalid JSON: {exc}") from exc
+
+    if isinstance(data, dict):
+        if "request_body" in data or "client_request_body" in data:
+            data = _extract_messages_from_proxy_request(data)
+        else:
+            raise SystemExit(
+                "Error: JSON object does not look like a proxy request. "
+                "Expected a JSON array or an object with request_body."
+            )
 
     if not isinstance(data, list):
         raise SystemExit("Error: expected a JSON array of message objects.")
@@ -288,9 +331,10 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
             if not isinstance(content, str):
                 content = str(content) if content is not None else ""
 
-            reasoning = entry.get("reasoning")
-            if isinstance(reasoning, str) and reasoning.strip():
-                content = f"[reasoning]\n{reasoning.strip()}\n[/reasoning]\n\n{content}"
+            reasoning_text: str | None = None
+            reasoning_raw = entry.get("reasoning")
+            if isinstance(reasoning_raw, str) and reasoning_raw.strip():
+                reasoning_text = reasoning_raw.strip()
 
             tool_calls_raw = entry.get("tool_calls")
             tool_calls_json: str | None = None
@@ -330,6 +374,7 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
                     timestamp=timestamp,
                     tool_calls=tool_calls_json,
                     tool_call_id=tool_call_id,
+                    reasoning=reasoning_text,
                 )
             except ValueError as exc:
                 logger.warning("Skipping entry %d due to timestamp conflict: %s", i, exc)

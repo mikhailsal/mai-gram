@@ -37,6 +37,7 @@ class MessageStore:
         timestamp: datetime | None = None,
         tool_calls: str | None = None,
         tool_call_id: str | None = None,
+        reasoning: str | None = None,
     ) -> Message:
         """Persist a message and return the saved ORM object."""
         if timestamp is not None:
@@ -63,6 +64,7 @@ class MessageStore:
             content=content,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
+            reasoning=reasoning,
         )
         if timestamp is not None:
             message.timestamp = timestamp

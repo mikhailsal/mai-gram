@@ -31,8 +31,15 @@ class RegisteredTool:
 class MCPManager:
     """Registers MCP servers and routes tool calls."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        enabled_tools: list[str] | None = None,
+        disabled_tools: list[str] | None = None,
+    ) -> None:
         self._servers: dict[str, MCPServer] = {}
+        self._enabled_tools = set(enabled_tools) if enabled_tools else None
+        self._disabled_tools = set(disabled_tools) if disabled_tools else None
 
     def register_server(self, server_name: str, server: MCPServer) -> None:
         """Register a named MCP server."""
@@ -42,19 +49,28 @@ class MCPManager:
             raise ValueError(f"Server '{server_name}' is already registered")
         self._servers[server_name] = server
 
+    def _is_tool_allowed(self, tool_name: str) -> bool:
+        """Check if a tool is allowed by the enable/disable filter."""
+        if self._enabled_tools is not None:
+            return tool_name in self._enabled_tools
+        if self._disabled_tools is not None:
+            return tool_name not in self._disabled_tools
+        return True
+
     async def list_all_tools(self) -> list[RegisteredTool]:
-        """Return tools from all registered servers."""
+        """Return tools from all registered servers, filtered by enable/disable config."""
         all_tools: list[RegisteredTool] = []
         for server_name, server in self._servers.items():
             for tool in await server.list_tools():
-                all_tools.append(
-                    RegisteredTool(
-                        server_name=server_name,
-                        name=tool.name,
-                        description=tool.description,
-                        input_schema=tool.input_schema,
+                if self._is_tool_allowed(tool.name):
+                    all_tools.append(
+                        RegisteredTool(
+                            server_name=server_name,
+                            name=tool.name,
+                            description=tool.description,
+                            input_schema=tool.input_schema,
+                        )
                     )
-                )
         return all_tools
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: dict[str, Any]) -> Any:

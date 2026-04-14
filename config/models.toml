@@ -3,11 +3,38 @@
 
 [models]
 allowed = [
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-3.5-haiku",
+    "minimax/minimax-m2.7",
     "google/gemini-2.5-flash",
-    "google/gemini-2.5-pro",
+    "google/gemini-3.1-flash-lite-preview",
+    "google/gemma-4-31b-it:free",
 ]
-default = "openai/gpt-4o-mini"
+default = "google/gemma-4-31b-it:free"
+
+# Per-model parameter overrides.
+# Any key here is merged into the OpenRouter request body.
+# Supported special keys: provider, reasoning, temperature, max_tokens, etc.
+#
+# Example:
+# [models."google/gemini-2.5-flash"]
+# provider.order = ["Google AI Studio"]
+# provider.allow_fallbacks = false
+# reasoning.effort = "medium"
+# max_tokens = 8192
+
+# Per-model parameter examples:
+# [models."minimax/minimax-m2.7"]
+# temperature = 0.5
+#
+# [models."minimax/minimax-m2.7".provider]
+# order = ["Minimax"]
+# allow_fallbacks = false
+
+# Tool configuration.
+# Use "enabled" to allow ONLY listed tools (whitelist mode).
+# Use "disabled" to block specific tools (blacklist mode).
+# If both are set, "enabled" takes precedence.
+# If neither is set, all tools are available.
+#
+# [tools]
+# enabled = ["wiki_create", "wiki_edit", "wiki_read", "wiki_search"]
+# disabled = ["search_messages", "get_messages_by_timerange"]

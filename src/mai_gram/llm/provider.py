@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import enum
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator
-
 
 # ---------------------------------------------------------------------------
 # Message primitives
@@ -52,6 +51,7 @@ class ChatMessage:
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    reasoning: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +76,7 @@ class LLMResponse:
     usage: TokenUsage = field(default_factory=TokenUsage)
     finish_reason: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    reasoning: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +85,8 @@ class StreamChunk:
 
     content: str
     finish_reason: str | None = None
+    reasoning: str | None = None
+    tool_calls_delta: list[dict] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +145,7 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> LLMResponse:
         """Send a chat-completion request and return the full response.
 
@@ -166,6 +170,10 @@ class LLMProvider(ABC):
             ``"required"`` (must call a tool), or a dict specifying
             a particular function
             (``{"type": "function", "function": {"name": "..."}}``)
+        extra_params:
+            Optional dict of additional parameters to merge into the
+            request body (e.g. provider, reasoning, or any other
+            provider-specific options).
         """
 
     @abstractmethod
@@ -178,6 +186,7 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat-completion response token-by-token.
 

@@ -112,6 +112,7 @@ class OpenRouterProvider(LLMProvider):
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> LLMResponse:
         """Send a non-streaming chat-completion request."""
         payload = self._build_payload(
@@ -122,6 +123,7 @@ class OpenRouterProvider(LLMProvider):
             tools=tools,
             tool_choice=tool_choice,
             stream=False,
+            extra_params=extra_params,
         )
 
         data = await self._post_with_retry("/chat/completions", payload)
@@ -137,6 +139,7 @@ class OpenRouterProvider(LLMProvider):
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | dict | None = None,
+        extra_params: dict | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat-completion response as SSE chunks."""
         payload = self._build_payload(
@@ -147,6 +150,7 @@ class OpenRouterProvider(LLMProvider):
             tools=tools,
             tool_choice=tool_choice,
             stream=True,
+            extra_params=extra_params,
         )
 
         async for chunk in self._stream_with_retry("/chat/completions", payload):
@@ -189,8 +193,16 @@ class OpenRouterProvider(LLMProvider):
         tools: list[ToolDefinition] | None,
         tool_choice: str | dict | None,
         stream: bool,
+        extra_params: dict | None = None,
     ) -> dict[str, Any]:
-        """Build the JSON request body."""
+        """Build the JSON request body.
+
+        ``extra_params`` (from models.toml per-model config) are merged into
+        the payload.  Keys like ``provider``, ``reasoning``, ``temperature``,
+        ``max_tokens`` and any other OpenRouter-accepted field are supported.
+        Explicit call-site values for temperature/max_tokens take precedence
+        only when they differ from the defaults.
+        """
         payload: dict[str, Any] = {
             "model": model or self._default_model,
             "messages": [self._serialize_message(m) for m in messages],
@@ -203,6 +215,13 @@ class OpenRouterProvider(LLMProvider):
             payload["tools"] = [self._serialize_tool_definition(tool) for tool in tools]
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
+
+        if extra_params:
+            for key, value in extra_params.items():
+                if key in ("model", "messages", "stream", "tools", "tool_choice"):
+                    continue
+                payload[key] = value
+
         return payload
 
     @staticmethod
@@ -222,6 +241,8 @@ class OpenRouterProvider(LLMProvider):
             "role": message.role.value,
             "content": message.content,
         }
+        if message.reasoning is not None:
+            payload["reasoning"] = message.reasoning
         if message.tool_call_id is not None:
             payload["tool_call_id"] = message.tool_call_id
         if message.tool_calls:
@@ -327,9 +348,15 @@ class OpenRouterProvider(LLMProvider):
         payload: dict[str, Any],
     ) -> AsyncIterator[StreamChunk]:
         """Low-level SSE streaming."""
+        import time as _time
+
+        _t0 = _time.monotonic()
         async with self._client.stream("POST", path, json=payload) as response:
-            # Check the initial HTTP status *before* consuming the body
             self._raise_for_status(response)
+            logger.debug(
+                "SSE stream opened (%.1fms after request)",
+                (_time.monotonic() - _t0) * 1000,
+            )
 
             async for line in response.aiter_lines():
                 line = line.strip()
@@ -364,10 +391,30 @@ class OpenRouterProvider(LLMProvider):
 
                 delta = choices[0].get("delta", {})
                 content = delta.get("content", "")
+                reasoning = delta.get("reasoning", "")
                 finish_reason = choices[0].get("finish_reason")
+                raw_tool_calls = delta.get("tool_calls")
 
-                if content or finish_reason:
-                    yield StreamChunk(content=content or "", finish_reason=finish_reason)
+                tool_calls_delta: list[dict] | None = None
+                if isinstance(raw_tool_calls, list) and raw_tool_calls:
+                    tool_calls_delta = raw_tool_calls
+
+                if content or reasoning or finish_reason or tool_calls_delta:
+                    _elapsed = (_time.monotonic() - _t0) * 1000
+                    logger.debug(
+                        "SSE chunk at %.0fms: content=%d reasoning=%d tc=%s fin=%s",
+                        _elapsed,
+                        len(content or ""),
+                        len(reasoning or ""),
+                        bool(tool_calls_delta),
+                        finish_reason,
+                    )
+                    yield StreamChunk(
+                        content=content or "",
+                        finish_reason=finish_reason,
+                        reasoning=reasoning or None,
+                        tool_calls_delta=tool_calls_delta,
+                    )
 
     # -- Response parsing --------------------------------------------------
 
@@ -386,6 +433,7 @@ class OpenRouterProvider(LLMProvider):
 
         message = choices[0].get("message", {})
         content = message.get("content") or ""
+        reasoning = message.get("reasoning") or None
         tool_calls = OpenRouterProvider._parse_tool_calls(message.get("tool_calls"))
         finish_reason = choices[0].get("finish_reason", "")
 
@@ -402,6 +450,7 @@ class OpenRouterProvider(LLMProvider):
             usage=usage,
             finish_reason=finish_reason,
             tool_calls=tool_calls,
+            reasoning=reasoning,
         )
 
     @staticmethod
