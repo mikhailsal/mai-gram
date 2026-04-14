@@ -6,41 +6,117 @@ A self-hosted service that connects Telegram bots to LLM models through OpenRout
 
 ---
 
+## Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/mikhailsal/mai-gram.git
+cd mai-gram
+make install-dev
+
+# Configure
+cp .env.example .env
+# Edit .env: set TELEGRAM_BOT_TOKEN and OPENROUTER_API_KEY
+
+# Run
+make run
+```
+
+Then message your Telegram bot and use `/start` to set up.
+
+---
+
+## Make Targets
+
+Run `make help` to see all available commands. Here's the summary:
+
+### Running the Bot
+
+| Command | Description |
+|---------|-------------|
+| `make run` | Run the Telegram bot (production mode) |
+| `make run-dev` | Run with auto-reload (restarts on code changes) |
+
+### Console Chat (mai-chat CLI)
+
+All console commands accept `CHAT=<id>` to specify the chat. Default: `test-makefile`.
+
+| Command | Description |
+|---------|-------------|
+| `make chat-start` | Start setup flow (model + prompt selection) |
+| `make chat-setup` | One-shot setup: `CHAT=test-demo MODEL=openai/gpt-4o-mini PROMPT=default` |
+| `make chat MSG="Hello!"` | Send a message |
+| `make chat-list` | List all chats with message counts |
+| `make chat-history` | Show conversation history |
+| `make chat-wiki` | Show wiki entries |
+| `make chat-prompt` | Show the assembled LLM prompt (debug) |
+| `make chat-debug MSG="Hello!"` | Send a message with full LLM debug logging |
+| `make chat-import FILE=conv.json` | Import dialogue from JSON file |
+
+**Examples:**
+
+```bash
+# Create a new chat with gpt-4o-mini and the default prompt
+make chat-setup CHAT=test-demo
+
+# Send a message
+make chat CHAT=test-demo MSG="What is 2+2?"
+
+# View history
+make chat-history CHAT=test-demo
+
+# Import a conversation from another system
+make chat-import CHAT=test-demo FILE=exported_chat.json
+```
+
+### Testing & Code Quality
+
+| Command | Description |
+|---------|-------------|
+| `make test` | Run all tests |
+| `make test-v` | Run tests with verbose output |
+| `make test-cov` | Run tests with coverage report |
+| `make lint` | Check code with ruff |
+| `make format` | Format code with ruff |
+| `make typecheck` | Run mypy type checker |
+| `make check` | Run all quality checks (lint + format + typecheck) |
+| `make fix` | Auto-fix lint issues and reformat |
+| `make precommit` | Run all checks + tests (before committing) |
+
+### Docker
+
+| Command | Description |
+|---------|-------------|
+| `make docker-build` | Build Docker image |
+| `make docker-up` | Start in Docker (detached) |
+| `make docker-down` | Stop and remove containers |
+| `make docker-logs` | View container logs (follow mode) |
+| `make docker-restart` | Restart containers |
+| `make docker-shell` | Open a shell in the running container |
+
+### Cleanup
+
+| Command | Description |
+|---------|-------------|
+| `make clean` | Remove Python bytecode and caches |
+| `make clean-test` | Remove test artifacts (coverage, htmlcov) |
+| `make clean-all` | Remove everything generated |
+
+---
+
 ## Features
 
 | Feature | Description |
 |---------|-------------|
 | **Multi-bot support** | Run up to 3 Telegram bots simultaneously |
 | **Per-user configuration** | Each user selects their own model and system prompt |
-| **Model whitelist** | Configurable list of allowed models |
-| **System prompt templates** | Predefined prompts or custom user input |
+| **Model whitelist** | Configurable list of allowed models (`config/models.toml`) |
+| **System prompt templates** | Predefined prompts in `prompts/` or custom user input |
 | **Wiki (knowledge base)** | AI can save and recall facts using MCP tools |
 | **Dialogue import** | Import conversations from JSON (OpenAI format) |
 | **Custom OpenRouter URL** | Point to a local proxy for debugging |
 | **Console CLI** | Debug and inspect chats from the command line |
 | **Self-hosted** | All data stays on your hardware |
-
----
-
-## Quick Start
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/mikhailsal/mai-gram.git
-cd mai-gram
-
-# 2. Create your .env file
-cp .env.example .env
-# Edit .env with your Telegram token and OpenRouter API key
-
-# 3. Install
-pip install -e ".[dev]"
-
-# 4. Run
-python -m mai_gram.main
-```
-
-Then message your Telegram bot and use `/start` to set up.
 
 ---
 
@@ -75,39 +151,11 @@ default = "openai/gpt-4o-mini"
 
 ### System Prompt Templates (prompts/)
 
-Place `.txt` or `.md` files in the `prompts/` directory. Users can select from these during setup or type a custom prompt.
+Place `.txt` or `.md` files in the `prompts/` directory. Users can select from these during `/start` or type a custom prompt.
 
 ---
 
-## CLI (mai-chat)
-
-```bash
-# List all chats
-mai-chat --list
-
-# Start a new chat
-mai-chat -c test-mychat --start
-
-# Send a message
-mai-chat -c test-mychat "Hello, how are you?"
-
-# View history
-mai-chat -c test-mychat --history
-
-# View wiki
-mai-chat -c test-mychat --wiki
-
-# Show assembled prompt
-mai-chat -c test-mychat --show-prompt
-
-# Import dialogue from JSON
-mai-chat -c test-mychat --import-json conversation.json
-
-# Debug mode (logs LLM calls)
-mai-chat -c test-mychat --debug "What is 2+2?"
-```
-
-### Dialogue Import Format
+## Dialogue Import Format
 
 ```json
 [
@@ -126,38 +174,6 @@ mai-chat -c test-mychat --debug "What is 2+2?"
 Telegram User  -->  Telegram Bot(s)  -->  mai-gram  -->  OpenRouter  -->  LLM
                                              |
                                         SQLite DB (messages, wiki, chat config)
-```
-
----
-
-## Development
-
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Lint
-ruff check .
-
-# Format
-ruff format .
-
-# Type check
-mypy src/mai_gram
-
-# Auto-reload during development
-python -m mai_gram.main --reload
-```
-
----
-
-## Docker
-
-```bash
-docker compose up -d
 ```
 
 ---

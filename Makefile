@@ -5,10 +5,12 @@
 # Usage: make <target>
 # Run `make help` to see all available targets.
 
-.PHONY: help install install-dev run run-dev run-reload console \
-        test test-cov test-functional test-unit \
-        lint format typecheck check \
-        docker-build docker-up docker-down docker-logs docker-restart \
+.PHONY: help install install-dev run run-dev run-reload \
+        chat chat-start chat-list chat-history chat-prompt chat-import \
+        test test-v test-cov test-cov-html test-unit test-fast \
+        lint lint-fix format format-check typecheck check fix \
+        precommit \
+        docker-build docker-up docker-down docker-logs docker-restart docker-shell \
         clean clean-pyc clean-test clean-all
 
 # Default target
@@ -23,13 +25,16 @@ RESET := \033[0m
 # Python interpreter
 PYTHON := python3
 
+# Default test chat ID
+CHAT ?= test-makefile
+
 #------------------------------------------------------------------------------
 # Help
 #------------------------------------------------------------------------------
 
 help: ## Show this help message
 	@echo ""
-	@echo "$(GREEN)mai-gram$(RESET) — Development Commands"
+	@echo "$(GREEN)mai-gram$(RESET) — Telegram-LLM bridge via OpenRouter"
 	@echo ""
 	@echo "$(YELLOW)Usage:$(RESET) make $(BLUE)<target>$(RESET)"
 	@echo ""
@@ -46,7 +51,7 @@ install: ## Install the package (production dependencies only)
 install-dev: ## Install the package with development dependencies
 	$(PYTHON) -m pip install -e ".[dev]"
 
-##@ Running the Application
+##@ Running the Bot
 
 run: ## Run the Telegram bot (production mode)
 	$(PYTHON) -m mai_gram.main
@@ -56,11 +61,34 @@ run-dev: run-reload ## Alias for run-reload
 run-reload: ## Run with auto-reload (restarts on code changes)
 	$(PYTHON) -m mai_gram.main --reload
 
-console: ## Run in console mode (interactive, for testing)
-	mai-chat
+##@ Console Chat (mai-chat CLI)
 
-console-test: ## Run console with a test companion
-	mai-chat -c test-makefile --start
+chat-start: ## Start a new chat setup (CHAT=test-mychat)
+	mai-chat -c $(CHAT) --start
+
+chat-setup: ## Full setup: select model + prompt (CHAT=test-mychat MODEL=openai/gpt-4o-mini PROMPT=default)
+	mai-chat -c $(CHAT) --start --cb "model:$(or $(MODEL),openai/gpt-4o-mini)" --cb "prompt:$(or $(PROMPT),default)"
+
+chat: ## Send a message (CHAT=test-mychat MSG="Hello!")
+	mai-chat -c $(CHAT) "$(MSG)"
+
+chat-list: ## List all chats with message counts
+	mai-chat --list
+
+chat-history: ## Show conversation history (CHAT=test-mychat)
+	mai-chat -c $(CHAT) --history
+
+chat-wiki: ## Show wiki entries (CHAT=test-mychat)
+	mai-chat -c $(CHAT) --wiki
+
+chat-prompt: ## Show the assembled LLM prompt (CHAT=test-mychat)
+	mai-chat -c $(CHAT) --show-prompt
+
+chat-import: ## Import dialogue from JSON file (CHAT=test-mychat FILE=conversation.json)
+	mai-chat -c $(CHAT) --import-json $(FILE)
+
+chat-debug: ## Send a message with debug logging (CHAT=test-mychat MSG="Hello!")
+	mai-chat -c $(CHAT) --debug "$(MSG)"
 
 ##@ Testing
 
@@ -77,11 +105,8 @@ test-cov-html: ## Run tests with HTML coverage report
 	pytest --cov=mai_gram --cov-report=html
 	@echo "Coverage report generated in htmlcov/index.html"
 
-test-functional: ## Run functional tests only
-	pytest tests/functional/
-
-test-unit: ## Run unit tests only (exclude functional)
-	pytest --ignore=tests/functional/
+test-unit: ## Run unit tests only
+	pytest tests/
 
 test-fast: ## Run tests excluding slow markers
 	pytest -m "not slow"
