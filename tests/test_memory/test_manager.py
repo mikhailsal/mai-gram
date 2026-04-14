@@ -1,71 +1,51 @@
-"""Tests for MemoryManager delegation."""
+"""Tests for MemoryManager."""
 
 from __future__ import annotations
 
-from datetime import date
-from unittest.mock import AsyncMock, MagicMock
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from mai_companion.memory.manager import MemoryManager
+from mai_gram.db.models import Chat
+from mai_gram.memory.knowledge_base import WikiStore
+from mai_gram.memory.manager import MemoryManager
+from mai_gram.memory.messages import MessageStore
+
+
+@pytest.fixture
+async def chat(session: AsyncSession) -> Chat:
+    chat = Chat(
+        id="test-user@testbot",
+        user_id="test-user",
+        bot_id="testbot",
+        llm_model="openai/gpt-4o-mini",
+        system_prompt="test",
+    )
+    session.add(chat)
+    await session.flush()
+    return chat
+
+
+@pytest.fixture
+def manager(session: AsyncSession, tmp_path: object) -> MemoryManager:
+    message_store = MessageStore(session)
+    wiki_store = WikiStore(session, data_dir=str(tmp_path))
+    return MemoryManager(message_store, wiki_store)
 
 
 class TestMemoryManager:
-    async def test_save_message_delegates(self) -> None:
-        message_store = MagicMock()
-        message_store.save_message = AsyncMock(return_value=MagicMock(timestamp=date.today()))
-        summary_store = MagicMock()
-        wiki_store = MagicMock()
-        summarizer = MagicMock()
-        summarizer.trigger_daily_if_needed = AsyncMock(return_value=False)
-        forgetting = MagicMock()
-        manager = MemoryManager(message_store, summary_store, wiki_store, summarizer, forgetting)
 
-        await manager.save_message("comp", "user", "hello")
+    async def test_save_and_get_recent(
+        self, manager: MemoryManager, chat: Chat
+    ) -> None:
+        await manager.save_message(chat.id, "user", "Hello!")
+        await manager.save_message(chat.id, "assistant", "Hi there!")
+        recent = await manager.get_recent(chat.id, limit=10)
+        assert len(recent) == 2
 
-        message_store.save_message.assert_awaited_once()
-
-    async def test_get_short_term_delegates(self) -> None:
-        message_store = MagicMock()
-        message_store.get_short_term = AsyncMock(return_value=[])
-        manager = MemoryManager(message_store, MagicMock(), MagicMock(), MagicMock(), MagicMock())
-
-        await manager.get_short_term("comp")
-
-        message_store.get_short_term.assert_awaited_once()
-
-    def test_get_all_summaries_delegates(self) -> None:
-        summary_store = MagicMock()
-        summary_store.get_all_summaries.return_value = ["x"]
-        manager = MemoryManager(MagicMock(), summary_store, MagicMock(), MagicMock(), MagicMock())
-
-        result = manager.get_all_summaries("comp")
-
-        assert result == ["x"]
-        summary_store.get_all_summaries.assert_called_once_with("comp")
-
-    async def test_get_wiki_top_delegates(self) -> None:
-        wiki_store = MagicMock()
-        wiki_store.get_top_entries = AsyncMock(return_value=[])
-        manager = MemoryManager(MagicMock(), MagicMock(), wiki_store, MagicMock(), MagicMock())
-
-        await manager.get_wiki_top("comp")
-
-        wiki_store.get_top_entries.assert_awaited_once()
-
-    async def test_trigger_daily_summary(self) -> None:
-        summarizer = MagicMock()
-        summarizer.generate_daily_summary = AsyncMock(return_value="summary")
-        manager = MemoryManager(MagicMock(), MagicMock(), MagicMock(), summarizer, MagicMock())
-
-        result = await manager.trigger_daily_summary("comp", date(2026, 2, 14))
-
-        assert result == "summary"
-        summarizer.generate_daily_summary.assert_awaited_once()
-
-    async def test_run_forgetting_cycle(self) -> None:
-        forgetting = MagicMock()
-        forgetting.run_forgetting_cycle = AsyncMock(return_value=None)
-        manager = MemoryManager(MagicMock(), MagicMock(), MagicMock(), MagicMock(), forgetting)
-
-        await manager.run_forgetting_cycle("comp")
-
-        forgetting.run_forgetting_cycle.assert_awaited_once()
+    async def test_search_messages(
+        self, manager: MemoryManager, chat: Chat
+    ) -> None:
+        await manager.save_message(chat.id, "user", "I love Python programming")
+        await manager.save_message(chat.id, "user", "JavaScript is also nice")
+        results = await manager.search_messages(chat.id, "Python")
+        assert len(results) == 1

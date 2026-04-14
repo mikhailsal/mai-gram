@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mai_companion.llm.provider import (
+from mai_gram.llm.provider import (
     ChatMessage,
     LLMAuthenticationError,
     LLMContextLengthError,

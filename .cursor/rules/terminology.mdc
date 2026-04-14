@@ -1,13 +1,8 @@
----
-alwaysApply: true
----
 <rules_block name="terminology" priority="high">
 # Terminology
 
-- Use **"human"** not "user"
+- Use **"human"** not "user" (except in technical code contexts like variable names)
 - Use **"AI"** not "bot", "assistant", or "agent"
-- Use **"companion"** for both AI and human in the relationship
-- Say "AI companion" or "human's AI" when referring to the AI entity
-- Say "human" or "AI's human" when referring to the person
-- You can use "user", "bot", "assistant" in technical contexts, like json schema, code, variables, etc.
+- Use **"chat"** when referring to a conversation session/configuration
+- You can use "user", "bot", "assistant" in technical contexts like JSON schema, code, variables, etc.
 </rules_block>

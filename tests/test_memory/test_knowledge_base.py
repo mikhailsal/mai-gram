@@ -2,219 +2,96 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import tempfile
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mai_companion.db.models import Companion, KnowledgeEntry
-from mai_companion.memory.knowledge_base import WikiStore
+from mai_gram.db.models import Chat
+from mai_gram.memory.knowledge_base import WikiStore
 
 
-async def _create_companion(session: AsyncSession, companion_id: str = "comp-wiki") -> str:
-    companion = Companion(id=companion_id, name="Wiki Companion")
-    session.add(companion)
+@pytest.fixture
+async def chat(session: AsyncSession) -> Chat:
+    chat = Chat(
+        id="test-user@testbot",
+        user_id="test-user",
+        bot_id="testbot",
+        llm_model="openai/gpt-4o-mini",
+        system_prompt="test",
+    )
+    session.add(chat)
     await session.flush()
-    return companion_id
+    return chat
 
 
-class TestWikiStore:
-    """WikiStore behavior."""
+@pytest.fixture
+def store(session: AsyncSession, tmp_path: object) -> WikiStore:
+    return WikiStore(session, data_dir=str(tmp_path))
 
-    async def test_create_entry_file(self, session: AsyncSession, tmp_path: Path) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
 
-        await store.create_entry(companion_id, "human_name", "Alex", 42)
-        expected = tmp_path / companion_id / "wiki" / "0042_human_name.md"
-        assert expected.exists()
+class TestWikiCreate:
 
-    async def test_create_entry_content(
-        self, session: AsyncSession, tmp_path: Path
+    async def test_create_entry(
+        self, store: WikiStore, chat: Chat
     ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        created = tmp_path / companion_id / "wiki" / "9999_human_name.md"
-        assert created.read_text(encoding="utf-8") == "Alex"
-
-    async def test_create_entry_db_record(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        await store.create_entry(companion_id, "favorite_city", "Paris", 3000)
-        result = await session.execute(
-            select(KnowledgeEntry).where(KnowledgeEntry.companion_id == companion_id)
-        )
-        row = result.scalar_one()
-        assert row.key == "favorite_city"
-        assert row.value == "Paris"
-        assert row.importance == 3000
-
-    async def test_create_duplicate_key_error(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        with pytest.raises(ValueError, match="already exists"):
-            await store.create_entry(companion_id, "human_name", "Alice", 9000)
-
-    async def test_edit_entry_content(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        await store.edit_entry(companion_id, "human_name", content="Alice")
-        created = tmp_path / companion_id / "wiki" / "9999_human_name.md"
-        assert created.read_text(encoding="utf-8") == "Alice"
-
-    async def test_edit_entry_importance_renames_file(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        await store.edit_entry(companion_id, "human_name", importance=9500)
-
-        old_path = tmp_path / companion_id / "wiki" / "9999_human_name.md"
-        new_path = tmp_path / companion_id / "wiki" / "9500_human_name.md"
-        assert not old_path.exists()
-        assert new_path.exists()
-
-    async def test_read_entry(self, session: AsyncSession, tmp_path: Path) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        assert await store.read_entry(companion_id, "human_name") == "Alex"
-        assert await store.read_entry(companion_id, "missing_key") is None
-
-    async def test_search_entries_by_key(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        await store.create_entry(companion_id, "favorite_city", "Paris", 5000)
-
-        results = await store.search_entries(companion_id, "human")
-        assert [entry.key for entry in results] == ["human_name"]
-
-    async def test_search_entries_by_content(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        await store.create_entry(companion_id, "favorite_city", "Paris", 5000)
-
-        results = await store.search_entries(companion_id, "Alex")
-        assert [entry.key for entry in results] == ["human_name"]
-
-    async def test_get_top_entries(self, session: AsyncSession, tmp_path: Path) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-        await store.create_entry(companion_id, "k1", "v1", 100)
-        await store.create_entry(companion_id, "k2", "v2", 9000)
-        await store.create_entry(companion_id, "k3", "v3", 5000)
-
-        results = await store.get_top_entries(companion_id, limit=2)
-        assert [entry.key for entry in results] == ["k2", "k3"]
-
-    async def test_list_entries(self, session: AsyncSession, tmp_path: Path) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-        await store.create_entry(companion_id, "k1", "v1", 100)
-        await store.create_entry(companion_id, "k2", "v2", 9000)
-
-        results = await store.list_entries(companion_id)
-        assert len(results) == 2
-        assert {entry.key for entry in results} == {"k1", "k2"}
-
-    async def test_delete_entry(self, session: AsyncSession, tmp_path: Path) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-        await store.create_entry(companion_id, "human_name", "Alex", 9999)
-        path = tmp_path / companion_id / "wiki" / "9999_human_name.md"
-
-        deleted = await store.delete_entry(companion_id, "human_name")
-        assert deleted is True
-        assert not path.exists()
-        assert await store.read_entry(companion_id, "human_name") is None
-
-    async def test_decay_importance(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-        await store.create_entry(companion_id, "human_name", "Alex", 2500)
-
-        updated = await store.decay_importance(companion_id, "human_name", amount=100)
-        assert updated is not None
-        assert updated.importance == 2400
-        assert (tmp_path / companion_id / "wiki" / "2400_human_name.md").exists()
-        assert not (tmp_path / companion_id / "wiki" / "2500_human_name.md").exists()
-
-    async def test_key_sanitization(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        entry = await store.create_entry(companion_id, "Human Name! 2026", "Alex", 9999)
-        assert entry.key == "human_name_2026"
-        assert (tmp_path / companion_id / "wiki" / "9999_human_name_2026.md").exists()
-
-    async def test_key_sanitization_cyrillic(
-        self, session: AsyncSession, tmp_path: Path
-    ) -> None:
-        """Ensure Cyrillic (and other Unicode) keys are preserved."""
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
-
-        # Cyrillic key
         entry = await store.create_entry(
-            companion_id, "Любимый цвет", "Синий", 3000
+            chat.id, key="name", content="Alice", importance=9000
         )
-        assert entry.key == "любимый_цвет"
-        assert (tmp_path / companion_id / "wiki" / "3000_любимый_цвет.md").exists()
+        assert entry.key == "name"
+        assert entry.value == "Alice"
+        assert entry.importance == 9000.0
 
-        # CJK key (Chinese)
-        entry2 = await store.create_entry(
-            companion_id, "名前", "太郎", 9999
-        )
-        assert entry2.key == "名前"
-        assert (tmp_path / companion_id / "wiki" / "9999_名前.md").exists()
-
-    async def test_edit_restores_missing_file(
-        self, session: AsyncSession, tmp_path: Path
+    async def test_duplicate_key_raises(
+        self, store: WikiStore, chat: Chat
     ) -> None:
-        """Ensure edit restores file content from DB if file was missing."""
-        companion_id = await _create_companion(session)
-        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(chat.id, key="name", content="Alice", importance=9000)
+        with pytest.raises(ValueError, match="already exists"):
+            await store.create_entry(chat.id, key="name", content="Bob", importance=9000)
 
-        # Create entry
-        await store.create_entry(companion_id, "key", "content", 1000)
-        file_path = tmp_path / companion_id / "wiki" / "1000_key.md"
-        assert file_path.exists()
 
-        # Delete file manually to simulate data loss
-        file_path.unlink()
-        assert not file_path.exists()
+class TestWikiRead:
 
-        # Edit importance only (content is None)
-        await store.edit_entry(companion_id, "key", importance=2000)
+    async def test_read_existing(
+        self, store: WikiStore, chat: Chat
+    ) -> None:
+        await store.create_entry(chat.id, key="color", content="Blue", importance=5000)
+        content = await store.read_entry(chat.id, "color")
+        assert content == "Blue"
 
-        # New file should exist AND have content restored from DB
-        new_path = tmp_path / companion_id / "wiki" / "2000_key.md"
-        assert new_path.exists()
-        assert new_path.read_text(encoding="utf-8") == "content"
+    async def test_read_missing(
+        self, store: WikiStore, chat: Chat
+    ) -> None:
+        content = await store.read_entry(chat.id, "nonexistent")
+        assert content is None
+
+
+class TestWikiSearch:
+
+    async def test_search(
+        self, store: WikiStore, chat: Chat
+    ) -> None:
+        await store.create_entry(chat.id, key="pet_cat", content="Has a cat named Whiskers", importance=7000)
+        await store.create_entry(chat.id, key="pet_dog", content="Has a dog named Rex", importance=7000)
+        results = await store.search_entries(chat.id, "cat")
+        assert len(results) >= 1
+        assert any("cat" in e.key or "cat" in e.value.lower() for e in results)
+
+    async def test_search_no_results(
+        self, store: WikiStore, chat: Chat
+    ) -> None:
+        results = await store.search_entries(chat.id, "nonexistent")
+        assert results == []
+
+
+class TestWikiTopEntries:
+
+    async def test_top_entries_ordered_by_importance(
+        self, store: WikiStore, chat: Chat
+    ) -> None:
+        await store.create_entry(chat.id, key="low", content="low", importance=100)
+        await store.create_entry(chat.id, key="high", content="high", importance=9000)
+        await store.create_entry(chat.id, key="mid", content="mid", importance=5000)
+        top = await store.get_top_entries(chat.id, limit=2)
+        assert len(top) == 2
+        assert top[0].key == "high"

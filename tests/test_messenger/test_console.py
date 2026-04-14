@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from mai_companion.messenger.base import IncomingMessage, MessageType, OutgoingMessage
-from mai_companion.messenger.console import ConsoleMessenger
+from mai_gram.messenger.base import IncomingMessage, MessageType, OutgoingMessage
+from mai_gram.messenger.console import ConsoleMessenger
 
 
 class TestConsoleMessenger:

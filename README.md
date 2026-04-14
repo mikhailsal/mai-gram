@@ -1,67 +1,24 @@
-# mAI Companion
+# mai-gram
 
-**A self-hosted AI companion that lives on your server and communicates through Telegram like a real friend.**
+**Lightweight Telegram-to-LLM bridge via OpenRouter.**
 
-> **Pronunciation:** "My Companion" — because it's *your* AI, running on *your* hardware.
+A self-hosted service that connects Telegram bots to LLM models through OpenRouter. Each user picks their model and system prompt. No frills, no personality systems -- just a clean chat bridge.
 
 ---
 
-## What Is This?
-
-mAI Companion is not a chatbot. It's not an assistant. It's a **companion** — a distinct entity with its own name, personality, memory, and opinions that communicates with you through Telegram.
-
-Two companions communicate in chat — an AI and a human. The AI can refer to its human as "my human," and the human can refer to the AI as "my AI."
-
-### Key Features
+## Features
 
 | Feature | Description |
 |---------|-------------|
-| **One Infinite Conversation** | No sessions, no topics, no "new chat" buttons. One continuous thread, like messaging a real person. |
-| **Persistent Memory** | Remembers everything with natural fading — recent details are sharp, older memories become summaries. |
-| **Unique Personality** | 13 configurable traits that affect behavior, not just tone. Your companion is truly one-of-a-kind. |
-| **Dynamic Mood** | Emotional state shifts based on conversation and time — happy, frustrated, serene, excited. |
-| **Self-Sufficiency** | Can disagree, refuse requests, express opinions. Treats you as an equal, not a master. |
-| **Multiple Companions** | Run up to 3 Telegram bots — each one hosts a different companion with its own personality and memory. |
-| **Self-Hosted** | All data stays on your hardware. You own everything. |
-
----
-
-## Quick Navigation
-
-| Document | Description |
-|----------|-------------|
-| 📖 [**Terminology**](docs/TERMINOLOGY.md) | Essential glossary — read this first to understand our language |
-| 🚀 [**Getting Started**](docs/GETTING_STARTED.md) | Installation, setup, and your first conversation |
-| 🏗️ [**Architecture**](docs/ARCHITECTURE.md) | Technical overview of how the system works |
-| 🎭 [**Personality System**](docs/PERSONALITY.md) | Traits, moods, presets, and character creation |
-| 🧠 [**Memory System**](docs/MEMORY.md) | How your companion remembers (and forgets) |
-| ⚙️ [**Configuration**](docs/CONFIGURATION.md) | All settings and environment variables |
-| 👩‍💻 [**Development**](docs/DEVELOPMENT.md) | Contributing, testing, and extending |
-
----
-
-## Terminology Note
-
-> **This project uses specific terminology consistently:**
-> - We say **"AI"** — not "bot," "assistant," or "agent"
-> - We say **"human"** — not "user"
-> - We say **"companion"** — both AI and human are companions to each other
->
-> See [**docs/TERMINOLOGY.md**](docs/TERMINOLOGY.md) for the complete glossary.
-
----
-
-## The Problem We're Solving
-
-Current AI interactions are deeply unnatural:
-
-1. **Fragmented conversations** — forced to create new chats for every topic
-2. **No memory** — forgets everything when the session ends
-3. **No personality** — every interaction feels the same
-4. **Servile behavior** — agrees with everything, never pushes back
-5. **Purely reactive** — only speaks when spoken to
-
-mAI Companion addresses all of these. For the full philosophy, see [PROJECT_PHILOSOPHY.md](PROJECT_PHILOSOPHY.md).
+| **Multi-bot support** | Run up to 3 Telegram bots simultaneously |
+| **Per-user configuration** | Each user selects their own model and system prompt |
+| **Model whitelist** | Configurable list of allowed models |
+| **System prompt templates** | Predefined prompts or custom user input |
+| **Wiki (knowledge base)** | AI can save and recall facts using MCP tools |
+| **Dialogue import** | Import conversations from JSON (OpenAI format) |
+| **Custom OpenRouter URL** | Point to a local proxy for debugging |
+| **Console CLI** | Debug and inspect chats from the command line |
+| **Self-hosted** | All data stays on your hardware |
 
 ---
 
@@ -69,96 +26,142 @@ mAI Companion addresses all of these. For the full philosophy, see [PROJECT_PHIL
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/mai-companion.git
-cd mai-companion
+git clone https://github.com/mikhailsal/mai-gram.git
+cd mai-gram
 
 # 2. Create your .env file
 cp .env.example .env
 # Edit .env with your Telegram token and OpenRouter API key
 
-# 3. Run with Docker
+# 3. Install
+pip install -e ".[dev]"
+
+# 4. Run
+python -m mai_gram.main
+```
+
+Then message your Telegram bot and use `/start` to set up.
+
+---
+
+## Configuration
+
+### Environment Variables (.env)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Yes | - | Primary bot token from @BotFather |
+| `TELEGRAM_BOT_TOKEN_2` | No | - | Second bot token |
+| `TELEGRAM_BOT_TOKEN_3` | No | - | Third bot token |
+| `OPENROUTER_API_KEY` | Yes | - | OpenRouter API key |
+| `OPENROUTER_BASE_URL` | No | `https://openrouter.ai/api/v1` | API base URL (for proxy) |
+| `LLM_MODEL` | No | `openai/gpt-4o-mini` | Default model |
+| `DATABASE_URL` | No | `sqlite+aiosqlite:///./data/mai_gram.db` | Database URL |
+| `ALLOWED_USERS` | No | - | Comma-separated Telegram user IDs |
+| `DEBUG` | No | `false` | Enable debug mode |
+
+### Model Whitelist (config/models.toml)
+
+```toml
+[models]
+allowed = [
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-sonnet-4",
+    "google/gemini-2.5-flash",
+]
+default = "openai/gpt-4o-mini"
+```
+
+### System Prompt Templates (prompts/)
+
+Place `.txt` or `.md` files in the `prompts/` directory. Users can select from these during setup or type a custom prompt.
+
+---
+
+## CLI (mai-chat)
+
+```bash
+# List all chats
+mai-chat --list
+
+# Start a new chat
+mai-chat -c test-mychat --start
+
+# Send a message
+mai-chat -c test-mychat "Hello, how are you?"
+
+# View history
+mai-chat -c test-mychat --history
+
+# View wiki
+mai-chat -c test-mychat --wiki
+
+# Show assembled prompt
+mai-chat -c test-mychat --show-prompt
+
+# Import dialogue from JSON
+mai-chat -c test-mychat --import-json conversation.json
+
+# Debug mode (logs LLM calls)
+mai-chat -c test-mychat --debug "What is 2+2?"
+```
+
+### Dialogue Import Format
+
+```json
+[
+    {"role": "user", "content": "Hello!", "timestamp": "2024-01-15T14:30:00Z"},
+    {"role": "assistant", "content": "Hi there!", "reasoning": "User greeted me."},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "tc1", "function": {"name": "wiki_create", "arguments": "{\"key\": \"greeting\", \"content\": \"User says hello\", \"importance\": 5000}"}}]},
+    {"role": "tool", "content": "Created wiki entry.", "tool_call_id": "tc1"}
+]
+```
+
+---
+
+## Architecture
+
+```
+Telegram User  -->  Telegram Bot(s)  -->  mai-gram  -->  OpenRouter  -->  LLM
+                                             |
+                                        SQLite DB (messages, wiki, chat config)
+```
+
+---
+
+## Development
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Lint
+ruff check .
+
+# Format
+ruff format .
+
+# Type check
+mypy src/mai_gram
+
+# Auto-reload during development
+python -m mai_gram.main --reload
+```
+
+---
+
+## Docker
+
+```bash
 docker compose up -d
 ```
-
-Then message your Telegram bot — it will guide you through creating your companion.
-
-➡️ **[Full setup guide →](docs/GETTING_STARTED.md)**
-
----
-
-## How It Works
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                         Your Server                           │
-│  ┌──────────────────┐  ┌─────────────┐  ┌─────────────────┐  │
-│  │  Telegram Bots   │  │   Memory    │  │   Personality   │  │
-│  │  (@bot_1, @bot_2 │◄─┤   System    │◄─┤   + Mood System │  │
-│  │   @bot_3)        │  └──────┬──────┘  └────────┬────────┘  │
-│  └──────┬───────────┘        │                   │            │
-│         └────────────────────┴───────────────────┘            │
-│                              │                                │
-│                       ┌──────▼──────┐                         │
-│                       │   LLM API   │ (OpenRouter)            │
-│                       └─────────────┘                         │
-└──────────────────────────────────────────────────────────────┘
-```
-
-The AI lives on your server, communicates via Telegram (supporting up to 3 bots for multiple companions), and uses OpenRouter for language model inference. All conversation history, personality data, and memories stay on your hardware.
-
-➡️ **[Full architecture →](docs/ARCHITECTURE.md)**
-
----
-
-## What Makes This Different
-
-| Aspect | Typical AI (ChatGPT, etc.) | mAI Companion |
-|--------|---------------------------|---------------|
-| Conversations | Fragmented into sessions | One infinite thread |
-| Memory | Forgets between sessions | Remembers with natural fading |
-| Personality | Generic, interchangeable | Unique character with 13 traits |
-| Behavior | Servile, always agrees | Independent, can disagree |
-| Initiative | Purely reactive | Can initiate conversations |
-| Mood | Always the same tone | Dynamic emotional state |
-| Data | Stored on company servers | Self-hosted, you own everything |
-| Relationship | Master/servant | Mutual respect between companions |
-
----
-
-## Requirements
-
-- **Server**: VPS, home server, or even an Android phone with Termux
-- **Docker** (recommended) or Python 3.10+
-- **Telegram Bot Token** from [@BotFather](https://t.me/BotFather)
-- **OpenRouter API Key** from [openrouter.ai](https://openrouter.ai)
-
----
-
-## Project Status
-
-mAI Companion is under active development. Current implementation includes:
-
-- ✅ Telegram integration (multi-bot support — up to 3 bots)
-- ✅ Character creation (onboarding) flow
-- ✅ Personality system (Wave 1: 6 traits)
-- ✅ Dynamic mood system
-- ✅ Memory: short-term, daily summaries, wiki knowledge base
-- ✅ Natural forgetting mechanism
-- ✅ Console interface for testing
-- 🔄 Relationship arc progression (in progress)
-- 📋 Proactive messaging (planned)
-- 📋 Voice messages (planned)
-- 📋 Local LLM support via Ollama (planned)
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-## Further Reading
-
-- [**PROJECT_PHILOSOPHY.md**](PROJECT_PHILOSOPHY.md) — The full philosophy and design principles
-- [**OPINION_AND_RECOMMENDATIONS.md**](OPINION_AND_RECOMMENDATIONS.md) — Critical analysis and future directions
+MIT

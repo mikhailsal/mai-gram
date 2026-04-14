@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mai_companion.bot.middleware import (
+from mai_gram.bot.middleware import (
     MessageLogger,
     RateLimiter,
     RateLimitConfig,
@@ -14,7 +14,7 @@ from mai_companion.bot.middleware import (
     with_logging,
     with_rate_limit,
 )
-from mai_companion.messenger.base import IncomingMessage, MessageType
+from mai_gram.messenger.base import IncomingMessage, MessageType
 
 
 @pytest.fixture

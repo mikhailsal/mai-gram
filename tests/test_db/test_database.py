@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from mai_companion.db.database import (
+from mai_gram.db.database import (
     close_db,
     get_engine,
     get_session,
@@ -14,7 +14,7 @@ from mai_companion.db.database import (
     init_db,
     reset_db_state,
 )
-from mai_companion.db.models import Base, Companion
+from mai_gram.db.models import Base, Chat
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -28,7 +28,6 @@ def _clean_db_state() -> None:
 
 
 class TestGetEngine:
-    """Tests for get_engine()."""
 
     async def test_creates_engine(self) -> None:
         engine = get_engine(TEST_DATABASE_URL)
@@ -44,7 +43,6 @@ class TestGetEngine:
 
 
 class TestGetSessionFactory:
-    """Tests for get_session_factory()."""
 
     async def test_raises_without_engine(self) -> None:
         with pytest.raises(RuntimeError, match="No database engine"):
@@ -58,22 +56,26 @@ class TestGetSessionFactory:
 
 
 class TestGetSession:
-    """Tests for get_session() context manager."""
 
     async def test_session_commits_on_success(self) -> None:
         engine = await init_db(TEST_DATABASE_URL)
 
         async with get_session() as session:
-            companion = Companion(id="test-1", name="TestBot")
-            session.add(companion)
+            chat = Chat(
+                id="test-1@bot",
+                user_id="test-1",
+                bot_id="bot",
+                llm_model="test/model",
+                system_prompt="test",
+            )
+            session.add(chat)
 
-        # Verify it was committed
         async with get_session() as session:
             result = await session.execute(
-                select(Companion).where(Companion.id == "test-1")
+                select(Chat).where(Chat.id == "test-1@bot")
             )
             loaded = result.scalar_one()
-            assert loaded.name == "TestBot"
+            assert loaded.llm_model == "test/model"
 
         await engine.dispose()
 
@@ -82,14 +84,19 @@ class TestGetSession:
 
         with pytest.raises(ValueError, match="intentional"):
             async with get_session() as session:
-                companion = Companion(id="test-2", name="ShouldNotExist")
-                session.add(companion)
+                chat = Chat(
+                    id="test-2@bot",
+                    user_id="test-2",
+                    bot_id="bot",
+                    llm_model="test/model",
+                    system_prompt="test",
+                )
+                session.add(chat)
                 raise ValueError("intentional error")
 
-        # Verify it was NOT committed
         async with get_session() as session:
             result = await session.execute(
-                select(Companion).where(Companion.id == "test-2")
+                select(Chat).where(Chat.id == "test-2@bot")
             )
             assert result.scalar_one_or_none() is None
 
@@ -97,26 +104,20 @@ class TestGetSession:
 
 
 class TestInitDb:
-    """Tests for init_db()."""
 
     async def test_creates_all_tables(self) -> None:
         engine = await init_db(TEST_DATABASE_URL)
 
         async with engine.begin() as conn:
-            # Check that key tables exist
             result = await conn.execute(
                 text("SELECT name FROM sqlite_master WHERE type='table'")
             )
             table_names = {row[0] for row in result.fetchall()}
 
         expected_tables = {
-            "companions",
-            "mood_states",
-            "relationship_events",
+            "chats",
             "messages",
-            "daily_summaries",
             "knowledge_entries",
-            "shared_activities",
             "schema_versions",
         }
         assert expected_tables.issubset(table_names), (
@@ -125,9 +126,7 @@ class TestInitDb:
         await engine.dispose()
 
     async def test_init_is_idempotent(self) -> None:
-        """Calling init_db twice doesn't error or duplicate tables."""
         engine1 = await init_db(TEST_DATABASE_URL)
-        # Reset so we can re-init
         reset_db_state()
         engine2 = await init_db(TEST_DATABASE_URL)
 
@@ -143,12 +142,10 @@ class TestInitDb:
 
 
 class TestCloseDb:
-    """Tests for close_db()."""
 
     async def test_close_resets_state(self) -> None:
         await init_db(TEST_DATABASE_URL)
         await close_db()
 
-        # After close, session factory should be None
         with pytest.raises(RuntimeError, match="No database engine"):
             get_session_factory()

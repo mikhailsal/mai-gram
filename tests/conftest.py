@@ -1,4 +1,4 @@
-"""Shared test fixtures for mAI Companion.
+"""Shared test fixtures for mai-gram.
 
 Provides an in-memory SQLite database and session for all tests.
 """
@@ -11,8 +11,8 @@ from typing import AsyncGenerator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from mai_companion.config import Settings
-from mai_companion.db.models import Base
+from mai_gram.config import Settings
+from mai_gram.db.models import Base
 
 # In-memory SQLite URL for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -61,7 +61,6 @@ def settings() -> Settings:
         telegram_bot_token="test-token-123",
         openrouter_api_key="test-api-key-456",
         database_url=TEST_DATABASE_URL,
-        chroma_persist_dir="/tmp/mai_test_chroma",
         log_level="DEBUG",
         debug=True,
     )

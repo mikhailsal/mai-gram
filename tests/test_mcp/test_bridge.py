@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator
 
-from mai_companion.llm.provider import (
+from mai_gram.llm.provider import (
     ChatMessage,
     LLMProvider,
     LLMResponse,
@@ -13,14 +13,14 @@ from mai_companion.llm.provider import (
     ToolCall,
     TokenUsage,
 )
-from mai_companion.mcp_servers.bridge import (
+from mai_gram.mcp_servers.bridge import (
     mcp_result_to_openai,
     mcp_tools_to_openai,
     openai_tool_call_to_mcp,
     run_with_tools,
 )
-from mai_companion.mcp_servers.manager import MCPManager, RegisteredTool
-from mai_companion.mcp_servers.messages_server import MCPToolSpec
+from mai_gram.mcp_servers.manager import MCPManager, RegisteredTool
+from mai_gram.mcp_servers.messages_server import MCPToolSpec
 
 
 class _FakeServer:

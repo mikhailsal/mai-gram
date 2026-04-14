@@ -1,0 +1,13 @@
+# Model whitelist -- models available for user selection during setup.
+# Users can only choose from this list when creating a new chat via /start.
+
+[models]
+allowed = [
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-3.5-haiku",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+]
+default = "openai/gpt-4o-mini"

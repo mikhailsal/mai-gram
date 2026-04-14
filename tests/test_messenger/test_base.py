@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mai_companion.messenger.base import (
+from mai_gram.messenger.base import (
     IncomingMessage,
     MessageType,
     OutgoingMessage,

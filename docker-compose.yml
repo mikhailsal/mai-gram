@@ -1,12 +1,11 @@
 services:
-  mai-companion:
+  mai-gram:
     build: .
-    container_name: mai-companion
+    container_name: mai-gram
     restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./data:/app/data
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/mai_companion.db
-      - CHROMA_PERSIST_DIR=./data/chroma_data
+      - DATABASE_URL=sqlite+aiosqlite:///./data/mai_gram.db

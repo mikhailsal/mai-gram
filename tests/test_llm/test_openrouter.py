@@ -11,8 +11,8 @@ from typing import Any
 import httpx
 import pytest
 
-from mai_companion.llm.openrouter import OpenRouterProvider
-from mai_companion.llm.provider import (
+from mai_gram.llm.openrouter import OpenRouterProvider
+from mai_gram.llm.provider import (
     ChatMessage,
     LLMAuthenticationError,
     LLMContextLengthError,
@@ -1417,9 +1417,9 @@ class TestPackageLevelExports:
     """Test that tool-related types are accessible from the package level."""
 
     def test_tool_definition_importable_from_package(self) -> None:
-        from mai_companion.llm import ToolDefinition as TD
+        from mai_gram.llm import ToolDefinition as TD
         assert TD is ToolDefinition
 
     def test_tool_call_importable_from_package(self) -> None:
-        from mai_companion.llm import ToolCall as TC
+        from mai_gram.llm import ToolCall as TC
         assert TC is ToolCall

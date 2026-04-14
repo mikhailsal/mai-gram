@@ -13,11 +13,13 @@ COPY pyproject.toml .
 # Install Python dependencies
 RUN pip install --no-cache-dir .
 
-# Copy source code
+# Copy source code and config
 COPY src/ src/
+COPY config/ config/
+COPY prompts/ prompts/
 
 # Create data directory
 RUN mkdir -p /app/data
 
 # Run the application
-CMD ["python", "-m", "mai_companion.main"]
+CMD ["python", "-m", "mai_gram.main"]

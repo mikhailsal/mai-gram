@@ -1,4 +1,4 @@
-# mAI Companion Makefile
+# mai-gram Makefile
 # ========================
 # Convenience commands for development, testing, and running the application.
 #
@@ -29,7 +29,7 @@ PYTHON := python3
 
 help: ## Show this help message
 	@echo ""
-	@echo "$(GREEN)mAI Companion$(RESET) — Development Commands"
+	@echo "$(GREEN)mai-gram$(RESET) — Development Commands"
 	@echo ""
 	@echo "$(YELLOW)Usage:$(RESET) make $(BLUE)<target>$(RESET)"
 	@echo ""
@@ -49,12 +49,12 @@ install-dev: ## Install the package with development dependencies
 ##@ Running the Application
 
 run: ## Run the Telegram bot (production mode)
-	$(PYTHON) -m mai_companion.main
+	$(PYTHON) -m mai_gram.main
 
 run-dev: run-reload ## Alias for run-reload
 
 run-reload: ## Run with auto-reload (restarts on code changes)
-	$(PYTHON) -m mai_companion.main --reload
+	$(PYTHON) -m mai_gram.main --reload
 
 console: ## Run in console mode (interactive, for testing)
 	mai-chat
@@ -71,10 +71,10 @@ test-v: ## Run all tests with verbose output
 	pytest -v
 
 test-cov: ## Run tests with coverage report
-	pytest --cov=mai_companion --cov-report=term-missing
+	pytest --cov=mai_gram --cov-report=term-missing
 
 test-cov-html: ## Run tests with HTML coverage report
-	pytest --cov=mai_companion --cov-report=html
+	pytest --cov=mai_gram --cov-report=html
 	@echo "Coverage report generated in htmlcov/index.html"
 
 test-functional: ## Run functional tests only
@@ -101,7 +101,7 @@ format-check: ## Check code formatting (without changes)
 	ruff format --check .
 
 typecheck: ## Run mypy type checker
-	mypy src/mai_companion
+	mypy src/mai_gram
 
 check: lint format-check typecheck ## Run all code quality checks (lint + format + typecheck)
 
@@ -129,7 +129,7 @@ docker-restart: ## Restart Docker containers
 	docker compose restart
 
 docker-shell: ## Open a shell in the running container
-	docker compose exec mai-companion /bin/bash
+	docker compose exec mai-gram /bin/bash
 
 ##@ Cleanup
 

@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from mai_companion.mcp_servers.manager import MCPManager
-from mai_companion.mcp_servers.messages_server import MCPToolSpec
+from mai_gram.mcp_servers.manager import MCPManager
+from mai_gram.mcp_servers.messages_server import MCPToolSpec
 
 
 class _FakeServer:
