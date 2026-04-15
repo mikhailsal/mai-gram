@@ -32,7 +32,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 4
 
 
 def register_migration(
@@ -83,6 +83,41 @@ async def _migrate_v2(conn: AsyncConnection) -> None:
             text("ALTER TABLE chats ADD COLUMN send_datetime BOOLEAN NOT NULL DEFAULT 1")
         )
         logger.info("Added chats.send_datetime column")
+
+
+@register_migration(3, "Add timezone and cut_above_message_id to chats")
+async def _migrate_v3(conn: AsyncConnection) -> None:
+    """Version 3: add Chat.timezone and Chat.cut_above_message_id."""
+    result = await conn.execute(text("PRAGMA table_info(chats)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "timezone" not in existing_cols:
+        await conn.execute(
+            text("ALTER TABLE chats ADD COLUMN timezone VARCHAR(50) NOT NULL DEFAULT 'UTC'")
+        )
+        logger.info("Added chats.timezone column")
+
+    if "cut_above_message_id" not in existing_cols:
+        await conn.execute(
+            text("ALTER TABLE chats ADD COLUMN cut_above_message_id INTEGER")
+        )
+        logger.info("Added chats.cut_above_message_id column")
+
+
+@register_migration(4, "Add timezone column to messages")
+async def _migrate_v4(conn: AsyncConnection) -> None:
+    """Version 4: add Message.timezone to track timezone per-message."""
+    result = await conn.execute(text("PRAGMA table_info(messages)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "timezone" not in existing_cols:
+        await conn.execute(
+            text(
+                "ALTER TABLE messages ADD COLUMN timezone "
+                "VARCHAR(50) NOT NULL DEFAULT 'UTC'"
+            )
+        )
+        logger.info("Added messages.timezone column")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

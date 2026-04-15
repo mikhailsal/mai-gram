@@ -17,17 +17,19 @@ from mai_gram.bot.handler import BotHandler
 from mai_gram.config import get_settings
 from mai_gram.db import close_db, init_db, run_migrations
 from mai_gram.llm.openrouter import OpenRouterProvider
+from mai_gram.mcp_servers.external import ExternalMCPPool
 from mai_gram.messenger.telegram import TelegramMessenger
 
 logger = logging.getLogger(__name__)
 
 _messengers: list[TelegramMessenger] = []
 _llm_provider: OpenRouterProvider | None = None
+_external_mcp_pool: ExternalMCPPool | None = None
 
 
 async def startup() -> None:
     """Initialize all application subsystems."""
-    global _llm_provider
+    global _llm_provider, _external_mcp_pool
 
     settings = get_settings()
 
@@ -62,6 +64,15 @@ async def startup() -> None:
         settings.openrouter_base_url,
     )
 
+    external_mcp_configs = settings.get_external_mcp_config()
+    if external_mcp_configs:
+        _external_mcp_pool = ExternalMCPPool(external_mcp_configs)
+        logger.info(
+            "External MCP pool: %d server(s) configured: %s",
+            len(external_mcp_configs),
+            ", ".join(external_mcp_configs.keys()),
+        )
+
     for i, token in enumerate(bot_tokens, start=1):
         messenger = TelegramMessenger(token)
 
@@ -72,6 +83,7 @@ async def startup() -> None:
             wiki_context_limit=settings.wiki_context_limit,
             short_term_limit=settings.short_term_limit,
             tool_max_iterations=settings.tool_max_iterations,
+            external_mcp_pool=_external_mcp_pool,
         )
 
         await messenger.start()
@@ -86,13 +98,17 @@ async def startup() -> None:
 
 async def shutdown() -> None:
     """Gracefully shut down all application subsystems."""
-    global _llm_provider
+    global _llm_provider, _external_mcp_pool
 
     logger.info("mai-gram shutting down...")
 
     for messenger in _messengers:
         await messenger.stop()
     _messengers.clear()
+
+    if _external_mcp_pool:
+        await _external_mcp_pool.stop_all()
+        _external_mcp_pool = None
 
     if _llm_provider:
         await _llm_provider.close()

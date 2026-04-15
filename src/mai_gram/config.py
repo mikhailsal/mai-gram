@@ -108,6 +108,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -- Timezone --
+    default_timezone: str = Field(
+        default="UTC",
+        description=(
+            "Default IANA timezone for new chats (e.g. Europe/Moscow). "
+            "Users can override per-chat with /timezone."
+        ),
+    )
+
     # -- Debug --
     debug: bool = Field(
         default=False,
@@ -183,6 +192,44 @@ class Settings(BaseSettings):
         enabled = tools_section.get("enabled")
         disabled = tools_section.get("disabled")
         return enabled, disabled
+
+    def get_external_mcp_config(self) -> dict[str, dict]:
+        """Load external MCP server configs from the models config.
+
+        Reads the [mcp] section for the config path and whitelist,
+        then loads and filters the MCP JSON file.
+
+        Returns a dict mapping server_name -> server_config (command, args, env).
+        """
+        import json as _json
+
+        config_path = Path(self.models_config_path)
+        if not config_path.exists():
+            return {}
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+
+        mcp_section = data.get("mcp", {})
+        mcp_json_path = mcp_section.get("mcp_config_path", "")
+        whitelist = set(mcp_section.get("external_servers", []))
+
+        if not mcp_json_path or not whitelist:
+            return {}
+
+        mcp_json_path = Path(mcp_json_path).expanduser()
+        if not mcp_json_path.exists():
+            return {}
+
+        with open(mcp_json_path, encoding="utf-8") as f:
+            mcp_data = _json.load(f)
+
+        servers_raw = mcp_data.get("mcpServers", {})
+        result: dict[str, dict] = {}
+        for name, config in servers_raw.items():
+            if name in whitelist:
+                result[name] = config
+
+        return result
 
     def get_available_prompts(self) -> dict[str, str]:
         """Load available system prompt templates from the prompts directory.

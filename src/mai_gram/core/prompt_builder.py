@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from mai_gram.db.models import Chat, Message
 from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole, ToolCall
@@ -46,9 +47,12 @@ class PromptBuilder:
         *,
         current_time: datetime | None = None,
         send_datetime: bool = True,
+        chat_timezone: str = "UTC",
+        cut_above_message_id: int | None = None,
     ) -> list[ChatMessage]:
         """Build full model context: system message + message history."""
         self._send_datetime = send_datetime
+        self._chat_timezone = chat_timezone
         now = current_time or datetime.now(timezone.utc)
 
         wiki_entries = await self._wiki_store.get_top_entries(
@@ -58,6 +62,7 @@ class PromptBuilder:
         recent_messages = await self._message_store.get_recent(
             chat.id,
             limit=self._short_term_limit,
+            after_message_id=cut_above_message_id,
         )
 
         llm_history = []
@@ -66,7 +71,9 @@ class PromptBuilder:
 
         llm_history = self._normalize_conversation(llm_history)
 
-        system_prompt = self._build_system_prompt(chat, wiki_entries, now)
+        system_prompt = self._build_system_prompt(
+            chat, wiki_entries, now, cut_above_message_id=cut_above_message_id,
+        )
         context = [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
 
         token_count = await self._llm.count_tokens(context)
@@ -114,7 +121,16 @@ class PromptBuilder:
         """Convert a stored Message to a ChatMessage for LLM context."""
         if msg.role == "user":
             if getattr(self, "_send_datetime", True):
-                content = f"[{msg.timestamp.strftime('%Y-%m-%d %H:%M')}] {msg.content}"
+                tz_name = getattr(msg, "timezone", None) or getattr(
+                    self, "_chat_timezone", "UTC"
+                )
+                try:
+                    tz = ZoneInfo(tz_name)
+                except (KeyError, ValueError):
+                    tz = timezone.utc
+                    tz_name = "UTC"
+                ts = msg.timestamp.replace(tzinfo=timezone.utc).astimezone(tz)
+                content = f"[{ts.strftime('%Y-%m-%d %H:%M')} {tz_name}] {msg.content}"
             else:
                 content = msg.content
             return ChatMessage(role=MessageRole.USER, content=content)
@@ -151,19 +167,9 @@ class PromptBuilder:
         chat: Chat,
         wiki_entries: list,
         now: datetime,
+        *,
+        cut_above_message_id: int | None = None,
     ) -> str:
-        prompt_now = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
-        prompt_now = prompt_now.astimezone(timezone.utc)
-
-        send_dt = getattr(self, "_send_datetime", True)
-        time_section = ""
-        if send_dt:
-            time_section = (
-                f"Current date and time: "
-                f"{prompt_now.strftime('%A, %B')} {prompt_now.day}, "
-                f"{prompt_now.year}, {prompt_now.strftime('%H:%M')} UTC."
-            )
-
         test_section = ""
         if self._test_mode:
             test_section = (
@@ -171,23 +177,13 @@ class PromptBuilder:
                 "The messages are simulated test inputs.\n\n"
             )
 
-        wiki_lines = []
-        for entry in wiki_entries:
-            wiki_lines.append(f"- ({int(entry.importance)}) {entry.key}: {entry.value}")
-        wiki_section = (
-            "Things you know:\n"
-            + ("\n".join(wiki_lines) if wiki_lines else "- No saved knowledge yet.")
-        )
+        cut_notice = ""
+        if cut_above_message_id is not None:
+            cut_notice = (
+                "\n\n[HISTORY NOTE] The conversation history shown below has been "
+                "truncated by the user. Earlier messages exist but are not included. "
+                "If you need context from older messages, use the search_messages "
+                "or get_messages_by_timerange tools to retrieve them."
+            )
 
-        tool_instructions = (
-            "You have tools to save and recall information. "
-            "Use wiki_create to remember important facts. "
-            "Use search_messages to find past conversations."
-        )
-
-        parts = [f"{test_section}{chat.system_prompt}"]
-        if time_section:
-            parts.append(time_section)
-        parts.append(wiki_section)
-        parts.append(tool_instructions)
-        return "\n\n".join(parts)
+        return f"{test_section}{chat.system_prompt}{cut_notice}"

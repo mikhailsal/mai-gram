@@ -88,6 +88,9 @@ class StreamChunk:
     reasoning: str | None = None
     tool_calls_delta: list[dict] | None = None
     turn_complete: bool = False
+    usage: TokenUsage | None = None
+    cost: float | None = None
+    is_byok: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -86,6 +86,21 @@ class Chat(Base):
         default=True,
         doc="Whether to prepend date/time to user messages sent to the LLM",
     )
+    timezone: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="UTC",
+        doc="IANA timezone for this chat (e.g. Europe/Moscow). Affects timestamps shown to LLM.",
+    )
+    cut_above_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        doc=(
+            "DB message ID at which to cut history. Messages before this ID "
+            "are excluded from LLM context but remain searchable."
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
@@ -157,6 +172,12 @@ class Message(Base):
         nullable=True,
         default=None,
         doc="LLM reasoning/thinking content. Only set for role='assistant'.",
+    )
+    timezone: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="UTC",
+        doc="IANA timezone active when this message was created.",
     )
 
     chat: Mapped[Chat] = relationship(back_populates="messages")

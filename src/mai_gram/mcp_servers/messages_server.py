@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from mai_gram.db.models import Message
 from mai_gram.memory.messages import MessageStore
@@ -284,12 +285,18 @@ class MessagesMCPServer:
 
     @staticmethod
     def _format_message_with_id(msg: Message) -> str:
-        """Format a message with ID, timestamp, role, and content."""
-        ts = msg.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        return f"[#{msg.id}] [{ts}] {msg.role}: {msg.content}"
+        """Format a message with ID, timestamp in its stored timezone, role, and content."""
+        tz_name = getattr(msg, "timezone", "UTC") or "UTC"
+        try:
+            tz = ZoneInfo(tz_name)
+        except (KeyError, ValueError):
+            tz = timezone.utc
+            tz_name = "UTC"
+        ts = msg.timestamp.replace(tzinfo=timezone.utc).astimezone(tz)
+        return f"[#{msg.id}] [{ts.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}] {msg.role}: {msg.content}"
 
     @staticmethod
     def _format_message(timestamp: datetime, role: str, content: str) -> str:
         """Format a message without ID (legacy method)."""
         ts = timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        return f"[{ts}] {role}: {content}"
+        return f"[{ts} UTC] {role}: {content}"

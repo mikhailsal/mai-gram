@@ -38,3 +38,11 @@ default = "google/gemma-4-31b-it:free"
 # [tools]
 # enabled = ["wiki_create", "wiki_edit", "wiki_read", "wiki_search"]
 # disabled = ["search_messages", "get_messages_by_timerange"]
+
+# External MCP server configuration.
+# Servers are loaded from the mcp_config_path JSON file (Cursor/Claude format).
+# Only servers listed in external_servers are started and made available.
+#
+[mcp]
+mcp_config_path = "~/.cursor/mcp.json"
+external_servers = ["duckduckgo"]

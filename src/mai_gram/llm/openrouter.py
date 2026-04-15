@@ -209,6 +209,8 @@ class OpenRouterProvider(LLMProvider):
             "temperature": temperature,
             "stream": stream,
         }
+        if stream:
+            payload["include"] = ["usage"]
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if tools is not None:
@@ -399,7 +401,35 @@ class OpenRouterProvider(LLMProvider):
                 if isinstance(raw_tool_calls, list) and raw_tool_calls:
                     tool_calls_delta = raw_tool_calls
 
-                if content or reasoning or finish_reason or tool_calls_delta:
+                usage_obj: TokenUsage | None = None
+                cost_val: float | None = None
+                is_byok_val = False
+                usage_data = data.get("usage")
+                if isinstance(usage_data, dict):
+                    usage_obj = TokenUsage(
+                        prompt_tokens=usage_data.get("prompt_tokens", 0),
+                        completion_tokens=usage_data.get("completion_tokens", 0),
+                        total_tokens=usage_data.get("total_tokens", 0),
+                    )
+                    is_byok_val = bool(usage_data.get("is_byok", False))
+                    raw_cost = usage_data.get("cost") or 0.0
+                    if is_byok_val:
+                        cost_details = usage_data.get("cost_details") or {}
+                        inference_cost = (
+                            cost_details.get("upstream_inference_cost")
+                            or usage_data.get("native_tokens_cost")
+                            or usage_data.get("inference_cost")
+                            or 0.0
+                        )
+                        cost_val = float(raw_cost) + float(inference_cost)
+                    else:
+                        cost_val = float(raw_cost) if raw_cost else None
+                    logger.info(
+                        "Usage data: %s (resolved cost=%.6f, byok=%s)",
+                        usage_data, cost_val or 0, is_byok_val,
+                    )
+
+                if content or reasoning or finish_reason or tool_calls_delta or usage_obj:
                     _elapsed = (_time.monotonic() - _t0) * 1000
                     logger.debug(
                         "SSE chunk at %.0fms: content=%d reasoning=%d tc=%s fin=%s",
@@ -414,6 +444,9 @@ class OpenRouterProvider(LLMProvider):
                         finish_reason=finish_reason,
                         reasoning=reasoning or None,
                         tool_calls_delta=tool_calls_delta,
+                        usage=usage_obj,
+                        cost=cost_val,
+                        is_byok=is_byok_val,
                     )
 
     # -- Response parsing --------------------------------------------------

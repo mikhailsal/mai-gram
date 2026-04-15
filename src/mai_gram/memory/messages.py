@@ -38,6 +38,7 @@ class MessageStore:
         tool_calls: str | None = None,
         tool_call_id: str | None = None,
         reasoning: str | None = None,
+        timezone_name: str = "UTC",
     ) -> Message:
         """Persist a message and return the saved ORM object."""
         if timestamp is not None:
@@ -65,6 +66,7 @@ class MessageStore:
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
             reasoning=reasoning,
+            timezone=timezone_name,
         )
         if timestamp is not None:
             message.timestamp = timestamp
@@ -78,11 +80,19 @@ class MessageStore:
         chat_id: str,
         *,
         limit: int = 50,
+        after_message_id: int | None = None,
     ) -> list[Message]:
-        """Return the most recent messages for a chat (newest first)."""
+        """Return the most recent messages for a chat (newest first).
+
+        If *after_message_id* is set, only messages with id >= that value
+        are returned (used by the "cut above" feature).
+        """
+        conditions = [Message.chat_id == chat_id]
+        if after_message_id is not None:
+            conditions.append(Message.id >= after_message_id)
         result = await self._session.execute(
             select(Message)
-            .where(Message.chat_id == chat_id)
+            .where(and_(*conditions))
             .order_by(desc(Message.id))
             .limit(limit)
         )

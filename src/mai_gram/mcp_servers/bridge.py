@@ -14,6 +14,7 @@ from mai_gram.llm.provider import (
     LLMResponse,
     MessageRole,
     StreamChunk,
+    TokenUsage,
     ToolCall,
     ToolDefinition,
 )
@@ -296,11 +297,18 @@ async def run_with_tools_stream(
         for tool in registered_tools
     ]
 
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_cost: float | None = None
+    last_is_byok = False
+
     for _ in range(max_iterations):
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_call_deltas: list[list[dict]] = []
         finish_reason: str | None = None
+        iter_usage: TokenUsage | None = None
+        iter_cost: float | None = None
 
         async for chunk in llm.generate_stream(
             conversation,
@@ -319,15 +327,32 @@ async def run_with_tools_stream(
                 tool_call_deltas.append(chunk.tool_calls_delta)
             if chunk.finish_reason:
                 finish_reason = chunk.finish_reason
+            if chunk.usage is not None:
+                iter_usage = chunk.usage
+                iter_cost = chunk.cost
+                last_is_byok = chunk.is_byok
 
             if chunk.content or chunk.reasoning:
                 yield chunk
 
+        if iter_usage is not None:
+            total_prompt_tokens += iter_usage.prompt_tokens
+            total_completion_tokens += iter_usage.completion_tokens
+            if iter_cost is not None:
+                total_cost = (total_cost or 0.0) + iter_cost
+
         assembled_tool_calls = _reassemble_tool_calls_from_deltas(tool_call_deltas)
 
         if not assembled_tool_calls:
-            if finish_reason and not content_parts and not reasoning_parts:
-                yield StreamChunk(content="", finish_reason=finish_reason)
+            agg_usage = TokenUsage(
+                prompt_tokens=total_prompt_tokens,
+                completion_tokens=total_completion_tokens,
+                total_tokens=total_prompt_tokens + total_completion_tokens,
+            )
+            yield StreamChunk(
+                content="", finish_reason=finish_reason or "stop",
+                usage=agg_usage, cost=total_cost, is_byok=last_is_byok,
+            )
             return
 
         yield StreamChunk(content="", turn_complete=True)
@@ -394,7 +419,7 @@ async def run_with_tools_stream(
                 )
             )
 
-    # Max iterations exhausted — stream a final response without tools
+    # Max iterations exhausted -- stream a final response without tools
     logger.warning("Tool loop hit max_iterations=%d; streaming final response", max_iterations)
     async for chunk in llm.generate_stream(
         conversation,
@@ -403,4 +428,20 @@ async def run_with_tools_stream(
         max_tokens=max_tokens,
         extra_params=extra_params,
     ):
+        if chunk.usage is not None:
+            total_prompt_tokens += chunk.usage.prompt_tokens
+            total_completion_tokens += chunk.usage.completion_tokens
+            if chunk.cost is not None:
+                total_cost = (total_cost or 0.0) + chunk.cost
+            last_is_byok = chunk.is_byok
         yield chunk
+
+    agg_usage = TokenUsage(
+        prompt_tokens=total_prompt_tokens,
+        completion_tokens=total_completion_tokens,
+        total_tokens=total_prompt_tokens + total_completion_tokens,
+    )
+    yield StreamChunk(
+        content="", finish_reason="max_tool_iterations",
+        usage=agg_usage, cost=total_cost, is_byok=last_is_byok,
+    )

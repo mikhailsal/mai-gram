@@ -33,6 +33,7 @@ class MemoryManager:
         timestamp: datetime | None = None,
         tool_calls: str | None = None,
         tool_call_id: str | None = None,
+        timezone_name: str = "UTC",
     ) -> Message:
         return await self._message_store.save_message(
             chat_id,
@@ -41,6 +42,7 @@ class MemoryManager:
             timestamp=timestamp,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
+            timezone_name=timezone_name,
         )
 
     async def get_recent(
