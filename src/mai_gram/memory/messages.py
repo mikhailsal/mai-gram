@@ -86,12 +86,12 @@ class MessageStore:
     ) -> list[Message]:
         """Return the most recent messages for a chat (newest first).
 
-        If *after_message_id* is set, only messages with id >= that value
-        are returned (used by the "cut above" feature).
+        If *after_message_id* is set, only messages with id > that value
+        are returned (used by the "cut this & above" feature).
         """
         conditions = [Message.chat_id == chat_id]
         if after_message_id is not None:
-            conditions.append(Message.id >= after_message_id)
+            conditions.append(Message.id > after_message_id)
         result = await self._session.execute(
             select(Message).where(and_(*conditions)).order_by(desc(Message.id)).limit(limit)
         )

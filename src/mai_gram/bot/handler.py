@@ -108,6 +108,7 @@ class BotHandler:
         self._test_mode = test_mode
         self._setup_sessions: dict[str, SetupSession] = {}
         self._response_message_ids: dict[str, list[str]] = {}
+        self._cut_original_html: dict[str, tuple[str, str | None]] = {}
 
         settings = get_settings()
         self._memory_data_dir = memory_data_dir or settings.memory_data_dir
@@ -430,15 +431,27 @@ class BotHandler:
             cut_msg_id = data.split(":", 1)[1]
             preview = await self._get_message_preview(int(cut_msg_id))
             confirm_text = (
-                "Cut history above this message?\n"
-                "Older messages won't be sent to AI but remain searchable."
+                "Cut this message and all above?\nThey won't be sent to AI but remain searchable."
             )
             if preview:
                 confirm_text += f'\n\nMessage: "{preview}"'
+            tg_msg_id = ""
+            if message.raw and hasattr(message.raw, "callback_query"):
+                cb_msg = message.raw.callback_query.message
+                if cb_msg:
+                    tg_msg_id = str(cb_msg.message_id)
+                    original_html = getattr(cb_msg, "text_html", None)
+                    original_parse = None
+                    if original_html:
+                        original_parse = "html"
+                    else:
+                        original_html = cb_msg.text or ""
+                    cache_key = f"{message.chat_id}:{tg_msg_id}"
+                    self._cut_original_html[cache_key] = (original_html, original_parse)
             await self._show_confirmation(
                 message,
                 confirm_text,
-                confirm_data=f"confirm_cut:{cut_msg_id}",
+                confirm_data=f"confirm_cut:{cut_msg_id}:{tg_msg_id}",
                 cancel_data="cancel_action",
             )
             return
@@ -449,9 +462,13 @@ class BotHandler:
             return
 
         if data.startswith("confirm_cut:"):
-            cut_msg_id_str = data.split(":", 1)[1]
+            parts = data.split(":", 2)
+            cut_msg_id_str = parts[1]
+            original_tg_msg_id = parts[2] if len(parts) > 2 else ""
             await self._delete_callback_message(message)
-            await self._handle_cut_above(message, int(cut_msg_id_str))
+            await self._handle_cut_above(
+                message, int(cut_msg_id_str), original_tg_msg_id=original_tg_msg_id
+            )
             return
 
         if data == "cancel_action":
@@ -908,7 +925,7 @@ class BotHandler:
 
         kb_buttons = [[("\U0001f504 Regenerate", "regen")]]
         if saved_msg_id is not None:
-            kb_buttons[0].append(("\u2702 Cut above", f"cut:{saved_msg_id}"))
+            kb_buttons[0].append(("\u2702 Cut this & above", f"cut:{saved_msg_id}"))
         action_kb = build_inline_keyboard(kb_buttons)
 
         usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
@@ -1004,7 +1021,7 @@ class BotHandler:
         if isinstance(exc, LLMContextLengthError):
             return (
                 "\u274c The conversation is too long for this model's context window.\n\n"
-                'Use "\u2702 Cut above" on an older message to trim history, '
+                'Use "\u2702 Cut this & above" on a message to trim history, '
                 "or /reset to start fresh."
             )
         if isinstance(exc, LLMProviderError):
@@ -1185,20 +1202,61 @@ class BotHandler:
             if cb_msg:
                 await self._messenger.delete_message(message.chat_id, str(cb_msg.message_id))
 
-    async def _handle_cut_above(self, message: IncomingMessage, db_message_id: int) -> None:
-        """Set the cut-above point so messages before db_message_id are excluded from context."""
+    async def _handle_cut_above(
+        self,
+        message: IncomingMessage,
+        db_message_id: int,
+        *,
+        original_tg_msg_id: str = "",
+    ) -> None:
+        """Set the cut-above point so the target message and all before it are excluded."""
         chat_id = self._chat_id_for(message)
 
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
             if not chat:
                 return
+
+            message_store = MessageStore(session)
+
+            cut_count = 0
+            all_msgs = await message_store.get_all(chat.id)
+            for m in all_msgs:
+                if m.id <= db_message_id:
+                    cut_count += 1
+
             chat.cut_above_message_id = db_message_id
             await session.commit()
 
+        if original_tg_msg_id:
+            cache_key = f"{message.chat_id}:{original_tg_msg_id}"
+            cached = self._cut_original_html.pop(cache_key, None)
+            if cached:
+                original_html, original_parse = cached
+                badge = "\u2702\ufe0f <i>[this and above are hidden from the AI]</i>"
+                if original_parse == "html":
+                    marked_text = f"{badge}\n\n{original_html}"
+                else:
+                    import html as _html
+
+                    marked_text = f"{badge}\n\n{_html.escape(original_html)}"
+                if len(marked_text) > 4000:
+                    marked_text = marked_text[:4000] + "..."
+                await self._messenger.edit_message(
+                    message.chat_id,
+                    original_tg_msg_id,
+                    marked_text,
+                    parse_mode="html",
+                )
+
+        footer_lines = ["\u2500" * 20, "\u2702\ufe0f History cut applied"]
+        if cut_count > 0:
+            footer_lines.append(f"\U0001f4e6 {cut_count} message(s) hidden from AI")
+        footer_lines.append("\u2139\ufe0f Hidden messages are still searchable via tools")
+        footer_lines.append("\u2500" * 20)
         await self._messenger.send_message(
             OutgoingMessage(
-                text="History cut applied. Older messages are hidden from AI but still searchable.",
+                text="\n".join(footer_lines),
                 chat_id=message.chat_id,
             )
         )
@@ -1549,7 +1607,7 @@ class BotHandler:
 
         kb_buttons = [[("\U0001f504 Regenerate", "regen")]]
         if saved_msg_id is not None:
-            kb_buttons[0].append(("\u2702 Cut above", f"cut:{saved_msg_id}"))
+            kb_buttons[0].append(("\u2702 Cut this & above", f"cut:{saved_msg_id}"))
         action_kb = build_inline_keyboard(kb_buttons)
 
         usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
