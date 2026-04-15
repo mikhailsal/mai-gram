@@ -521,19 +521,28 @@ class OpenRouterProvider(LLMProvider):
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
-        """Translate HTTP error codes into typed ``LLMError`` subclasses."""
+        """Translate HTTP error codes into typed ``LLMError`` subclasses.
+
+        Works for both regular and streaming responses. When the body
+        has not been read yet (streaming context), we fall back to the
+        status code alone.
+        """
         if response.is_success:
             return
 
         status = response.status_code
 
-        # Try to extract an error message from the body
+        msg = f"HTTP {status}"
         try:
             body = response.json()
             error = body.get("error", {})
             msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
         except Exception:
-            msg = response.text[:500] if response.text else f"HTTP {status}"
+            try:
+                if response.text:
+                    msg = response.text[:500]
+            except Exception:
+                pass
 
         if status == 401:
             raise LLMAuthenticationError(f"Authentication failed: {msg}")
@@ -548,5 +557,4 @@ class OpenRouterProvider(LLMProvider):
         if status >= 500:
             raise LLMProviderError(f"Server error ({status}): {msg}", status_code=status)
 
-        # Anything else
         raise LLMProviderError(f"Request failed ({status}): {msg}", status_code=status)

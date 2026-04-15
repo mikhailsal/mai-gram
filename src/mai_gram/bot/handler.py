@@ -27,6 +27,14 @@ from mai_gram.config import get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
+from mai_gram.llm.provider import (
+    LLMAuthenticationError,
+    LLMContextLengthError,
+    LLMError,
+    LLMModelNotFoundError,
+    LLMProviderError,
+    LLMRateLimitError,
+)
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.mcp_servers.manager import MCPManager
 from mai_gram.mcp_servers.messages_server import MessagesMCPServer
@@ -864,11 +872,35 @@ class BotHandler:
                     )
                     saved_msg_id = saved_msg.id
 
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to generate response")
-                response_text = "Error generating response. Please try again."
-                placeholder_msg_id = None
+                error_text = self._user_friendly_error(exc)
                 saved_msg_id = None
+
+                from mai_gram.messenger.telegram import build_inline_keyboard
+
+                err_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
+                if placeholder_msg_id:
+                    await self._messenger.edit_message(
+                        tg_chat_id,
+                        placeholder_msg_id,
+                        error_text,
+                        keyboard=err_kb,
+                    )
+                    sent_msg_ids.append(placeholder_msg_id)
+                else:
+                    r = await self._messenger.send_message(
+                        OutgoingMessage(
+                            text=error_text,
+                            chat_id=tg_chat_id,
+                            keyboard=err_kb,
+                        )
+                    )
+                    if r.success and r.message_id:
+                        sent_msg_ids.append(r.message_id)
+
+                self._response_message_ids[tg_chat_id] = sent_msg_ids
+                return
 
         self._response_message_ids[tg_chat_id] = sent_msg_ids
 
@@ -947,6 +979,49 @@ class BotHandler:
         if cost is not None and cost > 0:
             parts.append(f"${cost:.4f}")
         return " | ".join(parts)
+
+    @staticmethod
+    def _user_friendly_error(exc: BaseException) -> str:
+        """Map an exception to a user-facing error message with actionable advice."""
+        if isinstance(exc, LLMAuthenticationError):
+            return (
+                "\u26a0\ufe0f API authentication failed.\n\n"
+                "The bot's API key is invalid or expired. "
+                "Please contact the bot administrator."
+            )
+        if isinstance(exc, LLMRateLimitError):
+            msg = "\u23f3 Rate limit reached — the AI provider is temporarily overloaded."
+            if exc.retry_after is not None:
+                msg += f"\n\nPlease wait ~{int(exc.retry_after)}s and try again."
+            else:
+                msg += "\n\nPlease wait a moment and tap Regenerate."
+            return msg
+        if isinstance(exc, LLMModelNotFoundError):
+            return (
+                "\u274c The selected model is no longer available.\n\n"
+                "Use /reset and /start to choose a different model."
+            )
+        if isinstance(exc, LLMContextLengthError):
+            return (
+                "\u274c The conversation is too long for this model's context window.\n\n"
+                'Use "\u2702 Cut above" on an older message to trim history, '
+                "or /reset to start fresh."
+            )
+        if isinstance(exc, LLMProviderError):
+            status = f" (HTTP {exc.status_code})" if exc.status_code else ""
+            return (
+                f"\u26a0\ufe0f AI provider error{status}.\n\n"
+                "This is usually temporary. Tap Regenerate to retry."
+            )
+        if isinstance(exc, LLMError):
+            return (
+                "\u26a0\ufe0f Something went wrong with the AI provider.\n\n"
+                "Tap Regenerate to retry."
+            )
+        return (
+            "\u274c Unexpected error while generating a response.\n\n"
+            "Tap Regenerate to retry, or use /reset if the problem persists."
+        )
 
     async def _send_with_mdv2_fallback(
         self,
@@ -1438,11 +1513,35 @@ class BotHandler:
                     )
                     saved_msg_id = saved_msg.id
 
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to regenerate response")
-                response_text = "Error generating response. Please try again."
-                placeholder_msg_id = None
+                error_text = self._user_friendly_error(exc)
                 saved_msg_id = None
+
+                from mai_gram.messenger.telegram import build_inline_keyboard
+
+                err_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
+                if placeholder_msg_id:
+                    await self._messenger.edit_message(
+                        tg_chat_id,
+                        placeholder_msg_id,
+                        error_text,
+                        keyboard=err_kb,
+                    )
+                    sent_msg_ids.append(placeholder_msg_id)
+                else:
+                    r = await self._messenger.send_message(
+                        OutgoingMessage(
+                            text=error_text,
+                            chat_id=tg_chat_id,
+                            keyboard=err_kb,
+                        )
+                    )
+                    if r.success and r.message_id:
+                        sent_msg_ids.append(r.message_id)
+
+                self._response_message_ids[tg_chat_id] = sent_msg_ids
+                return
 
         self._response_message_ids[tg_chat_id] = sent_msg_ids
 
