@@ -198,6 +198,7 @@ async def run_with_tools(
                     tool_name=tool_call.name,
                     arguments=tool_call.arguments,
                     result=raw_result,
+                    content=tool_content,
                     error=tool_error,
                     server_name=resolved.server_name if resolved is not None else None,
                 )
@@ -405,6 +406,7 @@ async def run_with_tools_stream(
                     tool_name=tool_call.name,
                     arguments=tool_call.arguments,
                     result=raw_result,
+                    content=tool_content,
                     error=tool_error,
                     server_name=resolved.server_name if resolved is not None else None,
                 )

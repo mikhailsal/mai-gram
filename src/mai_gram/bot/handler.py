@@ -647,6 +647,12 @@ class BotHandler:
             async def _on_tool_call_display(
                 *, content: str, tool_calls_json: str
             ) -> None:
+                await message_store.save_message(
+                    chat.id, "assistant", content or "",
+                    tool_calls=tool_calls_json,
+                    timezone_name=chat_tz,
+                )
+
                 if not show_tool_calls:
                     return
                 try:
@@ -676,9 +682,16 @@ class BotHandler:
                 tool_name: str,
                 arguments: str,
                 result: object,
+                content: str,
                 error: str | None,
                 server_name: str | None,
             ) -> None:
+                await message_store.save_message(
+                    chat.id, "tool", content,
+                    tool_call_id=tool_call_id,
+                    timezone_name=chat_tz,
+                )
+
                 if not show_tool_calls:
                     return
                 if error:
@@ -1187,6 +1200,7 @@ class BotHandler:
                 for srv_name, srv in self._external_mcp_pool.get_all_servers().items():
                     mcp_manager.register_server(f"ext:{srv_name}", srv)
 
+            regen_tz = chat.timezone
             llm_messages = await prompt_builder.build_context(
                 chat,
                 current_time=datetime.now(timezone.utc),
@@ -1203,6 +1217,12 @@ class BotHandler:
             async def _on_tool_call_display(
                 *, content: str, tool_calls_json: str
             ) -> None:
+                await message_store.save_message(
+                    chat.id, "assistant", content or "",
+                    tool_calls=tool_calls_json,
+                    timezone_name=regen_tz,
+                )
+
                 if not show_tool_calls:
                     return
                 try:
@@ -1232,9 +1252,16 @@ class BotHandler:
                 tool_name: str,
                 arguments: str,
                 result: object,
+                content: str,
                 error: str | None,
                 server_name: str | None,
             ) -> None:
+                await message_store.save_message(
+                    chat.id, "tool", content,
+                    tool_call_id=tool_call_id,
+                    timezone_name=regen_tz,
+                )
+
                 if not show_tool_calls:
                     return
                 if error:

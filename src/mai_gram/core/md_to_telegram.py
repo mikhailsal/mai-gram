@@ -204,6 +204,7 @@ def markdown_to_html(text: str) -> str:
     result = _html_code_blocks(text, _ph)
     result = _html_inline_code(result, _ph)
     result = _protect_list_bullets(result)
+    result = _html_blockquotes(result, _ph)
     result = _html_links(result, _ph)
     result = _html_bold(result, _ph)
     result = _html_italic(result, _ph)
@@ -218,6 +219,48 @@ def markdown_to_html(text: str) -> str:
             final_parts.append(_html_mod.escape(part))
 
     return "".join(final_parts)
+
+
+def _html_blockquotes(text: str, ph: callable) -> str:
+    """Convert consecutive `> ` prefixed lines into a <blockquote> block.
+
+    Inline formatting (bold, italic, etc.) inside the quote is converted
+    before wrapping in the blockquote tag so it renders correctly.
+    """
+    lines = text.split("\n")
+    result_lines: list[str] = []
+    quote_buf: list[str] = []
+
+    def _flush_quote() -> None:
+        if quote_buf:
+            inner = "\n".join(quote_buf)
+            inner = _html_mod.escape(inner)
+            inner = re.sub(
+                r"\*\*(.+?)\*\*", lambda m: f"<b>{m.group(1)}</b>", inner, flags=re.DOTALL,
+            )
+            inner = re.sub(
+                r"(?<!\*)\*([^*]+?)\*(?!\*)", lambda m: f"<i>{m.group(1)}</i>", inner,
+            )
+            inner = re.sub(
+                r"(?<!\\)_([^_]+?)_", lambda m: f"<i>{m.group(1)}</i>", inner,
+            )
+            inner = re.sub(r"~~(.+?)~~", lambda m: f"<s>{m.group(1)}</s>", inner, flags=re.DOTALL)
+            inner = re.sub(r"`([^`]+)`", lambda m: f"<code>{m.group(1)}</code>", inner)
+            result_lines.append(ph(f"<blockquote>{inner}</blockquote>"))
+            quote_buf.clear()
+
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("> "):
+            quote_buf.append(stripped[2:])
+        elif stripped == ">":
+            quote_buf.append("")
+        else:
+            _flush_quote()
+            result_lines.append(line)
+
+    _flush_quote()
+    return "\n".join(result_lines)
 
 
 def _html_code_blocks(text: str, ph: callable) -> str:
