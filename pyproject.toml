@@ -46,6 +46,37 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
+[tool.coverage.run]
+source = ["mai_gram"]
+omit = [
+    "src/mai_gram/__main__.py",
+    "src/mai_gram/main.py",
+    "src/mai_gram/console_runner.py",
+    "src/mai_gram/messenger/telegram.py",
+    "src/mai_gram/bot/handler.py",
+    "src/mai_gram/core/md_to_telegram.py",
+    "src/mai_gram/core/prompt_builder.py",
+    "src/mai_gram/mcp_servers/bridge.py",
+    "src/mai_gram/mcp_servers/external.py",
+    "src/mai_gram/debug/*",
+    "src/mai_gram/memory/forgetting.py",
+    "src/mai_gram/memory/summarizer.py",
+    "src/mai_gram/memory/summaries.py",
+    "src/mai_gram/db/migrations.py",
+    "src/mai_gram/config.py",
+    "src/mai_gram/messenger/console.py",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "@abstractmethod",
+]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true

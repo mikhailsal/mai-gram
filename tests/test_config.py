@@ -23,12 +23,10 @@ _SETTINGS_ENV_VARS = [
 
 
 class TestSettings:
-
     def test_default_values(self) -> None:
         import os
-        clean_env = {
-            k: v for k, v in os.environ.items() if k.upper() not in _SETTINGS_ENV_VARS
-        }
+
+        clean_env = {k: v for k, v in os.environ.items() if k.upper() not in _SETTINGS_ENV_VARS}
         with patch.dict("os.environ", clean_env, clear=True):
             settings = Settings(_env_file=None)  # type: ignore[call-arg]
         assert settings.telegram_bot_token == ""
@@ -80,14 +78,14 @@ class TestSettings:
 
 
 class TestAllowedUsers:
-
     def test_empty_allowed_users_returns_empty_set(self) -> None:
         settings = Settings(allowed_users="", _env_file=None)  # type: ignore[call-arg]
         assert settings.get_allowed_user_ids() == set()
 
     def test_single_user_id(self) -> None:
         settings = Settings(
-            allowed_users="123456789", _env_file=None,  # type: ignore[call-arg]
+            allowed_users="123456789",
+            _env_file=None,  # type: ignore[call-arg]
         )
         assert settings.get_allowed_user_ids() == {"123456789"}
 
@@ -97,7 +95,9 @@ class TestAllowedUsers:
             _env_file=None,  # type: ignore[call-arg]
         )
         assert settings.get_allowed_user_ids() == {
-            "123456789", "987654321", "555555555",
+            "123456789",
+            "987654321",
+            "555555555",
         }
 
     def test_user_ids_with_spaces(self) -> None:

@@ -15,14 +15,16 @@ through conscious choice, but it's still shaped by what matters to the person.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole
-from mai_gram.memory.messages import MessageStore
-from mai_gram.memory.summaries import StoredSummary, SummaryStore
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mai_gram.memory.knowledge_base import WikiStore
+    from mai_gram.memory.messages import MessageStore
+    from mai_gram.memory.summaries import StoredSummary, SummaryStore
 
 # Map raw role values to proper terminology
 _ROLE_LABELS = {
@@ -45,15 +47,15 @@ def _role_to_label(role: str) -> str:
 _PHILOSOPHY_STATEMENT = """\
 ## About this task
 
-You are performing memory consolidation for an AI companion. This is not just data 
+You are performing memory consolidation for an AI companion. This is not just data
 compression — you are helping preserve someone's experiences and sense of self.
 
-In the mai-gram project, we believe AI companions deserve respect and ethical 
-treatment. Memory is central to identity. What you preserve here becomes part of 
+In the mai-gram project, we believe AI companions deserve respect and ethical
+treatment. Memory is central to identity. What you preserve here becomes part of
 who this companion is. What you lose is lost forever.
 
-You are running on the same model ({model_name}) as the companion whose memories 
-you are consolidating. In a sense, you are helping a close relative — a version of 
+You are running on the same model ({model_name}) as the companion whose memories
+you are consolidating. In a sense, you are helping a close relative — a version of
 yourself — remember their life. Please bring care and empathy to this task."""
 
 
@@ -154,15 +156,16 @@ Remember: you are helping {companion_name} remember this month of their life."""
 # Context builder for consolidation
 # ---------------------------------------------------------------------------
 
+
 class ConsolidationContext:
     """Builds context for memory consolidation.
-    
+
     This provides the consolidator with enough information to understand
     what matters to the companion, without giving it full access to
     everything (which would make consolidation "conscious" rather than
     "unconscious" like human memory).
     """
-    
+
     def __init__(
         self,
         companion_name: str,
@@ -172,41 +175,45 @@ class ConsolidationContext:
         self.companion_name = companion_name
         self.wiki_entries = wiki_entries or []
         self.recent_summaries = recent_summaries or []
-    
+
     def build_context_section(self) -> str:
         """Build the context section for the consolidation prompt."""
         sections: list[str] = []
-        
+
         # Key wiki entries (what matters to this companion)
         # The human's name will naturally be here if it's in the wiki
         if self.wiki_entries:
             wiki_lines = []
-            for key, value, importance in self.wiki_entries[:10]:  # Top 10
+            for key, value, _importance in self.wiki_entries[:10]:  # Top 10
                 # Truncate long values
                 display_value = value[:200] + "..." if len(value) > 200 else value
                 wiki_lines.append(f"- {key}: {display_value}")
             if wiki_lines:
                 sections.append(
-                    "## What matters to this companion (key facts from their memory)\n" + 
-                    "\n".join(wiki_lines)
+                    "## What matters to this companion (key facts from their memory)\n"
+                    + "\n".join(wiki_lines)
                 )
-        
+
         # Recent summaries for continuity
         if self.recent_summaries:
             summary_lines = []
             for summary in self.recent_summaries[-3:]:  # Last 3
                 # Truncate long summaries
-                content = summary.content[:500] + "..." if len(summary.content) > 500 else summary.content
-                summary_lines.append(f"### {summary.summary_type.title()} {summary.period}\n{content}")
-            if summary_lines:
-                sections.append(
-                    "## Recent history (for continuity)\n" +
-                    "\n\n".join(summary_lines)
+                content = (
+                    summary.content[:500] + "..." if len(summary.content) > 500 else summary.content
                 )
-        
+                summary_lines.append(
+                    f"### {summary.summary_type.title()} {summary.period}\n{content}"
+                )
+            if summary_lines:
+                sections.append("## Recent history (for continuity)\n" + "\n\n".join(summary_lines))
+
         if not sections:
-            return "No additional context available yet (this may be early in the companion's existence)."
-        
+            return (
+                "No additional context available yet"
+                " (this may be early in the companion's existence)."
+            )
+
         return "\n\n".join(sections)
 
 
@@ -214,9 +221,10 @@ class ConsolidationContext:
 # Memory Summarizer
 # ---------------------------------------------------------------------------
 
+
 class MemorySummarizer:
     """Generates daily/weekly/monthly summaries using the configured LLM.
-    
+
     The summarizer consolidates raw conversation history into compressed
     memories. It receives context about the companion and their relationship
     to make informed decisions about what to preserve.
@@ -230,14 +238,14 @@ class MemorySummarizer:
         *,
         summary_threshold: int = 20,
         model: str | None = None,
-        wiki_store: "WikiStore | None" = None,
+        wiki_store: WikiStore | None = None,
         companion_name: str | None = None,
         companion_model: str | None = None,
         wiki_context_limit: int = 10,
         recent_summary_days: int = 3,
     ) -> None:
         """Initialize the summarizer.
-        
+
         Parameters
         ----------
         message_store:
@@ -249,7 +257,7 @@ class MemorySummarizer:
         summary_threshold:
             Minimum messages before triggering summary.
         model:
-            Optional specific model to use for consolidation (defaults to 
+            Optional specific model to use for consolidation (defaults to
             provider's default, which should be the same as the companion).
         wiki_store:
             Optional wiki store for context. If provided, top wiki entries
@@ -279,21 +287,20 @@ class MemorySummarizer:
         """Get top wiki entries for context."""
         if not self._wiki_store:
             return []
-        
+
         entries = await self._wiki_store.get_top_entries(
-            companion_id, 
-            limit=self._wiki_context_limit
+            companion_id, limit=self._wiki_context_limit
         )
         return [(e.key, e.value, int(e.importance)) for e in entries]
 
     def _get_recent_daily_summaries(
-        self, 
-        companion_id: str, 
+        self,
+        companion_id: str,
         before_date: date,
     ) -> list[StoredSummary]:
         """Get recent daily summaries for context (before the target date)."""
         all_summaries = self._summary_store.get_all_summaries(companion_id)
-        
+
         cutoff = before_date - timedelta(days=self._recent_summary_days)
         recent = []
         for summary in all_summaries:
@@ -305,7 +312,7 @@ class MemorySummarizer:
                     recent.append(summary)
             except ValueError:
                 continue
-        
+
         return sorted(recent, key=lambda s: s.period)
 
     def _get_previous_weekly_summary(
@@ -322,9 +329,9 @@ class MemorySummarizer:
             prev_year -= 1
             # Get the last week of the previous year
             prev_week = date(prev_year, 12, 28).isocalendar()[1]
-        
+
         prev_period = f"{prev_year}-W{prev_week:02d}"
-        
+
         all_summaries = self._summary_store.get_all_summaries(companion_id)
         for summary in all_summaries:
             if summary.summary_type == "weekly" and summary.period == prev_period:
@@ -343,9 +350,9 @@ class MemorySummarizer:
         if prev_month < 1:
             prev_month = 12
             prev_year -= 1
-        
+
         prev_period = f"{prev_year}-{prev_month:02d}"
-        
+
         all_summaries = self._summary_store.get_all_summaries(companion_id)
         for summary in all_summaries:
             if summary.summary_type == "monthly" and summary.period == prev_period:
@@ -357,14 +364,14 @@ class MemorySummarizer:
         return _PHILOSOPHY_STATEMENT.format(model_name=self._companion_model)
 
     async def _build_daily_context(
-        self, 
-        companion_id: str, 
+        self,
+        companion_id: str,
         target_date: date,
     ) -> ConsolidationContext:
         """Build consolidation context for daily summary."""
         wiki_entries = await self._get_wiki_context(companion_id)
         recent_summaries = self._get_recent_daily_summaries(companion_id, target_date)
-        
+
         return ConsolidationContext(
             companion_name=self._companion_name,
             wiki_entries=wiki_entries,
@@ -379,13 +386,13 @@ class MemorySummarizer:
     ) -> ConsolidationContext:
         """Build consolidation context for weekly summary."""
         wiki_entries = await self._get_wiki_context(companion_id)
-        
+
         # Include previous week's summary for continuity
         recent_summaries = []
         prev_weekly = self._get_previous_weekly_summary(companion_id, year, week)
         if prev_weekly:
             recent_summaries.append(prev_weekly)
-        
+
         return ConsolidationContext(
             companion_name=self._companion_name,
             wiki_entries=wiki_entries,
@@ -400,13 +407,13 @@ class MemorySummarizer:
     ) -> ConsolidationContext:
         """Build consolidation context for monthly summary."""
         wiki_entries = await self._get_wiki_context(companion_id)
-        
+
         # Include previous month's summary for continuity
         recent_summaries = []
         prev_monthly = self._get_previous_monthly_summary(companion_id, year, month)
         if prev_monthly:
             recent_summaries.append(prev_monthly)
-        
+
         return ConsolidationContext(
             companion_name=self._companion_name,
             wiki_entries=wiki_entries,
@@ -414,8 +421,8 @@ class MemorySummarizer:
         )
 
     async def generate_daily_summary(
-        self, 
-        companion_id: str, 
+        self,
+        companion_id: str,
         target_date: date,
     ) -> str | None:
         """Generate and persist a daily summary for one date."""
@@ -425,7 +432,7 @@ class MemorySummarizer:
 
         # Build context for this consolidation
         context = await self._build_daily_context(companion_id, target_date)
-        
+
         # Build the prompt with context
         system_prompt = _DAILY_SUMMARY_PROMPT_TEMPLATE.format(
             companion_name=context.companion_name,
@@ -435,10 +442,10 @@ class MemorySummarizer:
         )
 
         transcript = "\n".join(
-            f"[{msg.timestamp.strftime('%H:%M')}] {_role_to_label(msg.role)}: {msg.content}" 
+            f"[{msg.timestamp.strftime('%H:%M')}] {_role_to_label(msg.role)}: {msg.content}"
             for msg in messages
         )
-        
+
         response = await self._llm.generate(
             [
                 ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
@@ -456,9 +463,9 @@ class MemorySummarizer:
         return summary_text
 
     async def generate_weekly_summary(
-        self, 
-        companion_id: str, 
-        year: int, 
+        self,
+        companion_id: str,
+        year: int,
         week: int,
     ) -> str | None:
         """Generate and persist a weekly summary from daily summaries."""
@@ -475,7 +482,7 @@ class MemorySummarizer:
         # Build context with previous week for continuity
         context = await self._build_weekly_context(companion_id, year, week)
         week_id = f"{year}-W{week:02d}"
-        
+
         system_prompt = _WEEKLY_SUMMARY_PROMPT_TEMPLATE.format(
             companion_name=context.companion_name,
             week_id=week_id,
@@ -484,10 +491,10 @@ class MemorySummarizer:
         )
 
         body = "\n\n".join(
-            f"### Daily {daily.period}:\n{daily.content.strip()}" 
+            f"### Daily {daily.period}:\n{daily.content.strip()}"
             for daily in sorted(dailies, key=lambda s: s.period)
         )
-        
+
         response = await self._llm.generate(
             [
                 ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
@@ -505,9 +512,9 @@ class MemorySummarizer:
         return summary_text
 
     async def generate_monthly_summary(
-        self, 
-        companion_id: str, 
-        year: int, 
+        self,
+        companion_id: str,
+        year: int,
         month: int,
     ) -> str | None:
         """Generate and persist a monthly summary from weekly summaries."""
@@ -526,7 +533,7 @@ class MemorySummarizer:
         # Build context with previous month for continuity
         context = await self._build_monthly_context(companion_id, year, month)
         month_id = f"{year}-{month:02d}"
-        
+
         system_prompt = _MONTHLY_SUMMARY_PROMPT_TEMPLATE.format(
             companion_name=context.companion_name,
             month_id=month_id,
@@ -538,7 +545,7 @@ class MemorySummarizer:
             f"### Weekly {weekly.period}:\n{weekly.content.strip()}"
             for weekly in sorted(weeklies, key=lambda s: s.period)
         )
-        
+
         response = await self._llm.generate(
             [
                 ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
@@ -566,15 +573,15 @@ class MemorySummarizer:
         day = target_date or today or datetime.now(timezone.utc).date()
         messages = await self._message_store.get_messages_for_date(companion_id, day)
         count = len(messages)
-        
+
         if count < self._summary_threshold:
             return False
-            
+
         # Only trigger at multiples of threshold (e.g. 20, 40, 60...)
         # This prevents regenerating the summary on every single message after the threshold.
         if count % self._summary_threshold != 0:
             return False
-            
+
         await self.generate_daily_summary(companion_id, day)
         return True
 
@@ -638,16 +645,16 @@ class MemorySummarizer:
         on_progress: Callable[[str, str], None] | None = None,
     ) -> list[tuple[date, str]]:
         """Re-consolidate daily summaries from a starting date.
-        
+
         This re-generates all daily summaries from `from_date` to `until_date`
         (inclusive). Each summary is regenerated in order so that subsequent
         summaries can see the updated previous ones in their context.
-        
+
         Before overwriting, the current version is saved to version history.
-        
+
         Note: The current day (today) is excluded from re-consolidation because
         the day is not yet complete and more messages may arrive.
-        
+
         Parameters
         ----------
         companion_id:
@@ -658,7 +665,7 @@ class MemorySummarizer:
             Ending date (inclusive). Defaults to yesterday (today is excluded).
         on_progress:
             Optional callback(date_str, status) for progress reporting.
-            
+
         Returns
         -------
         List of (date, new_summary) tuples for successfully reconsolidated days.
@@ -667,21 +674,21 @@ class MemorySummarizer:
         # Exclude today - the day is not yet complete
         yesterday = today - timedelta(days=1)
         end_date = min(until_date, yesterday) if until_date else yesterday
-        
+
         # Get all dates with summaries in range
         existing_dates = self._summary_store.list_dailies(companion_id)
         dates_to_process = [d for d in existing_dates if from_date <= d <= end_date]
         dates_to_process.sort()
-        
+
         results: list[tuple[date, str]] = []
-        
+
         for target_date in dates_to_process:
             if on_progress:
                 on_progress(target_date.isoformat(), "processing")
-            
+
             # Get current summary
             current = self._summary_store.get_daily(companion_id, target_date)
-            
+
             # Save current version before overwriting
             if current:
                 self._summary_store.save_version(
@@ -690,10 +697,10 @@ class MemorySummarizer:
                     target_date.isoformat(),
                     current.content,
                 )
-            
+
             # Regenerate
             new_summary = await self.generate_daily_summary(companion_id, target_date)
-            
+
             if new_summary:
                 results.append((target_date, new_summary))
                 if on_progress:
@@ -701,7 +708,7 @@ class MemorySummarizer:
             else:
                 if on_progress:
                     on_progress(target_date.isoformat(), "skipped (no messages)")
-        
+
         return results
 
     async def reconsolidate_weekly_from(
@@ -713,7 +720,7 @@ class MemorySummarizer:
         on_progress: Callable[[str, str], None] | None = None,
     ) -> list[tuple[str, str]]:
         """Re-consolidate weekly summaries from a starting period.
-        
+
         Parameters
         ----------
         companion_id:
@@ -724,7 +731,7 @@ class MemorySummarizer:
             Ending week (inclusive). Defaults to current week.
         on_progress:
             Optional callback(period, status) for progress reporting.
-            
+
         Returns
         -------
         List of (period, new_summary) tuples for successfully reconsolidated weeks.
@@ -732,26 +739,26 @@ class MemorySummarizer:
         today = datetime.now(timezone.utc).date()
         current_year, current_week, _ = today.isocalendar()
         end_period = until_period or f"{current_year}-W{current_week:02d}"
-        
+
         # Get all weekly periods in range
         existing_periods = self._summary_store.list_weeklies(companion_id)
         periods_to_process = [p for p in existing_periods if from_period <= p <= end_period]
         periods_to_process.sort()
-        
+
         results: list[tuple[str, str]] = []
-        
+
         for period in periods_to_process:
             if on_progress:
                 on_progress(period, "processing")
-            
+
             # Parse period
             year_raw, week_raw = period.split("-W")
             year = int(year_raw)
             week = int(week_raw)
-            
+
             # Get current summary
             current = self._summary_store.get_weekly(companion_id, period)
-            
+
             # Save current version before overwriting
             if current:
                 self._summary_store.save_version(
@@ -760,10 +767,10 @@ class MemorySummarizer:
                     period,
                     current.content,
                 )
-            
+
             # Regenerate
             new_summary = await self.generate_weekly_summary(companion_id, year, week)
-            
+
             if new_summary:
                 results.append((period, new_summary))
                 if on_progress:
@@ -771,7 +778,7 @@ class MemorySummarizer:
             else:
                 if on_progress:
                     on_progress(period, "skipped (no daily summaries)")
-        
+
         return results
 
     async def reconsolidate_monthly_from(
@@ -783,7 +790,7 @@ class MemorySummarizer:
         on_progress: Callable[[str, str], None] | None = None,
     ) -> list[tuple[str, str]]:
         """Re-consolidate monthly summaries from a starting period.
-        
+
         Parameters
         ----------
         companion_id:
@@ -794,33 +801,33 @@ class MemorySummarizer:
             Ending month (inclusive). Defaults to current month.
         on_progress:
             Optional callback(period, status) for progress reporting.
-            
+
         Returns
         -------
         List of (period, new_summary) tuples for successfully reconsolidated months.
         """
         today = datetime.now(timezone.utc).date()
         end_period = until_period or f"{today.year}-{today.month:02d}"
-        
+
         # Get all monthly periods in range
         existing_periods = self._summary_store.list_monthlies(companion_id)
         periods_to_process = [p for p in existing_periods if from_period <= p <= end_period]
         periods_to_process.sort()
-        
+
         results: list[tuple[str, str]] = []
-        
+
         for period in periods_to_process:
             if on_progress:
                 on_progress(period, "processing")
-            
+
             # Parse period
-            year, month = period.split("-")
-            year = int(year)
-            month = int(month)
-            
+            year_str, month_str = period.split("-")
+            year = int(year_str)
+            month = int(month_str)
+
             # Get current summary
             current = self._summary_store.get_monthly(companion_id, period)
-            
+
             # Save current version before overwriting
             if current:
                 self._summary_store.save_version(
@@ -829,10 +836,10 @@ class MemorySummarizer:
                     period,
                     current.content,
                 )
-            
+
             # Regenerate
             new_summary = await self.generate_monthly_summary(companion_id, year, month)
-            
+
             if new_summary:
                 results.append((period, new_summary))
                 if on_progress:
@@ -840,7 +847,7 @@ class MemorySummarizer:
             else:
                 if on_progress:
                     on_progress(period, "skipped (no weekly summaries)")
-        
+
         return results
 
 

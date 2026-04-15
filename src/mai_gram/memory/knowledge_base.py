@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, desc, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from mai_gram.db.models import KnowledgeEntry
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _escape_like_pattern(query: str) -> str:
@@ -90,12 +93,12 @@ class WikiStore:
         elif current_file is None:
             # File was missing, so we must write content regardless
             pass
-            
+
         if content is not None:
-             target_file.write_text(content, encoding="utf-8")
+            target_file.write_text(content, encoding="utf-8")
         elif not target_file.exists():
-             # If file didn't exist (and we didn't rename one to here), restore from DB value
-             target_file.write_text(entry.value, encoding="utf-8")
+            # If file didn't exist (and we didn't rename one to here), restore from DB value
+            target_file.write_text(entry.value, encoding="utf-8")
 
         await self._session.flush()
         return entry

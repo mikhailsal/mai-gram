@@ -6,7 +6,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from mai_gram.llm.provider import (
     ChatMessage,
@@ -18,7 +18,11 @@ from mai_gram.llm.provider import (
     ToolCall,
     ToolDefinition,
 )
-from mai_gram.mcp_servers.manager import MCPManager, RegisteredTool
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+    from mai_gram.mcp_servers.manager import MCPManager, RegisteredTool
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +100,8 @@ async def run_with_tools(
     temperature: float = 0.7,
     max_tokens: int | None = None,
     max_iterations: int = 5,
-    tool_choice: str | dict | None = "auto",
-    extra_params: dict | None = None,
+    tool_choice: str | dict[str, Any] | None = "auto",
+    extra_params: dict[str, Any] | None = None,
     on_tool_result: Callable[..., Awaitable[None] | None] | None = None,
     on_intermediate_content: Callable[[str], Awaitable[None] | None] | None = None,
     on_assistant_tool_call: Callable[..., Awaitable[None] | None] | None = None,
@@ -226,7 +230,7 @@ async def run_with_tools(
 
 
 def _reassemble_tool_calls_from_deltas(
-    deltas: list[list[dict]],
+    deltas: list[list[dict[str, Any]]],
 ) -> list[ToolCall]:
     """Reconstruct complete ToolCall objects from streaming delta fragments.
 
@@ -268,8 +272,8 @@ async def run_with_tools_stream(
     temperature: float = 0.7,
     max_tokens: int | None = None,
     max_iterations: int = 5,
-    tool_choice: str | dict | None = "auto",
-    extra_params: dict | None = None,
+    tool_choice: str | dict[str, Any] | None = "auto",
+    extra_params: dict[str, Any] | None = None,
     on_tool_result: Callable[..., Awaitable[None] | None] | None = None,
     on_intermediate_content: Callable[[str], Awaitable[None] | None] | None = None,
     on_assistant_tool_call: Callable[..., Awaitable[None] | None] | None = None,
@@ -306,7 +310,7 @@ async def run_with_tools_stream(
     for _ in range(max_iterations):
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
-        tool_call_deltas: list[list[dict]] = []
+        tool_call_deltas: list[list[dict[str, Any]]] = []
         finish_reason: str | None = None
         iter_usage: TokenUsage | None = None
         iter_cost: float | None = None
@@ -351,8 +355,11 @@ async def run_with_tools_stream(
                 total_tokens=total_prompt_tokens + total_completion_tokens,
             )
             yield StreamChunk(
-                content="", finish_reason=finish_reason or "stop",
-                usage=agg_usage, cost=total_cost, is_byok=last_is_byok,
+                content="",
+                finish_reason=finish_reason or "stop",
+                usage=agg_usage,
+                cost=total_cost,
+                is_byok=last_is_byok,
             )
             return
 
@@ -444,6 +451,9 @@ async def run_with_tools_stream(
         total_tokens=total_prompt_tokens + total_completion_tokens,
     )
     yield StreamChunk(
-        content="", finish_reason="max_tool_iterations",
-        usage=agg_usage, cost=total_cost, is_byok=last_is_byok,
+        content="",
+        finish_reason="max_tool_iterations",
+        usage=agg_usage,
+        cost=total_cost,
+        is_byok=last_is_byok,
     )

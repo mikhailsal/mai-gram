@@ -9,9 +9,10 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Coroutine, Any
+from typing import Any
 
 from mai_gram.messenger.base import IncomingMessage
 
@@ -87,12 +88,8 @@ class RateLimiter:
         minute_ago = now - 60
         hour_ago = now - 3600
 
-        state.minute_timestamps = [
-            ts for ts in state.minute_timestamps if ts > minute_ago
-        ]
-        state.hour_timestamps = [
-            ts for ts in state.hour_timestamps if ts > hour_ago
-        ]
+        state.minute_timestamps = [ts for ts in state.minute_timestamps if ts > minute_ago]
+        state.hour_timestamps = [ts for ts in state.hour_timestamps if ts > hour_ago]
 
     async def check_rate_limit(self, user_id: str, chat_id: str) -> bool:
         """Check if a user is within rate limits.

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -18,17 +18,19 @@ from mai_gram.llm.provider import (
     ChatMessage,
     LLMAuthenticationError,
     LLMContextLengthError,
-    LLMError,
     LLMModelNotFoundError,
+    LLMProvider,
     LLMProviderError,
     LLMRateLimitError,
     LLMResponse,
-    ToolCall,
-    ToolDefinition,
     StreamChunk,
     TokenUsage,
-    LLMProvider,
+    ToolCall,
+    ToolDefinition,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +113,8 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Send a non-streaming chat-completion request."""
         payload = self._build_payload(
@@ -138,8 +140,8 @@ class OpenRouterProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat-completion response as SSE chunks."""
         payload = self._build_payload(
@@ -191,9 +193,9 @@ class OpenRouterProvider(LLMProvider):
         temperature: float,
         max_tokens: int | None,
         tools: list[ToolDefinition] | None,
-        tool_choice: str | dict | None,
+        tool_choice: str | dict[str, Any] | None,
         stream: bool,
-        extra_params: dict | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the JSON request body.
 
@@ -338,9 +340,7 @@ class OpenRouterProvider(LLMProvider):
                         exc,
                     )
                     continue
-                raise LLMProviderError(
-                    f"Network error after {attempt} attempts: {exc}"
-                ) from exc
+                raise LLMProviderError(f"Network error after {attempt} attempts: {exc}") from exc
 
         raise LLMProviderError(f"Stream failed: {last_exc}") from last_exc  # pragma: no cover
 
@@ -369,7 +369,7 @@ class OpenRouterProvider(LLMProvider):
                 if not line.startswith("data: "):
                     continue
 
-                data_str = line[len("data: "):]
+                data_str = line[len("data: ") :]
 
                 if data_str == "[DONE]":
                     return
@@ -397,7 +397,7 @@ class OpenRouterProvider(LLMProvider):
                 finish_reason = choices[0].get("finish_reason")
                 raw_tool_calls = delta.get("tool_calls")
 
-                tool_calls_delta: list[dict] | None = None
+                tool_calls_delta: list[dict[str, Any]] | None = None
                 if isinstance(raw_tool_calls, list) and raw_tool_calls:
                     tool_calls_delta = raw_tool_calls
 
@@ -426,7 +426,9 @@ class OpenRouterProvider(LLMProvider):
                         cost_val = float(raw_cost) if raw_cost else None
                     logger.info(
                         "Usage data: %s (resolved cost=%.6f, byok=%s)",
-                        usage_data, cost_val or 0, is_byok_val,
+                        usage_data,
+                        cost_val or 0,
+                        is_byok_val,
                     )
 
                 if content or reasoning or finish_reason or tool_calls_delta or usage_obj:

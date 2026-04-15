@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import atexit
+import contextlib
 import logging
 import os
 import signal
@@ -265,7 +266,7 @@ def _run_with_reload() -> None:
 
     class _CodeAndConfigFilter(DefaultFilter):
         allowed_extensions = (
-            *PythonFilter.allowed_extensions,
+            *PythonFilter.allowed_extensions,  # type: ignore[attr-defined]
             ".toml",
             ".txt",
             ".md",
@@ -311,10 +312,8 @@ def main() -> None:
     if args.reload:
         _run_with_reload()
     else:
-        try:
+        with contextlib.suppress(KeyboardInterrupt):
             asyncio.run(run())
-        except KeyboardInterrupt:
-            pass
 
 
 if __name__ == "__main__":

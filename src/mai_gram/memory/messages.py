@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+from typing import TYPE_CHECKING
 
-from sqlalchemy import and_, asc, desc, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, asc, desc, func, select
 
 from mai_gram.db.models import Message
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _escape_like_pattern(query: str) -> str:
@@ -49,9 +52,8 @@ class MessageStore:
                 .limit(1)
             )
             last_timestamp = result.scalar_one_or_none()
-            if (
-                isinstance(last_timestamp, datetime)
-                and _to_utc_naive(timestamp) <= _to_utc_naive(last_timestamp)
+            if isinstance(last_timestamp, datetime) and _to_utc_naive(timestamp) <= _to_utc_naive(
+                last_timestamp
             ):
                 raise ValueError(
                     f"Error: timestamp {timestamp.isoformat()} is not after "
@@ -91,10 +93,7 @@ class MessageStore:
         if after_message_id is not None:
             conditions.append(Message.id >= after_message_id)
         result = await self._session.execute(
-            select(Message)
-            .where(and_(*conditions))
-            .order_by(desc(Message.id))
-            .limit(limit)
+            select(Message).where(and_(*conditions)).order_by(desc(Message.id)).limit(limit)
         )
         return list(result.scalars().all())
 
@@ -104,9 +103,7 @@ class MessageStore:
     ) -> list[Message]:
         """Return all messages for a chat ordered by id ascending."""
         result = await self._session.execute(
-            select(Message)
-            .where(Message.chat_id == chat_id)
-            .order_by(asc(Message.id))
+            select(Message).where(Message.chat_id == chat_id).order_by(asc(Message.id))
         )
         return list(result.scalars().all())
 
@@ -155,6 +152,22 @@ class MessageStore:
             .order_by(Message.timestamp.asc(), Message.id.asc())
         )
         return list(result.scalars().all())
+
+    async def get_dates_with_messages(
+        self,
+        chat_id: str,
+        *,
+        before_date: date | None = None,
+    ) -> list[date]:
+        """Return distinct dates that have messages, ordered chronologically."""
+        date_col = func.date(Message.timestamp)
+        query = (
+            select(date_col).where(Message.chat_id == chat_id).group_by(date_col).order_by(date_col)
+        )
+        if before_date is not None:
+            query = query.where(Message.timestamp < datetime.combine(before_date, time.min))
+        result = await self._session.execute(query)
+        return [date.fromisoformat(row[0]) for row in result.all()]
 
     async def get_message_by_id(
         self,
@@ -235,9 +248,7 @@ class MessageStore:
             end = datetime.combine(end_date + timedelta(days=1), time.min)
             conditions.append(Message.timestamp < end)
 
-        count_result = await self._session.execute(
-            select(Message.id).where(and_(*conditions))
-        )
+        count_result = await self._session.execute(select(Message.id).where(and_(*conditions)))
         total_count = len(count_result.all())
 
         order = asc(Message.id) if oldest_first else desc(Message.id)

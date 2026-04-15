@@ -62,21 +62,27 @@ class ExternalMCPServer:
 
             logger.info(
                 "Starting external MCP server '%s': %s %s",
-                self._name, self._command, self._args,
+                self._name,
+                self._command,
+                self._args,
             )
             self._process = await asyncio.create_subprocess_exec(
-                self._command, *self._args,
+                self._command,
+                *self._args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=merged_env,
             )
 
-            init_result = await self._send_request("initialize", {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "mai-gram", "version": "1.0"},
-            })
+            init_result = await self._send_request(
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "mai-gram", "version": "1.0"},
+                },
+            )
             logger.info(
                 "MCP server '%s' initialized: %s",
                 self._name,
@@ -119,11 +125,13 @@ class ExternalMCPServer:
 
         specs = []
         for t in tools_raw:
-            specs.append(MCPToolSpec(
-                name=t.get("name", ""),
-                description=t.get("description", ""),
-                input_schema=t.get("inputSchema", {}),
-            ))
+            specs.append(
+                MCPToolSpec(
+                    name=t.get("name", ""),
+                    description=t.get("description", ""),
+                    input_schema=t.get("inputSchema", {}),
+                )
+            )
 
         self._tools_cache = specs
         logger.info("MCP server '%s' provides %d tool(s)", self._name, len(specs))
@@ -133,10 +141,13 @@ class ExternalMCPServer:
         """Execute a tool call on the external server."""
         await self.start()
 
-        result = await self._send_request("tools/call", {
-            "name": tool_name,
-            "arguments": arguments,
-        })
+        result = await self._send_request(
+            "tools/call",
+            {
+                "name": tool_name,
+                "arguments": arguments,
+            },
+        )
 
         content_items = result.get("content", [])
         if not content_items:
@@ -155,8 +166,12 @@ class ExternalMCPServer:
         return "\n".join(text_parts) if text_parts else ""
 
     async def _send_request(
-        self, method: str, params: dict, *, timeout: float = 60.0,
-    ) -> dict:
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float = 60.0,
+    ) -> dict[str, Any]:
         """Send a JSON-RPC request and wait for the response."""
         if self._process is None or self._process.stdin is None or self._process.stdout is None:
             raise RuntimeError(f"MCP server '{self._name}' is not running")
@@ -177,7 +192,8 @@ class ExternalMCPServer:
 
         while True:
             raw_line = await asyncio.wait_for(
-                self._process.stdout.readline(), timeout=timeout,
+                self._process.stdout.readline(),
+                timeout=timeout,
             )
             if not raw_line:
                 stderr_out = ""
@@ -185,9 +201,9 @@ class ExternalMCPServer:
                     import contextlib
 
                     with contextlib.suppress(asyncio.TimeoutError):
-                        stderr_out = (await asyncio.wait_for(
-                            self._process.stderr.read(4096), timeout=1.0
-                        )).decode("utf-8", errors="replace")
+                        stderr_out = (
+                            await asyncio.wait_for(self._process.stderr.read(4096), timeout=1.0)
+                        ).decode("utf-8", errors="replace")
                 raise RuntimeError(
                     f"MCP server '{self._name}' closed stdout unexpectedly. "
                     f"stderr: {stderr_out[:500]}"
@@ -209,9 +225,10 @@ class ExternalMCPServer:
                 msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                 raise RuntimeError(f"MCP server '{self._name}' error: {msg}")
 
-            return response.get("result", {})
+            result: dict[str, Any] = response.get("result", {})
+            return result
 
-    async def _send_notification(self, method: str, params: dict) -> None:
+    async def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no response expected)."""
         if self._process is None or self._process.stdin is None:
             return
@@ -230,7 +247,7 @@ class ExternalMCPServer:
 class ExternalMCPPool:
     """Manages a pool of external MCP servers based on config."""
 
-    def __init__(self, server_configs: dict[str, dict]) -> None:
+    def __init__(self, server_configs: dict[str, dict[str, Any]]) -> None:
         self._servers: dict[str, ExternalMCPServer] = {}
         for name, config in server_configs.items():
             command = config.get("command", "")
@@ -238,7 +255,10 @@ class ExternalMCPPool:
             env = config.get("env")
             if command:
                 self._servers[name] = ExternalMCPServer(
-                    name=name, command=command, args=args, env=env,
+                    name=name,
+                    command=command,
+                    args=args,
+                    env=env,
                 )
 
     @property

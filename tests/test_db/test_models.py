@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
+
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from mai_gram.db.models import Chat, KnowledgeEntry, Message
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 
 class TestChat:
-
     async def test_create_chat(self, session: AsyncSession) -> None:
         chat = Chat(
             id="user1@testbot",
@@ -41,7 +43,6 @@ class TestChat:
 
 
 class TestMessage:
-
     async def test_create_message(self, session: AsyncSession) -> None:
         chat = Chat(
             id="user1@testbot",
@@ -57,9 +58,7 @@ class TestMessage:
         session.add(msg)
         await session.flush()
 
-        result = await session.execute(
-            select(Message).where(Message.chat_id == chat.id)
-        )
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
         fetched = result.scalar_one()
         assert fetched.role == "user"
         assert fetched.content == "Hello"
@@ -108,7 +107,6 @@ class TestMessage:
 
 
 class TestKnowledgeEntry:
-
     async def test_create_entry(self, session: AsyncSession) -> None:
         chat = Chat(
             id="user1@testbot",

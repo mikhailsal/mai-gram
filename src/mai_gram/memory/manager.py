@@ -6,11 +6,14 @@ Memory compression modules are kept in the codebase but not invoked.
 
 from __future__ import annotations
 
-from datetime import datetime
+from typing import TYPE_CHECKING
 
-from mai_gram.db.models import KnowledgeEntry, Message
-from mai_gram.memory.knowledge_base import WikiStore
-from mai_gram.memory.messages import MessageStore
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from mai_gram.db.models import KnowledgeEntry, Message
+    from mai_gram.memory.knowledge_base import WikiStore
+    from mai_gram.memory.messages import MessageStore
 
 
 class MemoryManager:
@@ -53,12 +56,8 @@ class MemoryManager:
     ) -> list[Message]:
         return await self._message_store.get_recent(chat_id, limit=limit)
 
-    async def search_messages(
-        self, chat_id: str, query: str, *, limit: int = 20
-    ) -> list[Message]:
+    async def search_messages(self, chat_id: str, query: str, *, limit: int = 20) -> list[Message]:
         return await self._message_store.search(chat_id, query, limit=limit)
 
-    async def get_wiki_top(
-        self, chat_id: str, *, limit: int = 20
-    ) -> list[KnowledgeEntry]:
+    async def get_wiki_top(self, chat_id: str, *, limit: int = 20) -> list[KnowledgeEntry]:
         return await self._wiki_store.get_top_entries(chat_id, limit=limit)

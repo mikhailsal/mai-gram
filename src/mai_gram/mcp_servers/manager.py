@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from mai_gram.mcp_servers.messages_server import MCPToolSpec
+if TYPE_CHECKING:
+    from mai_gram.mcp_servers.messages_server import MCPToolSpec
 
 
 class MCPServer(Protocol):
@@ -96,6 +97,6 @@ class MCPManager:
         if not matches:
             raise ValueError(f"No MCP server exposes tool '{tool_name}'")
         if len(matches) > 1:
-            names = ", ".join(sorted(matches))
-            raise ValueError(f"Tool '{tool_name}' is ambiguous across servers: {names}")
+            server_list = ", ".join(sorted(matches))
+            raise ValueError(f"Tool '{tool_name}' is ambiguous across servers: {server_list}")
         return matches[0]

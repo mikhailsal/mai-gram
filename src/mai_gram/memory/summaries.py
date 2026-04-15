@@ -162,13 +162,15 @@ class SummaryStore:
             else:
                 timestamp = datetime.now(timezone.utc)
 
-            versions.append(SummaryVersion(
-                summary_type=summary_type,
-                period=period,
-                version_id=version_id,
-                content=content,
-                timestamp=timestamp,
-            ))
+            versions.append(
+                SummaryVersion(
+                    summary_type=summary_type,
+                    period=period,
+                    version_id=version_id,
+                    content=content,
+                    timestamp=timestamp,
+                )
+            )
 
         return sorted(versions, key=lambda v: v.version_id)
 
@@ -234,7 +236,9 @@ class SummaryStore:
             return []
 
         summaries: list[StoredSummary] = []
-        for path in sorted(directory.glob("*.md"), key=lambda item: self._sort_key(summary_type, item.stem)):
+        for path in sorted(
+            directory.glob("*.md"), key=lambda item: self._sort_key(summary_type, item.stem)
+        ):
             content = path.read_text(encoding="utf-8")
             summaries.append(
                 StoredSummary(summary_type=summary_type, period=path.stem, content=content)

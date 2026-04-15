@@ -27,7 +27,6 @@ from mai_gram.config import get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
-from mai_gram.llm.provider import LLMProvider
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.mcp_servers.manager import MCPManager
 from mai_gram.mcp_servers.messages_server import MessagesMCPServer
@@ -37,6 +36,10 @@ from mai_gram.memory.messages import MessageStore
 from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from mai_gram.llm.provider import LLMProvider
+    from mai_gram.mcp_servers.external import ExternalMCPPool
     from mai_gram.messenger.base import Messenger
 
 logger = logging.getLogger(__name__)
@@ -85,7 +88,7 @@ class BotHandler:
         short_term_limit: int | None = None,
         tool_max_iterations: int | None = None,
         test_mode: bool = False,
-        external_mcp_pool: object | None = None,
+        external_mcp_pool: ExternalMCPPool | None = None,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
@@ -114,31 +117,43 @@ class BotHandler:
             )
 
         messenger.register_command_handler(
-            "start", self._handle_start, description="Set up a new chat",
+            "start",
+            self._handle_start,
+            description="Set up a new chat",
         )
         messenger.register_command_handler(
-            "reset", self._handle_reset, description="Delete chat and history",
+            "reset",
+            self._handle_reset,
+            description="Delete chat and history",
         )
         messenger.register_command_handler(
-            "model", self._handle_model, description="Show current model",
+            "model",
+            self._handle_model,
+            description="Show current model",
         )
         messenger.register_command_handler(
-            "help", self._handle_help, description="Show available commands",
+            "help",
+            self._handle_help,
+            description="Show available commands",
         )
         messenger.register_command_handler(
-            "datetime", self._handle_datetime_toggle,
+            "datetime",
+            self._handle_datetime_toggle,
             description="Toggle date/time in messages",
         )
         messenger.register_command_handler(
-            "timezone", self._handle_timezone,
+            "timezone",
+            self._handle_timezone,
             description="Set timezone (e.g. /timezone Europe/Moscow)",
         )
         messenger.register_command_handler(
-            "reasoning", self._handle_reasoning_toggle,
+            "reasoning",
+            self._handle_reasoning_toggle,
             description="Toggle reasoning display",
         )
         messenger.register_command_handler(
-            "toolcalls", self._handle_toolcalls_toggle,
+            "toolcalls",
+            self._handle_toolcalls_toggle,
             description="Toggle tool call display",
         )
         messenger.register_message_handler(self._handle_message)
@@ -173,10 +188,7 @@ class BotHandler:
         logger.warning("Access denied for user_id=%s", message.user_id)
         await self._messenger.send_message(
             OutgoingMessage(
-                text=(
-                    "Access denied. This is a private bot. "
-                    f"Your user ID: {message.user_id}"
-                ),
+                text=(f"Access denied. This is a private bot. Your user ID: {message.user_id}"),
                 chat_id=message.chat_id,
             )
         )
@@ -231,9 +243,7 @@ class BotHandler:
 
         self.clear_setup_session(message.user_id)
 
-        await self._messenger.send_message(
-            OutgoingMessage(text=msg, chat_id=message.chat_id)
-        )
+        await self._messenger.send_message(OutgoingMessage(text=msg, chat_id=message.chat_id))
 
     async def _handle_model(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
@@ -277,9 +287,7 @@ class BotHandler:
             "/help - Show this help message\n\n"
             "Just send a message to chat!"
         )
-        await self._messenger.send_message(
-            OutgoingMessage(text=msg, chat_id=message.chat_id)
-        )
+        await self._messenger.send_message(OutgoingMessage(text=msg, chat_id=message.chat_id))
 
     async def _toggle_chat_flag(
         self, message: IncomingMessage, field_name: str, label: str
@@ -403,8 +411,10 @@ class BotHandler:
 
         if data == "regen":
             await self._show_confirmation(
-                message, "Regenerate this response?",
-                confirm_data="confirm_regen", cancel_data="cancel_action",
+                message,
+                "Regenerate this response?",
+                confirm_data="confirm_regen",
+                cancel_data="cancel_action",
             )
             return
 
@@ -626,7 +636,10 @@ class BotHandler:
             now = datetime.now(timezone.utc)
             chat_tz = chat.timezone
             await message_store.save_message(
-                chat.id, "user", message.text, timestamp=now,
+                chat.id,
+                "user",
+                message.text,
+                timestamp=now,
                 timezone_name=chat_tz,
             )
 
@@ -644,11 +657,11 @@ class BotHandler:
             tg_chat_id = message.chat_id
             sent_msg_ids: list[str] = []
 
-            async def _on_tool_call_display(
-                *, content: str, tool_calls_json: str
-            ) -> None:
+            async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
                 await message_store.save_message(
-                    chat.id, "assistant", content or "",
+                    chat.id,
+                    "assistant",
+                    content or "",
                     tool_calls=tool_calls_json,
                     timezone_name=chat_tz,
                 )
@@ -687,7 +700,9 @@ class BotHandler:
                 server_name: str | None,
             ) -> None:
                 await message_store.save_message(
-                    chat.id, "tool", content,
+                    chat.id,
+                    "tool",
+                    content,
                     tool_call_id=tool_call_id,
                     timezone_name=chat_tz,
                 )
@@ -745,7 +760,9 @@ class BotHandler:
                             )
                             if turn_text.strip():
                                 await self._messenger.edit_message(
-                                    tg_chat_id, placeholder_msg_id, turn_text,
+                                    tg_chat_id,
+                                    placeholder_msg_id,
+                                    turn_text,
                                 )
                             sent_msg_ids.append(placeholder_msg_id)
                         content_parts.clear()
@@ -770,13 +787,9 @@ class BotHandler:
 
                         r_esc = _html.escape(current_reasoning.strip())
                         c_html = (
-                            markdown_to_html(current_content)
-                            if current_content.strip() else ""
+                            markdown_to_html(current_content) if current_content.strip() else ""
                         )
-                        display_text = (
-                            f"<blockquote>\U0001f4ad Reasoning\n"
-                            f"{r_esc}</blockquote>"
-                        )
+                        display_text = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
                         if c_html:
                             display_text += f"\n\n{c_html}"
                         live_parse_mode = "html"
@@ -842,7 +855,9 @@ class BotHandler:
                 saved_msg_id: int | None = None
                 if response_text and response_text.strip():
                     saved_msg = await message_store.save_message(
-                        chat.id, "assistant", response_text,
+                        chat.id,
+                        "assistant",
+                        response_text,
                         timestamp=datetime.now(timezone.utc),
                         reasoning=response_reasoning,
                         timezone_name=chat_tz,
@@ -864,9 +879,7 @@ class BotHandler:
             kb_buttons[0].append(("\u2702 Cut above", f"cut:{saved_msg_id}"))
         action_kb = build_inline_keyboard(kb_buttons)
 
-        usage_footer = self._format_usage_footer(
-            stream_usage, stream_cost, stream_is_byok
-        )
+        usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
 
         if placeholder_msg_id and response_text and response_text.strip():
             if show_reasoning and response_reasoning and response_reasoning.strip():
@@ -874,23 +887,26 @@ class BotHandler:
 
                 escaped_r = _html.escape(response_reasoning.strip())
                 html_body = markdown_to_html(response_text)
-                footer_html = (
-                    f"\n\n<i>{_html.escape(usage_footer)}</i>" if usage_footer else ""
-                )
+                footer_html = f"\n\n<i>{_html.escape(usage_footer)}</i>" if usage_footer else ""
                 display_text = (
                     f"<blockquote expandable>\U0001f4ad Reasoning\n"
                     f"{escaped_r}</blockquote>\n\n{html_body}{footer_html}"
                 )
                 await self._messenger.edit_message(
-                    tg_chat_id, placeholder_msg_id, display_text,
-                    parse_mode="html", keyboard=action_kb,
+                    tg_chat_id,
+                    placeholder_msg_id,
+                    display_text,
+                    parse_mode="html",
+                    keyboard=action_kb,
                 )
             else:
                 text_with_footer = response_text
                 if usage_footer:
                     text_with_footer += f"\n\n{usage_footer}"
                 await self._edit_with_mdv2_fallback(
-                    tg_chat_id, placeholder_msg_id, text_with_footer,
+                    tg_chat_id,
+                    placeholder_msg_id,
+                    text_with_footer,
                     keyboard=action_kb,
                 )
             sent_msg_ids.append(placeholder_msg_id)
@@ -909,9 +925,7 @@ class BotHandler:
                 sent_msg_ids.append(final_msg_id)
 
     @staticmethod
-    def _build_intermediate_display(
-        content: str, reasoning: str, show_reasoning: bool
-    ) -> str:
+    def _build_intermediate_display(content: str, reasoning: str, show_reasoning: bool) -> str:
         """Build display text for an intermediate turn (before tool calls)."""
         display = ""
         if show_reasoning and reasoning.strip():
@@ -923,9 +937,7 @@ class BotHandler:
         return display
 
     @staticmethod
-    def _format_usage_footer(
-        usage: object, cost: float | None, is_byok: bool
-    ) -> str:
+    def _format_usage_footer(usage: object, cost: float | None, is_byok: bool) -> str:
         """Build a compact token/cost footer string."""
         if usage is None:
             return ""
@@ -978,11 +990,15 @@ class BotHandler:
         mdv2_text = markdown_to_mdv2(text)
         logger.info(
             "MarkdownV2 conversion: input=%d chars, output=%d chars",
-            len(text), len(mdv2_text),
+            len(text),
+            len(mdv2_text),
         )
         result = await self._messenger.edit_message(
-            chat_id, message_id, mdv2_text,
-            parse_mode="markdown", keyboard=keyboard,
+            chat_id,
+            message_id,
+            mdv2_text,
+            parse_mode="markdown",
+            keyboard=keyboard,
         )
         if not result.success:
             logger.warning(
@@ -990,7 +1006,10 @@ class BotHandler:
                 result.error,
             )
             await self._messenger.edit_message(
-                chat_id, message_id, text, keyboard=keyboard,
+                chat_id,
+                message_id,
+                text,
+                keyboard=keyboard,
             )
 
     async def _send_response(
@@ -1030,10 +1049,15 @@ class BotHandler:
             )
         else:
             msg_id = await self._send_with_mdv2_fallback(
-                chat_id, response_text, keyboard=keyboard,
+                chat_id,
+                response_text,
+                keyboard=keyboard,
             )
             self._message_logger.log_outgoing(
-                chat_id, response_text, success=msg_id is not None, message_id=msg_id,
+                chat_id,
+                response_text,
+                success=msg_id is not None,
+                message_id=msg_id,
             )
             return msg_id
 
@@ -1058,21 +1082,19 @@ class BotHandler:
         """Send a confirmation dialog with Yes/Cancel buttons."""
         from mai_gram.messenger.telegram import build_inline_keyboard
 
-        kb = build_inline_keyboard([
-            [("Yes", confirm_data), ("Cancel", cancel_data)],
-        ])
+        kb = build_inline_keyboard(
+            [
+                [("Yes", confirm_data), ("Cancel", cancel_data)],
+            ]
+        )
         await self._messenger.send_message(
             OutgoingMessage(text=text, chat_id=message.chat_id, keyboard=kb)
         )
 
-    async def _get_message_preview(
-        self, db_message_id: int, max_len: int = 80
-    ) -> str:
+    async def _get_message_preview(self, db_message_id: int, max_len: int = 80) -> str:
         """Fetch a truncated preview of a stored message by its DB id."""
         async with get_session() as session:
-            result = await session.execute(
-                select(Message).where(Message.id == db_message_id)
-            )
+            result = await session.execute(select(Message).where(Message.id == db_message_id))
             msg = result.scalar_one_or_none()
             if not msg or not msg.content:
                 return ""
@@ -1086,13 +1108,9 @@ class BotHandler:
         if message.raw and hasattr(message.raw, "callback_query"):
             cb_msg = message.raw.callback_query.message
             if cb_msg:
-                await self._messenger.delete_message(
-                    message.chat_id, str(cb_msg.message_id)
-                )
+                await self._messenger.delete_message(message.chat_id, str(cb_msg.message_id))
 
-    async def _handle_cut_above(
-        self, message: IncomingMessage, db_message_id: int
-    ) -> None:
+    async def _handle_cut_above(self, message: IncomingMessage, db_message_id: int) -> None:
         """Set the cut-above point so messages before db_message_id are excluded from context."""
         chat_id = self._chat_id_for(message)
 
@@ -1151,9 +1169,7 @@ class BotHandler:
         if message.raw and hasattr(message.raw, "callback_query"):
             cb_msg = message.raw.callback_query.message
             if cb_msg:
-                await self._messenger.delete_message(
-                    message.chat_id, str(cb_msg.message_id)
-                )
+                await self._messenger.delete_message(message.chat_id, str(cb_msg.message_id))
 
         # Build a synthetic message to re-trigger the conversation pipeline
         # We need the last user message to reconstruct context
@@ -1192,10 +1208,12 @@ class BotHandler:
                 disabled_tools=disabled_tools,
             )
             mcp_manager.register_server(
-                "messages", MessagesMCPServer(message_store, chat.id),
+                "messages",
+                MessagesMCPServer(message_store, chat.id),
             )
             mcp_manager.register_server(
-                "wiki", WikiMCPServer(wiki_store, chat.id),
+                "wiki",
+                WikiMCPServer(wiki_store, chat.id),
             )
             if self._external_mcp_pool is not None:
                 for srv_name, srv in self._external_mcp_pool.get_all_servers().items():
@@ -1215,11 +1233,11 @@ class BotHandler:
             tg_chat_id = message.chat_id
             sent_msg_ids: list[str] = []
 
-            async def _on_tool_call_display(
-                *, content: str, tool_calls_json: str
-            ) -> None:
+            async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
                 await message_store.save_message(
-                    chat.id, "assistant", content or "",
+                    chat.id,
+                    "assistant",
+                    content or "",
                     tool_calls=tool_calls_json,
                     timezone_name=regen_tz,
                 )
@@ -1258,7 +1276,9 @@ class BotHandler:
                 server_name: str | None,
             ) -> None:
                 await message_store.save_message(
-                    chat.id, "tool", content,
+                    chat.id,
+                    "tool",
+                    content,
                     tool_call_id=tool_call_id,
                     timezone_name=regen_tz,
                 )
@@ -1314,7 +1334,9 @@ class BotHandler:
                             )
                             if turn_text.strip():
                                 await self._messenger.edit_message(
-                                    tg_chat_id, placeholder_msg_id, turn_text,
+                                    tg_chat_id,
+                                    placeholder_msg_id,
+                                    turn_text,
                                 )
                             sent_msg_ids.append(placeholder_msg_id)
                         content_parts.clear()
@@ -1339,13 +1361,9 @@ class BotHandler:
 
                         r_esc = _html.escape(current_reasoning.strip())
                         c_html = (
-                            markdown_to_html(current_content)
-                            if current_content.strip() else ""
+                            markdown_to_html(current_content) if current_content.strip() else ""
                         )
-                        display_text = (
-                            f"<blockquote>\U0001f4ad Reasoning\n"
-                            f"{r_esc}</blockquote>"
-                        )
+                        display_text = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
                         if c_html:
                             display_text += f"\n\n{c_html}"
                         live_parse_mode = "html"
@@ -1401,7 +1419,7 @@ class BotHandler:
                                     tg_chat_id,
                                     placeholder_msg_id,
                                     fallback + " \u258d",
-                            )
+                                )
                         last_edit_time = now_mono
                         last_display_len = display_len
 
@@ -1411,7 +1429,9 @@ class BotHandler:
                 saved_msg_id: int | None = None
                 if response_text and response_text.strip():
                     saved_msg = await message_store.save_message(
-                        chat.id, "assistant", response_text,
+                        chat.id,
+                        "assistant",
+                        response_text,
                         timestamp=datetime.now(timezone.utc),
                         reasoning=response_reasoning,
                         timezone_name=chat.timezone,
@@ -1433,9 +1453,7 @@ class BotHandler:
             kb_buttons[0].append(("\u2702 Cut above", f"cut:{saved_msg_id}"))
         action_kb = build_inline_keyboard(kb_buttons)
 
-        usage_footer = self._format_usage_footer(
-            stream_usage, stream_cost, stream_is_byok
-        )
+        usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
 
         if placeholder_msg_id and response_text and response_text.strip():
             if show_reasoning and response_reasoning and response_reasoning.strip():
@@ -1443,23 +1461,26 @@ class BotHandler:
 
                 escaped_r = _html.escape(response_reasoning.strip())
                 html_body = markdown_to_html(response_text)
-                footer_html = (
-                    f"\n\n<i>{_html.escape(usage_footer)}</i>" if usage_footer else ""
-                )
+                footer_html = f"\n\n<i>{_html.escape(usage_footer)}</i>" if usage_footer else ""
                 display_text = (
                     f"<blockquote expandable>\U0001f4ad Reasoning\n"
                     f"{escaped_r}</blockquote>\n\n{html_body}{footer_html}"
                 )
                 await self._messenger.edit_message(
-                    tg_chat_id, placeholder_msg_id, display_text,
-                    parse_mode="html", keyboard=action_kb,
+                    tg_chat_id,
+                    placeholder_msg_id,
+                    display_text,
+                    parse_mode="html",
+                    keyboard=action_kb,
                 )
             else:
                 text_with_footer = response_text
                 if usage_footer:
                     text_with_footer += f"\n\n{usage_footer}"
                 await self._edit_with_mdv2_fallback(
-                    tg_chat_id, placeholder_msg_id, text_with_footer,
+                    tg_chat_id,
+                    placeholder_msg_id,
+                    text_with_footer,
                     keyboard=action_kb,
                 )
             sent_msg_ids.append(placeholder_msg_id)
@@ -1479,8 +1500,6 @@ class BotHandler:
 
     # -- DB helpers --
 
-    async def _get_chat(self, session: object, chat_id: str) -> Chat | None:
-        result = await session.execute(  # type: ignore[union-attr]
-            select(Chat).where(Chat.id == chat_id)
-        )
-        return result.scalar_one_or_none()  # type: ignore[union-attr]
+    async def _get_chat(self, session: AsyncSession, chat_id: str) -> Chat | None:
+        result = await session.execute(select(Chat).where(Chat.id == chat_id))
+        return result.scalar_one_or_none()

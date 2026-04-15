@@ -14,7 +14,7 @@ from mai_gram.db.database import (
     init_db,
     reset_db_state,
 )
-from mai_gram.db.models import Base, Chat
+from mai_gram.db.models import Chat
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -28,7 +28,6 @@ def _clean_db_state() -> None:
 
 
 class TestGetEngine:
-
     async def test_creates_engine(self) -> None:
         engine = get_engine(TEST_DATABASE_URL)
         assert engine is not None
@@ -43,7 +42,6 @@ class TestGetEngine:
 
 
 class TestGetSessionFactory:
-
     async def test_raises_without_engine(self) -> None:
         with pytest.raises(RuntimeError, match="No database engine"):
             get_session_factory()
@@ -56,7 +54,6 @@ class TestGetSessionFactory:
 
 
 class TestGetSession:
-
     async def test_session_commits_on_success(self) -> None:
         engine = await init_db(TEST_DATABASE_URL)
 
@@ -71,9 +68,7 @@ class TestGetSession:
             session.add(chat)
 
         async with get_session() as session:
-            result = await session.execute(
-                select(Chat).where(Chat.id == "test-1@bot")
-            )
+            result = await session.execute(select(Chat).where(Chat.id == "test-1@bot"))
             loaded = result.scalar_one()
             assert loaded.llm_model == "test/model"
 
@@ -95,23 +90,18 @@ class TestGetSession:
                 raise ValueError("intentional error")
 
         async with get_session() as session:
-            result = await session.execute(
-                select(Chat).where(Chat.id == "test-2@bot")
-            )
+            result = await session.execute(select(Chat).where(Chat.id == "test-2@bot"))
             assert result.scalar_one_or_none() is None
 
         await engine.dispose()
 
 
 class TestInitDb:
-
     async def test_creates_all_tables(self) -> None:
         engine = await init_db(TEST_DATABASE_URL)
 
         async with engine.begin() as conn:
-            result = await conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table'")
-            )
+            result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             table_names = {row[0] for row in result.fetchall()}
 
         expected_tables = {
@@ -131,9 +121,7 @@ class TestInitDb:
         engine2 = await init_db(TEST_DATABASE_URL)
 
         async with engine2.begin() as conn:
-            result = await conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type='table'")
-            )
+            result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             tables = result.fetchall()
             assert len(tables) > 0
 
@@ -142,7 +130,6 @@ class TestInitDb:
 
 
 class TestCloseDb:
-
     async def test_close_resets_state(self) -> None:
         await init_db(TEST_DATABASE_URL)
         await close_db()

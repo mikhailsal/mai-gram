@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING
 
 from mai_gram.db.models import Chat
-from mai_gram.memory.knowledge_base import WikiStore
 from mai_gram.mcp_servers.wiki_server import WikiMCPServer
+from mai_gram.memory.knowledge_base import WikiStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _create_companion(session: AsyncSession, chat_id: str = "test@testbot") -> str:
-    chat = Chat(id=chat_id, user_id="test", bot_id="testbot", llm_model="test/model", system_prompt="test")
+    chat = Chat(
+        id=chat_id, user_id="test", bot_id="testbot", llm_model="test/model", system_prompt="test"
+    )
     session.add(chat)
     await session.flush()
     return chat_id
@@ -103,7 +108,11 @@ class TestWikiMCPServer:
 
         changelog_path = tmp_path / chat_id / "wiki" / "changelog.jsonl"
         assert changelog_path.exists()
-        lines = [json.loads(line) for line in changelog_path.read_text(encoding="utf-8").splitlines() if line]
+        lines = [
+            json.loads(line)
+            for line in changelog_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
         assert len(lines) == 2
         assert lines[0]["action"] == "create"
         assert lines[0]["key"] == "human_name"

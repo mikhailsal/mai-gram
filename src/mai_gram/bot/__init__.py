@@ -3,8 +3,8 @@
 from mai_gram.bot.handler import BotHandler
 from mai_gram.bot.middleware import (
     MessageLogger,
-    RateLimiter,
     RateLimitConfig,
+    RateLimiter,
     RequestContext,
 )
 

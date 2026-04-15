@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from mai_gram.db.models import Message
-from mai_gram.memory.messages import MessageStore
+if TYPE_CHECKING:
+    from mai_gram.db.models import Message
+    from mai_gram.memory.messages import MessageStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +53,9 @@ class MessagesMCPServer:
                         "oldest_first": {
                             "type": "boolean",
                             "description": (
-                                "If true, return oldest matches first (useful for finding "
-                                "when something was first mentioned). Default: false (newest first)."
+                                "If true, return oldest matches first (useful for finding"
+                                " when something was first mentioned)."
+                                " Default: false (newest first)."
                             ),
                             "default": False,
                         },
@@ -74,7 +76,9 @@ class MessagesMCPServer:
                     "properties": {
                         "message_id": {
                             "type": "integer",
-                            "description": "The message ID to get context for (from search results)",
+                            "description": (
+                                "The message ID to get context for (from search results)"
+                            ),
                         },
                         "before": {
                             "type": "integer",
@@ -229,8 +233,10 @@ class MessagesMCPServer:
 
         try:
             start_date = date.fromisoformat(start_date_str)
-        except ValueError:
-            raise ValueError(f"Invalid start_date format: {start_date_str}. Use YYYY-MM-DD.")
+        except ValueError as err:
+            raise ValueError(
+                f"Invalid start_date format: {start_date_str}. Use YYYY-MM-DD."
+            ) from err
 
         end_date_str = arguments.get("end_date")
         if end_date_str is None:
@@ -240,8 +246,10 @@ class MessagesMCPServer:
         else:
             try:
                 end_date = date.fromisoformat(end_date_str)
-            except ValueError:
-                raise ValueError(f"Invalid end_date format: {end_date_str}. Use YYYY-MM-DD.")
+            except ValueError as err:
+                raise ValueError(
+                    f"Invalid end_date format: {end_date_str}. Use YYYY-MM-DD."
+                ) from err
 
         raw_limit = arguments.get("limit", 10)
         if not isinstance(raw_limit, int):
@@ -267,9 +275,11 @@ class MessagesMCPServer:
         )
 
         if not messages:
-            return f"No messages found for {start_date_str}" + (
-                f" to {end_date_str}" if end_date_str and end_date_str != start_date_str else ""
-            ) + "."
+            return (
+                f"No messages found for {start_date_str}"
+                + (f" to {end_date_str}" if end_date_str and end_date_str != start_date_str else "")
+                + "."
+            )
 
         # Header with pagination info
         showing_end = min(offset + len(messages), total_count)
@@ -288,12 +298,14 @@ class MessagesMCPServer:
         """Format a message with ID, timestamp in its stored timezone, role, and content."""
         tz_name = getattr(msg, "timezone", "UTC") or "UTC"
         try:
-            tz = ZoneInfo(tz_name)
+            tz: ZoneInfo | timezone = ZoneInfo(tz_name)
         except (KeyError, ValueError):
             tz = timezone.utc
             tz_name = "UTC"
         ts = msg.timestamp.replace(tzinfo=timezone.utc).astimezone(tz)
-        return f"[#{msg.id}] [{ts.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}] {msg.role}: {msg.content}"
+        return (
+            f"[#{msg.id}] [{ts.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}] {msg.role}: {msg.content}"
+        )
 
     @staticmethod
     def _format_message(timestamp: datetime, role: str, content: str) -> str:

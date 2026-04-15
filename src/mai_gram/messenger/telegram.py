@@ -27,16 +27,18 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler as TGMessageHandler,
     filters,
+)
+from telegram.ext import (
+    MessageHandler as TGMessageHandler,
 )
 
 from mai_gram.messenger.base import (
     IncomingMessage,
     MessageHandler,
+    MessageType,
     Messenger,
     MessengerError,
-    MessageType,
     OutgoingMessage,
     SendResult,
 )
@@ -64,7 +66,7 @@ def _convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingM
         query = update.callback_query
         return IncomingMessage(
             platform="telegram",
-            chat_id=str(query.message.chat_id) if query.message else "",
+            chat_id=str(query.message.chat_id) if query.message else "",  # type: ignore[attr-defined]
             user_id=str(query.from_user.id) if query.from_user else "",
             message_id=str(query.id),
             message_type=MessageType.CALLBACK,
@@ -122,9 +124,7 @@ def _convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingM
     )
 
 
-def build_inline_keyboard(
-    buttons: list[list[tuple[str, str]]]
-) -> InlineKeyboardMarkup:
+def build_inline_keyboard(buttons: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     """Build an inline keyboard from a list of button rows.
 
     Parameters
@@ -138,8 +138,7 @@ def build_inline_keyboard(
         The Telegram inline keyboard markup.
     """
     keyboard = [
-        [InlineKeyboardButton(text, callback_data=data) for text, data in row]
-        for row in buttons
+        [InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in buttons
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -195,7 +194,7 @@ class TelegramMessenger(Messenger):
 
         self._token = token
         self._bot_id = bot_id
-        self._app: Application | None = None
+        self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
         self._message_handlers: list[MessageHandler] = []
         self._callback_handlers: list[MessageHandler] = []
         self._command_handlers: dict[str, MessageHandler] = {}
@@ -216,7 +215,7 @@ class TelegramMessenger(Messenger):
         """Return the underlying Telegram Bot instance."""
         if self._app is None:
             raise MessengerError("Messenger not started")
-        return self._app.bot
+        return self._app.bot  # type: ignore[no-any-return]
 
     async def start(self) -> None:
         """Start the Telegram bot and begin polling for updates."""
@@ -245,15 +244,11 @@ class TelegramMessenger(Messenger):
 
         # Register command handlers
         for command, handler in self._command_handlers.items():
-            self._app.add_handler(
-                CommandHandler(command, self._make_command_wrapper(handler))
-            )
+            self._app.add_handler(CommandHandler(command, self._make_command_wrapper(handler)))
 
         # Register callback query handler
         if self._callback_handlers:
-            self._app.add_handler(
-                CallbackQueryHandler(self._handle_callback_query)
-            )
+            self._app.add_handler(CallbackQueryHandler(self._handle_callback_query))
 
         # Register general message handler (must be last)
         if self._message_handlers:
@@ -273,8 +268,7 @@ class TelegramMessenger(Messenger):
             from telegram import BotCommand
 
             bot_commands = [
-                BotCommand(cmd, desc)
-                for cmd, desc in self._command_descriptions.items()
+                BotCommand(cmd, desc) for cmd, desc in self._command_descriptions.items()
             ]
             try:
                 await self._app.bot.set_my_commands(bot_commands)
@@ -286,6 +280,7 @@ class TelegramMessenger(Messenger):
                 logger.warning("Failed to set bot commands: %s", e)
 
         # Start polling in the background
+        assert self._app.updater is not None
         await self._app.updater.start_polling(drop_pending_updates=True)
 
         logger.info("Telegram messenger started successfully")
@@ -298,7 +293,7 @@ class TelegramMessenger(Messenger):
         logger.info("Stopping Telegram messenger...")
 
         # Stop polling and shutdown
-        if self._app.updater.running:
+        if self._app.updater and self._app.updater.running:
             await self._app.updater.stop()
         await self._app.stop()
         await self._app.shutdown()
@@ -306,11 +301,9 @@ class TelegramMessenger(Messenger):
         self._app = None
         logger.info("Telegram messenger stopped")
 
-    async def send_message(
-        self, message: OutgoingMessage, *, max_retries: int = 2
-    ) -> SendResult:
+    async def send_message(self, message: OutgoingMessage, *, max_retries: int = 2) -> SendResult:
         """Send a message via Telegram with retry logic for transient failures.
-        
+
         Parameters
         ----------
         message:
@@ -330,7 +323,7 @@ class TelegramMessenger(Messenger):
                 parse_mode = ParseMode.HTML
 
         # Build keyboard if provided
-        reply_markup = None
+        reply_markup: ReplyKeyboardRemove | InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None
         if message.keyboard is not None:
             if message.keyboard == "remove":
                 reply_markup = ReplyKeyboardRemove()
@@ -463,7 +456,11 @@ class TelegramMessenger(Messenger):
         self._message_handlers.append(handler)
 
     def register_command_handler(
-        self, command: str, handler: MessageHandler, *, description: str = "",
+        self,
+        command: str,
+        handler: MessageHandler,
+        *,
+        description: str = "",
     ) -> None:
         """Register a handler for a specific command."""
         self._command_handlers[command] = handler
@@ -494,22 +491,17 @@ class TelegramMessenger(Messenger):
     # Internal handlers
     # -------------------------------------------------------------------------
 
-    def _make_command_wrapper(
-        self, handler: MessageHandler
-    ) -> Any:
+    def _make_command_wrapper(self, handler: MessageHandler) -> Any:
         """Create a Telegram CommandHandler-compatible wrapper."""
-        async def wrapper(
-            update: Update, context: ContextTypes.DEFAULT_TYPE
-        ) -> None:
+
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             msg = _convert_update_to_message(update, bot_id=self._bot_id)
             if msg:
                 await handler(msg)
 
         return wrapper
 
-    async def _handle_message(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
+    async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming text messages."""
         msg = _convert_update_to_message(update, bot_id=self._bot_id)
         if msg:

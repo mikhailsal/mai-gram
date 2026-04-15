@@ -9,8 +9,8 @@ from typing import Any, TextIO
 from mai_gram.messenger.base import (
     IncomingMessage,
     MessageHandler,
-    Messenger,
     MessageType,
+    Messenger,
     OutgoingMessage,
     SendResult,
 )
@@ -31,7 +31,7 @@ def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
 
     rows: list[Any]
     if isinstance(keyboard, (list, tuple)):
-        rows = keyboard
+        rows = list(keyboard)
     else:
         return []
 
@@ -139,7 +139,11 @@ class ConsoleMessenger(Messenger):
         self._message_handlers.append(handler)
 
     def register_command_handler(
-        self, command: str, handler: MessageHandler, *, description: str = "",
+        self,
+        command: str,
+        handler: MessageHandler,
+        *,
+        description: str = "",
     ) -> None:
         self._command_handlers[command] = handler
 

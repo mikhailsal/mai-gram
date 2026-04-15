@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from mai_gram.llm.provider import TokenUsage
+if TYPE_CHECKING:
+    from mai_gram.llm.provider import TokenUsage
 
 # Approximate USD price per 1K tokens.
 DEFAULT_MODEL_PRICING_PER_1K: dict[str, dict[str, float]] = {
@@ -48,7 +50,8 @@ class SessionCostTracker:
         pricing_per_1k: dict[str, dict[str, float]] | None = None,
     ) -> None:
         self._pricing = {
-            key.lower(): value for key, value in (pricing_per_1k or DEFAULT_MODEL_PRICING_PER_1K).items()
+            key.lower(): value
+            for key, value in (pricing_per_1k or DEFAULT_MODEL_PRICING_PER_1K).items()
         }
         self._calls = 0
         self._prompt_tokens = 0
@@ -65,7 +68,9 @@ class SessionCostTracker:
             return 0.0
         prompt_rate = float(rates.get("prompt", 0.0))
         completion_rate = float(rates.get("completion", 0.0))
-        return (usage.prompt_tokens / 1000.0) * prompt_rate + (usage.completion_tokens / 1000.0) * completion_rate
+        return (usage.prompt_tokens / 1000.0) * prompt_rate + (
+            usage.completion_tokens / 1000.0
+        ) * completion_rate
 
     def record(self, usage: TokenUsage, *, model_name: str | None) -> CostBreakdown:
         """Record one LLM call and return the per-call estimate."""

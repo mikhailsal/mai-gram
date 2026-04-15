@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
-from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func as sql_func
 from sqlalchemy import select
@@ -20,11 +21,15 @@ from mai_gram.db import close_db, get_session, init_db, run_migrations
 from mai_gram.db.models import Chat, Message
 from mai_gram.debug import LLMLoggerProvider
 from mai_gram.llm.openrouter import OpenRouterProvider
-from mai_gram.llm.provider import LLMProvider
 from mai_gram.memory.knowledge_base import WikiStore
 from mai_gram.memory.messages import MessageStore
 from mai_gram.messenger.base import IncomingMessage, MessageType
 from mai_gram.messenger.console import ConsoleMessenger
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from mai_gram.llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +87,13 @@ class _ConsoleStateStore:
 
     _STATE_FILE = Path("./data/.console_state.json")
 
-    def load(self) -> dict:
+    def load(self) -> dict[str, Any]:
         if self._STATE_FILE.exists():
-            return json.loads(self._STATE_FILE.read_text(encoding="utf-8"))
+            result: dict[str, Any] = json.loads(self._STATE_FILE.read_text(encoding="utf-8"))
+            return result
         return {}
 
-    def save(self, state: dict) -> None:
+    def save(self, state: dict[str, Any]) -> None:
         self._STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         self._STATE_FILE.write_text(
             json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -114,14 +120,17 @@ def _resolve_chat_id(args: argparse.Namespace, state_store: _ConsoleStateStore) 
 
 def _resolve_user_id(args: argparse.Namespace, settings: object) -> str:
     if args.user_id:
-        return args.user_id
-    allowed = settings.get_allowed_user_ids()  # type: ignore[union-attr]
-    if allowed:
-        return sorted(allowed)[0]
+        return str(args.user_id)
+    get_fn = getattr(settings, "get_allowed_user_ids", None)
+    if get_fn is not None:
+        allowed = get_fn()
+        if allowed:
+            return str(sorted(allowed)[0])
     return "console-user"
 
 
 # -- Display commands --
+
 
 async def _print_chat_list() -> None:
     async with get_session() as session:
@@ -205,10 +214,14 @@ async def _print_prompt(
         wiki_store = WikiStore(session, data_dir=data_dir)
 
         prompt_builder = PromptBuilder(
-            llm, message_store, wiki_store, test_mode=test_mode,
+            llm,
+            message_store,
+            wiki_store,
+            test_mode=test_mode,
         )
         context = await prompt_builder.build_context(
-            chat, send_datetime=chat.send_datetime,
+            chat,
+            send_datetime=chat.send_datetime,
         )
 
         mcp_manager = MCPManager()
@@ -244,7 +257,8 @@ async def _print_prompt(
 
 # -- Import command --
 
-def _extract_messages_from_proxy_request(data: dict) -> list[dict]:
+
+def _extract_messages_from_proxy_request(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract messages from an AI Proxy v2 request JSON.
 
     The proxy format stores the full request/response cycle. Messages come
@@ -343,11 +357,13 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
                 for tc in tool_calls_raw:
                     if isinstance(tc, dict):
                         func = tc.get("function", tc)
-                        tc_list.append({
-                            "id": tc.get("id", f"import_{i}"),
-                            "name": func.get("name", "unknown"),
-                            "arguments": func.get("arguments", "{}"),
-                        })
+                        tc_list.append(
+                            {
+                                "id": tc.get("id", f"import_{i}"),
+                                "name": func.get("name", "unknown"),
+                                "arguments": func.get("arguments", "{}"),
+                            }
+                        )
                 if tc_list:
                     tool_calls_json = json.dumps(tc_list)
 
@@ -358,10 +374,8 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
             timestamp = None
             ts_raw = entry.get("timestamp")
             if isinstance(ts_raw, str):
-                try:
+                with contextlib.suppress(ValueError):
                     timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
 
             if role == "system":
                 continue
@@ -386,6 +400,7 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
 
 
 # -- Main --
+
 
 def _incoming_command(chat_id: str, user_id: str, command: str) -> IncomingMessage:
     now = datetime.now(timezone.utc)

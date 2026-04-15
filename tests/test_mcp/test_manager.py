@@ -61,7 +61,9 @@ class TestMCPManager:
 
     async def test_call_tool_unknown_tool(self) -> None:
         manager = MCPManager()
-        manager.register_server("messages", _FakeServer([MCPToolSpec("search_messages", "Search", {})]))
+        manager.register_server(
+            "messages", _FakeServer([MCPToolSpec("search_messages", "Search", {})])
+        )
 
         with pytest.raises(ValueError, match="Unknown tool"):
             await manager.call_tool("messages", "missing_tool", {})

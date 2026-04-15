@@ -8,8 +8,8 @@ import pytest
 
 from mai_gram.bot.middleware import (
     MessageLogger,
-    RateLimiter,
     RateLimitConfig,
+    RateLimiter,
     RequestContext,
     with_logging,
     with_rate_limit,

@@ -16,6 +16,10 @@ from __future__ import annotations
 
 import html as _html_mod
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!\\"
 
@@ -89,10 +93,12 @@ def _protect_list_bullets(text: str) -> str:
 
 
 def _convert_code_blocks(
-    text: str, placeholder: callable,
+    text: str,
+    placeholder: Callable[[str], str],
 ) -> str:
     """Convert fenced code blocks: ```lang\\n...``` -> ```lang\\n...```"""
-    def _repl(m: re.Match) -> str:
+
+    def _repl(m: re.Match[str]) -> str:
         lang = m.group(1) or ""
         code = m.group(2)
         # Inside code blocks, only ``` and \ need escaping
@@ -110,10 +116,12 @@ def _convert_code_blocks(
 
 
 def _convert_inline_code(
-    text: str, placeholder: callable,
+    text: str,
+    placeholder: Callable[[str], str],
 ) -> str:
     """Convert inline code: `code` -> `code`"""
-    def _repl(m: re.Match) -> str:
+
+    def _repl(m: re.Match[str]) -> str:
         code = m.group(1)
         escaped = code.replace("\\", "\\\\").replace("`", "\\`")
         return placeholder(f"`{escaped}`")
@@ -122,10 +130,12 @@ def _convert_inline_code(
 
 
 def _convert_links(
-    text: str, placeholder: callable,
+    text: str,
+    placeholder: Callable[[str], str],
 ) -> str:
     """Convert links: [text](url) -> [text](url)"""
-    def _repl(m: re.Match) -> str:
+
+    def _repl(m: re.Match[str]) -> str:
         link_text = m.group(1)
         url = m.group(2)
         escaped_text = _escape_inside_entity(link_text, "")
@@ -136,10 +146,12 @@ def _convert_links(
 
 
 def _convert_bold(
-    text: str, placeholder: callable,
+    text: str,
+    placeholder: Callable[[str], str],
 ) -> str:
     """Convert **bold** -> *bold*"""
-    def _repl(m: re.Match) -> str:
+
+    def _repl(m: re.Match[str]) -> str:
         inner = m.group(1)
         escaped = _escape_inside_entity(inner, "*")
         return placeholder(f"*{escaped}*")
@@ -148,15 +160,17 @@ def _convert_bold(
 
 
 def _convert_italic(
-    text: str, placeholder: callable,
+    text: str,
+    placeholder: Callable[[str], str],
 ) -> str:
     r"""Convert *italic* or _italic_ -> _italic_"""
-    def _repl_star(m: re.Match) -> str:
+
+    def _repl_star(m: re.Match[str]) -> str:
         inner = m.group(1)
         escaped = _escape_inside_entity(inner, "_")
         return placeholder(f"_{escaped}_")
 
-    def _repl_under(m: re.Match) -> str:
+    def _repl_under(m: re.Match[str]) -> str:
         inner = m.group(1)
         escaped = _escape_inside_entity(inner, "_")
         return placeholder(f"_{escaped}_")
@@ -167,10 +181,12 @@ def _convert_italic(
 
 
 def _convert_strikethrough(
-    text: str, placeholder: callable,
+    text: str,
+    placeholder: Callable[[str], str],
 ) -> str:
     """Convert ~~strike~~ -> ~strike~"""
-    def _repl(m: re.Match) -> str:
+
+    def _repl(m: re.Match[str]) -> str:
         inner = m.group(1)
         escaped = _escape_inside_entity(inner, "~")
         return placeholder(f"~{escaped}~")
@@ -221,7 +237,7 @@ def markdown_to_html(text: str) -> str:
     return "".join(final_parts)
 
 
-def _html_blockquotes(text: str, ph: callable) -> str:
+def _html_blockquotes(text: str, ph: Callable[[str], str]) -> str:
     """Convert consecutive `> ` prefixed lines into a <blockquote> block.
 
     Inline formatting (bold, italic, etc.) inside the quote is converted
@@ -236,13 +252,20 @@ def _html_blockquotes(text: str, ph: callable) -> str:
             inner = "\n".join(quote_buf)
             inner = _html_mod.escape(inner)
             inner = re.sub(
-                r"\*\*(.+?)\*\*", lambda m: f"<b>{m.group(1)}</b>", inner, flags=re.DOTALL,
+                r"\*\*(.+?)\*\*",
+                lambda m: f"<b>{m.group(1)}</b>",
+                inner,
+                flags=re.DOTALL,
             )
             inner = re.sub(
-                r"(?<!\*)\*([^*]+?)\*(?!\*)", lambda m: f"<i>{m.group(1)}</i>", inner,
+                r"(?<!\*)\*([^*]+?)\*(?!\*)",
+                lambda m: f"<i>{m.group(1)}</i>",
+                inner,
             )
             inner = re.sub(
-                r"(?<!\\)_([^_]+?)_", lambda m: f"<i>{m.group(1)}</i>", inner,
+                r"(?<!\\)_([^_]+?)_",
+                lambda m: f"<i>{m.group(1)}</i>",
+                inner,
             )
             inner = re.sub(r"~~(.+?)~~", lambda m: f"<s>{m.group(1)}</s>", inner, flags=re.DOTALL)
             inner = re.sub(r"`([^`]+)`", lambda m: f"<code>{m.group(1)}</code>", inner)
@@ -263,8 +286,8 @@ def _html_blockquotes(text: str, ph: callable) -> str:
     return "\n".join(result_lines)
 
 
-def _html_code_blocks(text: str, ph: callable) -> str:
-    def _repl(m: re.Match) -> str:
+def _html_code_blocks(text: str, ph: Callable[[str], str]) -> str:
+    def _repl(m: re.Match[str]) -> str:
         lang = m.group(1) or ""
         code = _html_mod.escape(m.group(2))
         if lang:
@@ -274,15 +297,15 @@ def _html_code_blocks(text: str, ph: callable) -> str:
     return re.sub(r"```(\w*)\n(.*?)```", _repl, text, flags=re.DOTALL)
 
 
-def _html_inline_code(text: str, ph: callable) -> str:
-    def _repl(m: re.Match) -> str:
+def _html_inline_code(text: str, ph: Callable[[str], str]) -> str:
+    def _repl(m: re.Match[str]) -> str:
         return ph(f"<code>{_html_mod.escape(m.group(1))}</code>")
 
     return re.sub(r"`([^`]+)`", _repl, text)
 
 
-def _html_links(text: str, ph: callable) -> str:
-    def _repl(m: re.Match) -> str:
+def _html_links(text: str, ph: Callable[[str], str]) -> str:
+    def _repl(m: re.Match[str]) -> str:
         link_text = _html_mod.escape(m.group(1))
         url = _html_mod.escape(m.group(2))
         return ph(f'<a href="{url}">{link_text}</a>')
@@ -290,26 +313,26 @@ def _html_links(text: str, ph: callable) -> str:
     return re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _repl, text)
 
 
-def _html_bold(text: str, ph: callable) -> str:
-    def _repl(m: re.Match) -> str:
+def _html_bold(text: str, ph: Callable[[str], str]) -> str:
+    def _repl(m: re.Match[str]) -> str:
         return ph(f"<b>{m.group(1)}</b>")
 
     return re.sub(r"\*\*(.+?)\*\*", _repl, text, flags=re.DOTALL)
 
 
-def _html_italic(text: str, ph: callable) -> str:
-    def _repl_star(m: re.Match) -> str:
+def _html_italic(text: str, ph: Callable[[str], str]) -> str:
+    def _repl_star(m: re.Match[str]) -> str:
         return ph(f"<i>{m.group(1)}</i>")
 
-    def _repl_under(m: re.Match) -> str:
+    def _repl_under(m: re.Match[str]) -> str:
         return ph(f"<i>{m.group(1)}</i>")
 
     result = re.sub(r"(?<!\*)\*([^*]+?)\*(?!\*)", _repl_star, text)
     return re.sub(r"(?<!\\)_([^_]+?)_", _repl_under, result)
 
 
-def _html_strikethrough(text: str, ph: callable) -> str:
-    def _repl(m: re.Match) -> str:
+def _html_strikethrough(text: str, ph: Callable[[str], str]) -> str:
+    def _repl(m: re.Match[str]) -> str:
         return ph(f"<s>{m.group(1)}</s>")
 
     return re.sub(r"~~(.+?)~~", _repl, text, flags=re.DOTALL)

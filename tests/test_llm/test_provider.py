@@ -15,9 +15,9 @@ from mai_gram.llm.provider import (
     LLMResponse,
     MessageRole,
     StreamChunk,
+    TokenUsage,
     ToolCall,
     ToolDefinition,
-    TokenUsage,
 )
 
 

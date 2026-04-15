@@ -75,13 +75,14 @@ make chat-import CHAT=test-demo FILE=exported_chat.json
 |---------|-------------|
 | `make test` | Run all tests |
 | `make test-v` | Run tests with verbose output |
-| `make test-cov` | Run tests with coverage report |
+| `make test-cov` | Run tests with coverage report (enforces 90% minimum) |
 | `make lint` | Check code with ruff |
 | `make format` | Format code with ruff |
 | `make typecheck` | Run mypy type checker |
 | `make check` | Run all quality checks (lint + format + typecheck) |
 | `make fix` | Auto-fix lint issues and reformat |
-| `make precommit` | Run all checks + tests (before committing) |
+| `make precommit` | Run all pre-commit checks (lint, format, typecheck, tests + coverage) |
+| `make install-hooks` | Install git pre-commit hook |
 
 ### Docker
 

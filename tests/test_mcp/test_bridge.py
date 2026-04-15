@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 from mai_gram.llm.provider import (
     ChatMessage,
@@ -10,8 +10,8 @@ from mai_gram.llm.provider import (
     LLMResponse,
     MessageRole,
     StreamChunk,
-    ToolCall,
     TokenUsage,
+    ToolCall,
 )
 from mai_gram.mcp_servers.bridge import (
     mcp_result_to_openai,
@@ -22,9 +22,14 @@ from mai_gram.mcp_servers.bridge import (
 from mai_gram.mcp_servers.manager import MCPManager, RegisteredTool
 from mai_gram.mcp_servers.messages_server import MCPToolSpec
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 
 class _FakeServer:
-    def __init__(self, tools: list[MCPToolSpec], response: str = "tool-ok", fail: bool = False) -> None:
+    def __init__(
+        self, tools: list[MCPToolSpec], response: str = "tool-ok", fail: bool = False
+    ) -> None:
         self._tools = tools
         self._response = response
         self._fail = fail
@@ -133,7 +138,11 @@ class TestBridgeHelpers:
 class TestRunWithTools:
     async def test_run_with_tools_no_tool_calls(self) -> None:
         llm = _MockLLMProvider(
-            [LLMResponse(content="Final answer", model="mock", usage=TokenUsage(), finish_reason="stop")]
+            [
+                LLMResponse(
+                    content="Final answer", model="mock", usage=TokenUsage(), finish_reason="stop"
+                )
+            ]
         )
         manager = MCPManager()
         messages = [ChatMessage(role=MessageRole.USER, content="Hello")]
@@ -157,7 +166,9 @@ class TestRunWithTools:
             ]
         )
         manager = MCPManager()
-        server = _FakeServer([MCPToolSpec("search_messages", "Search", {"type": "object"})], "found")
+        server = _FakeServer(
+            [MCPToolSpec("search_messages", "Search", {"type": "object"})], "found"
+        )
         manager.register_server("messages", server)
 
         result = await run_with_tools(
@@ -177,15 +188,21 @@ class TestRunWithTools:
                     content="",
                     model="mock",
                     tool_calls=[
-                        ToolCall(id="call_1", name="search_messages", arguments='{"query":"Paris"}'),
-                        ToolCall(id="call_2", name="search_messages", arguments='{"query":"Tokyo"}'),
+                        ToolCall(
+                            id="call_1", name="search_messages", arguments='{"query":"Paris"}'
+                        ),
+                        ToolCall(
+                            id="call_2", name="search_messages", arguments='{"query":"Tokyo"}'
+                        ),
                     ],
                 ),
                 LLMResponse(content="Combined results", model="mock", finish_reason="stop"),
             ]
         )
         manager = MCPManager()
-        server = _FakeServer([MCPToolSpec("search_messages", "Search", {"type": "object"})], "result")
+        server = _FakeServer(
+            [MCPToolSpec("search_messages", "Search", {"type": "object"})], "result"
+        )
         manager.register_server("messages", server)
 
         result = await run_with_tools(
@@ -204,7 +221,9 @@ class TestRunWithTools:
         tool_response = LLMResponse(
             content="",
             model="mock",
-            tool_calls=[ToolCall(id="call_1", name="search_messages", arguments='{"query":"Paris"}')],
+            tool_calls=[
+                ToolCall(id="call_1", name="search_messages", arguments='{"query":"Paris"}')
+            ],
         )
         llm = _MockLLMProvider([tool_response, tool_response, tool_response])
         manager = MCPManager()
@@ -231,9 +250,7 @@ class TestRunWithTools:
                 LLMResponse(
                     content="Hey!",
                     model="mock",
-                    tool_calls=[
-                        ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')
-                    ],
+                    tool_calls=[ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')],
                 ),
                 LLMResponse(content="What's up?", model="mock", finish_reason="stop"),
             ]
@@ -266,9 +283,7 @@ class TestRunWithTools:
                 LLMResponse(
                     content="",
                     model="mock",
-                    tool_calls=[
-                        ToolCall(id="call_1", name="sleep", arguments='{}')
-                    ],
+                    tool_calls=[ToolCall(id="call_1", name="sleep", arguments="{}")],
                 ),
                 LLMResponse(content="Done", model="mock", finish_reason="stop"),
             ]
@@ -298,16 +313,12 @@ class TestRunWithTools:
                 LLMResponse(
                     content="First message",
                     model="mock",
-                    tool_calls=[
-                        ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')
-                    ],
+                    tool_calls=[ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')],
                 ),
                 LLMResponse(
                     content="Second message",
                     model="mock",
-                    tool_calls=[
-                        ToolCall(id="call_2", name="sleep", arguments='{"duration":0}')
-                    ],
+                    tool_calls=[ToolCall(id="call_2", name="sleep", arguments='{"duration":0}')],
                 ),
                 LLMResponse(content="Third message", model="mock", finish_reason="stop"),
             ]
@@ -343,7 +354,9 @@ class TestRunWithTools:
                         ToolCall(id="call_1", name="search_messages", arguments='{"query":"Paris"}')
                     ],
                 ),
-                LLMResponse(content="Recovered after tool error", model="mock", finish_reason="stop"),
+                LLMResponse(
+                    content="Recovered after tool error", model="mock", finish_reason="stop"
+                ),
             ]
         )
         manager = MCPManager()

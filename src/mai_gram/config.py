@@ -176,14 +176,16 @@ class Settings(BaseSettings):
     def get_allowed_models(self) -> list[str]:
         """Load the model whitelist from the TOML config file."""
         data = self._load_toml()
-        return data.get("models", {}).get("allowed", [self.llm_model])
+        result: list[str] = data.get("models", {}).get("allowed", [self.llm_model])
+        return result
 
     def get_default_model(self) -> str:
         """Get the default model from the TOML config."""
         data = self._load_toml()
-        return data.get("models", {}).get("default", self.llm_model)
+        result: str = data.get("models", {}).get("default", self.llm_model)
+        return result
 
-    def get_model_params(self, model_id: str) -> dict:
+    def get_model_params(self, model_id: str) -> dict[str, Any]:
         """Load per-model parameter overrides from the TOML config.
 
         Returns a dict of extra parameters (provider, reasoning, temperature, etc.)
@@ -205,7 +207,7 @@ class Settings(BaseSettings):
         tools_section = data.get("tools", {})
         return tools_section.get("enabled"), tools_section.get("disabled")
 
-    def get_external_mcp_config(self) -> dict[str, dict]:
+    def get_external_mcp_config(self) -> dict[str, dict[str, Any]]:
         """Load external MCP server configs from the models config.
 
         Reads the [mcp] section for the config path and whitelist,
@@ -231,7 +233,7 @@ class Settings(BaseSettings):
             mcp_data = _json.load(f)
 
         servers_raw = mcp_data.get("mcpServers", {})
-        result: dict[str, dict] = {}
+        result: dict[str, dict[str, Any]] = {}
         for name, config in servers_raw.items():
             if name in whitelist:
                 result[name] = config

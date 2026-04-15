@@ -48,10 +48,10 @@ provider.order = ["Google AI Studio"]
 provider.allow_fallbacks = false
 
 # ── Gemini 2.5 Pro ───────────────────────────────────────────────────
-[models."google/gemini-2.5-pro"]
-reasoning.effort = "high"
-provider.order = ["Google AI Studio"]
-provider.allow_fallbacks = false
+#[models."google/gemini-2.5-pro"]
+#reasoning.effort = "high"
+#provider.order = ["Google AI Studio"]
+#provider.allow_fallbacks = false
 
 # ── Gemini 3.1 Flash Lite (preview) ─────────────────────────────────
 [models."google/gemini-3.1-flash-lite-preview"]
@@ -72,6 +72,7 @@ reasoning.effort = "high"
 
 # ── Gemma 4 31B (free tier) ──────────────────────────────────────────
 # No special overrides needed for the free-tier model.
+[models."google/gemma-4-31b-it:free"]
 reasoning.effort = "high"
 
 # ─────────────────────────────────────────────────────────────────────

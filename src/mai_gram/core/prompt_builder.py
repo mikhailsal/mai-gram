@@ -9,12 +9,15 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from mai_gram.db.models import Chat, Message
 from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole, ToolCall
-from mai_gram.memory.knowledge_base import WikiStore
-from mai_gram.memory.messages import MessageStore
+
+if TYPE_CHECKING:
+    from mai_gram.db.models import Chat, KnowledgeEntry, Message
+    from mai_gram.memory.knowledge_base import WikiStore
+    from mai_gram.memory.messages import MessageStore
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +75,10 @@ class PromptBuilder:
         llm_history = self._normalize_conversation(llm_history)
 
         system_prompt = self._build_system_prompt(
-            chat, wiki_entries, now, cut_above_message_id=cut_above_message_id,
+            chat,
+            wiki_entries,
+            now,
+            cut_above_message_id=cut_above_message_id,
         )
         context = [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
 
@@ -94,9 +100,7 @@ class PromptBuilder:
 
         return context
 
-    def _normalize_conversation(
-        self, messages: list[ChatMessage]
-    ) -> list[ChatMessage]:
+    def _normalize_conversation(self, messages: list[ChatMessage]) -> list[ChatMessage]:
         """Merge consecutive user messages for LLM compatibility."""
         if not messages:
             return messages
@@ -121,11 +125,10 @@ class PromptBuilder:
         """Convert a stored Message to a ChatMessage for LLM context."""
         if msg.role == "user":
             if getattr(self, "_send_datetime", True):
-                tz_name = getattr(msg, "timezone", None) or getattr(
-                    self, "_chat_timezone", "UTC"
-                )
+                raw_tz = getattr(msg, "timezone", None) or getattr(self, "_chat_timezone", "UTC")
+                tz_name = str(raw_tz)
                 try:
-                    tz = ZoneInfo(tz_name)
+                    tz: ZoneInfo | timezone = ZoneInfo(tz_name)
                 except (KeyError, ValueError):
                     tz = timezone.utc
                     tz_name = "UTC"
@@ -165,7 +168,7 @@ class PromptBuilder:
     def _build_system_prompt(
         self,
         chat: Chat,
-        wiki_entries: list,
+        wiki_entries: list[KnowledgeEntry],
         now: datetime,
         *,
         cut_above_message_id: int | None = None,

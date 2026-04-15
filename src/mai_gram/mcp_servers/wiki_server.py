@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mai_gram.memory.knowledge_base import WikiStore
 from mai_gram.mcp_servers.messages_server import MCPToolSpec
+
+if TYPE_CHECKING:
+    from mai_gram.memory.knowledge_base import WikiStore
 
 
 class WikiMCPServer:
@@ -28,9 +30,7 @@ class WikiMCPServer:
             if key in payload and payload[key] is not None:
                 entry[key] = payload[key]
 
-        changelog_path = (
-            Path(self._store.data_dir) / self._chat_id / "wiki" / "changelog.jsonl"
-        )
+        changelog_path = Path(self._store.data_dir) / self._chat_id / "wiki" / "changelog.jsonl"
         changelog_path.parent.mkdir(parents=True, exist_ok=True)
         with changelog_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -116,8 +116,7 @@ class WikiMCPServer:
             MCPToolSpec(
                 name="wiki_search",
                 description=(
-                    "Search your wiki for entries matching a query. "
-                    "Searches both keys and content."
+                    "Search your wiki for entries matching a query. Searches both keys and content."
                 ),
                 input_schema={
                     "type": "object",

@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import enum
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # ---------------------------------------------------------------------------
 # Message primitives
 # ---------------------------------------------------------------------------
+
 
 class MessageRole(str, enum.Enum):
     """Roles that a chat message can have."""
@@ -31,7 +35,7 @@ class ToolDefinition:
 
     name: str
     description: str
-    parameters: dict
+    parameters: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,7 @@ class ChatMessage:
 # ---------------------------------------------------------------------------
 # Token usage & response
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class TokenUsage:
@@ -86,7 +91,7 @@ class StreamChunk:
     content: str
     finish_reason: str | None = None
     reasoning: str | None = None
-    tool_calls_delta: list[dict] | None = None
+    tool_calls_delta: list[dict[str, Any]] | None = None
     turn_complete: bool = False
     usage: TokenUsage | None = None
     cost: float | None = None
@@ -96,6 +101,7 @@ class StreamChunk:
 # ---------------------------------------------------------------------------
 # Provider errors
 # ---------------------------------------------------------------------------
+
 
 class LLMError(Exception):
     """Base exception for all LLM provider errors."""
@@ -133,6 +139,7 @@ class LLMProviderError(LLMError):
 # Abstract provider
 # ---------------------------------------------------------------------------
 
+
 class LLMProvider(ABC):
     """Abstract interface that every LLM backend must implement.
 
@@ -148,8 +155,8 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Send a chat-completion request and return the full response.
 
@@ -189,8 +196,8 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a chat-completion response token-by-token.
 

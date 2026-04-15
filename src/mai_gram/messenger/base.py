@@ -8,10 +8,13 @@ conversation engine to be platform-agnostic.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 class MessageType(str, Enum):
@@ -235,7 +238,11 @@ class Messenger(ABC):
 
     @abstractmethod
     def register_command_handler(
-        self, command: str, handler: MessageHandler, *, description: str = "",
+        self,
+        command: str,
+        handler: MessageHandler,
+        *,
+        description: str = "",
     ) -> None:
         """Register a handler for a specific command.
 

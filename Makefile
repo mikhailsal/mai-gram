@@ -9,7 +9,7 @@
         chat chat-start chat-list chat-history chat-prompt chat-import \
         test test-v test-cov test-cov-html test-unit test-fast \
         lint lint-fix format format-check typecheck check fix \
-        precommit \
+        precommit install-hooks \
         docker-build docker-up docker-down docker-logs docker-restart docker-shell \
         clean clean-pyc clean-test clean-all
 
@@ -48,8 +48,9 @@ help: ## Show this help message
 install: ## Install the package (production dependencies only)
 	$(PYTHON) -m pip install -e .
 
-install-dev: ## Install the package with development dependencies
+install-dev: ## Install the package with development dependencies + git hooks
 	$(PYTHON) -m pip install -e ".[dev]"
+	@$(MAKE) install-hooks
 
 ##@ Running the Bot
 
@@ -98,11 +99,11 @@ test: ## Run all tests
 test-v: ## Run all tests with verbose output
 	pytest -v
 
-test-cov: ## Run tests with coverage report
-	pytest --cov=mai_gram --cov-report=term-missing
+test-cov: ## Run tests with coverage report (enforces 90% minimum)
+	pytest --cov=mai_gram --cov-report=term-missing --cov-config=pyproject.toml --cov-fail-under=90
 
 test-cov-html: ## Run tests with HTML coverage report
-	pytest --cov=mai_gram --cov-report=html
+	pytest --cov=mai_gram --cov-report=html --cov-config=pyproject.toml
 	@echo "Coverage report generated in htmlcov/index.html"
 
 test-unit: ## Run unit tests only
@@ -134,7 +135,13 @@ fix: lint-fix format ## Auto-fix linting issues and format code
 
 ##@ Pre-commit
 
-precommit: check test ## Run all checks before committing (lint, format, typecheck, tests)
+precommit: check test-cov ## Run all pre-commit checks (lint, format, typecheck, tests + 90% coverage)
+
+install-hooks: ## Install git pre-commit hook (enforces quality on every commit)
+	@cp scripts/pre-commit .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "Pre-commit hook installed. It will run lint, format, typecheck, and tests before each commit."
+	@echo "Skip once with: git commit --no-verify"
 
 ##@ Docker
 

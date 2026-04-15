@@ -5,16 +5,20 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mai_gram.debug.cost_tracker import SessionCostTracker
 from mai_gram.llm.provider import (
     ChatMessage,
     LLMProvider,
     LLMResponse,
+    StreamChunk,
     ToolCall,
     ToolDefinition,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 
 def _utc_now_iso() -> str:
@@ -37,7 +41,9 @@ def _serialize_message(message: ChatMessage) -> dict[str, Any]:
     if message.tool_call_id is not None:
         payload["tool_call_id"] = message.tool_call_id
     if message.tool_calls:
-        payload["tool_calls"] = [_serialize_tool_call(tool_call) for tool_call in message.tool_calls]
+        payload["tool_calls"] = [
+            _serialize_tool_call(tool_call) for tool_call in message.tool_calls
+        ]
     return payload
 
 
@@ -100,8 +106,8 @@ class LLMLoggerProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         self._sequence += 1
         timestamp = self._timestamp_iso()
@@ -169,9 +175,9 @@ class LLMLoggerProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[ToolDefinition] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
-    ):
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> AsyncIterator[StreamChunk]:
         async for chunk in self._provider.generate_stream(
             messages,
             model=model,

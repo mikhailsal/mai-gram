@@ -26,7 +26,6 @@ from mai_gram.llm.provider import (
     ToolDefinition,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -153,9 +152,7 @@ class TestGenerate:
     async def test_basic_response(self, sample_messages: list[ChatMessage]) -> None:
         response_json = _make_chat_response(content="Hello, friend!")
 
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json=response_json)
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=response_json))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -267,9 +264,7 @@ class TestGenerate:
         assert "tool_choice" not in captured_request["body"]
         await provider.close()
 
-    async def test_generate_with_tools_payload(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_generate_with_tools_payload(self, sample_messages: list[ChatMessage]) -> None:
         captured_request: dict[str, Any] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -317,9 +312,7 @@ class TestGenerate:
 
     async def test_no_choices_raises(self, sample_messages: list[ChatMessage]) -> None:
         """An empty choices array raises LLMProviderError."""
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"choices": []})
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": []}))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -335,9 +328,7 @@ class TestGenerate:
     async def test_error_in_200_body(self, sample_messages: list[ChatMessage]) -> None:
         """Some providers return 200 with an error object in the body."""
         error_body = {"error": {"message": "Model overloaded"}}
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json=error_body)
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=error_body))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -350,9 +341,7 @@ class TestGenerate:
 
         await provider.close()
 
-    async def test_parse_response_with_tool_calls(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_parse_response_with_tool_calls(self, sample_messages: list[ChatMessage]) -> None:
         tool_calls = [
             {
                 "id": "call_abc",
@@ -364,9 +353,7 @@ class TestGenerate:
             }
         ]
         response_json = _make_chat_response(content="", tool_calls=tool_calls)
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json=response_json)
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=response_json))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -393,9 +380,7 @@ class TestGenerate:
             }
         ]
         response_json = _make_chat_response(content=None, tool_calls=tool_calls)
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json=response_json)
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=response_json))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -433,9 +418,7 @@ class TestHttpErrorMapping:
         resp_body = body or _make_error_response("test error")
 
         transport = httpx.MockTransport(
-            lambda request: httpx.Response(
-                status, json=resp_body, headers=resp_headers
-            )
+            lambda request: httpx.Response(status, json=resp_body, headers=resp_headers)
         )
         provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
         provider._client = httpx.AsyncClient(
@@ -445,34 +428,26 @@ class TestHttpErrorMapping:
         )
         return provider
 
-    async def test_401_authentication_error(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_401_authentication_error(self, sample_messages: list[ChatMessage]) -> None:
         provider = await self._make_provider_with_status(401)
         with pytest.raises(LLMAuthenticationError, match="Authentication failed"):
             await provider.generate(sample_messages)
         await provider.close()
 
-    async def test_404_model_not_found(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_404_model_not_found(self, sample_messages: list[ChatMessage]) -> None:
         provider = await self._make_provider_with_status(404)
         with pytest.raises(LLMModelNotFoundError, match="Model not found"):
             await provider.generate(sample_messages)
         await provider.close()
 
     async def test_429_rate_limit(self, sample_messages: list[ChatMessage]) -> None:
-        provider = await self._make_provider_with_status(
-            429, headers={"retry-after": "30"}
-        )
+        provider = await self._make_provider_with_status(429, headers={"retry-after": "30"})
         with pytest.raises(LLMRateLimitError) as exc_info:
             await provider.generate(sample_messages)
         assert exc_info.value.retry_after == 30.0
         await provider.close()
 
-    async def test_400_context_length(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_400_context_length(self, sample_messages: list[ChatMessage]) -> None:
         body = _make_error_response("This model's context length is exceeded")
         provider = await self._make_provider_with_status(400, body=body)
         with pytest.raises(LLMContextLengthError, match="Context length"):
@@ -508,9 +483,7 @@ class TestRetryLogic:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return httpx.Response(
-                    500, json=_make_error_response("internal error")
-                )
+                return httpx.Response(500, json=_make_error_response("internal error"))
             return httpx.Response(200, json=_make_chat_response(content="Recovered!"))
 
         transport = httpx.MockTransport(handler)
@@ -526,9 +499,7 @@ class TestRetryLogic:
         assert call_count == 2
         await provider.close()
 
-    async def test_no_retry_on_auth_error(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_no_retry_on_auth_error(self, sample_messages: list[ChatMessage]) -> None:
         """401 errors are NOT retried."""
         call_count = 0
 
@@ -552,9 +523,7 @@ class TestRetryLogic:
         assert call_count == 1
         await provider.close()
 
-    async def test_retries_on_rate_limit(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_retries_on_rate_limit(self, sample_messages: list[ChatMessage]) -> None:
         """429 errors ARE retried."""
         call_count = 0
 
@@ -578,14 +547,10 @@ class TestRetryLogic:
         assert call_count == 3
         await provider.close()
 
-    async def test_exhausted_retries_raises(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_exhausted_retries_raises(self, sample_messages: list[ChatMessage]) -> None:
         """When max retries are exhausted, the last error is raised."""
         transport = httpx.MockTransport(
-            lambda request: httpx.Response(
-                500, json=_make_error_response("always broken")
-            )
+            lambda request: httpx.Response(500, json=_make_error_response("always broken"))
         )
         provider = OpenRouterProvider(api_key=API_KEY, max_retries=1)
         provider._client = httpx.AsyncClient(
@@ -642,9 +607,7 @@ class TestGenerateStream:
 
         await provider.close()
 
-    async def test_stream_error_in_body(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_stream_error_in_body(self, sample_messages: list[ChatMessage]) -> None:
         """An error object inside a stream chunk raises LLMProviderError."""
         error_line = 'data: {"error": {"message": "Model overloaded"}}\n\n'
         transport = httpx.MockTransport(
@@ -667,14 +630,10 @@ class TestGenerateStream:
 
         await provider.close()
 
-    async def test_stream_http_error(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_stream_http_error(self, sample_messages: list[ChatMessage]) -> None:
         """HTTP errors during streaming are properly mapped."""
         transport = httpx.MockTransport(
-            lambda request: httpx.Response(
-                401, json=_make_error_response("bad token")
-            )
+            lambda request: httpx.Response(401, json=_make_error_response("bad token"))
         )
         provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
         provider._client = httpx.AsyncClient(
@@ -752,9 +711,7 @@ class TestHeaders:
         assert captured_headers["authorization"] == "Bearer my-secret-key"
         await provider.close()
 
-    async def test_custom_referer_and_title(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_custom_referer_and_title(self, sample_messages: list[ChatMessage]) -> None:
         captured_headers: dict[str, str] = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -832,7 +789,7 @@ class TestToolMessageSerialization:
             ),
             ChatMessage(
                 role=MessageRole.TOOL,
-                content='[2026-02-10] Human: Paris trip',
+                content="[2026-02-10] Human: Paris trip",
                 tool_call_id="call_123",
             ),
         ]
@@ -842,7 +799,7 @@ class TestToolMessageSerialization:
         # Tool result message
         tool_msg = msgs[3]
         assert tool_msg["role"] == "tool"
-        assert tool_msg["content"] == '[2026-02-10] Human: Paris trip'
+        assert tool_msg["content"] == "[2026-02-10] Human: Paris trip"
         assert tool_msg["tool_call_id"] == "call_123"
 
         await provider.close()
@@ -944,9 +901,7 @@ class TestToolMessageSerialization:
 class TestMultipleToolCalls:
     """Test parsing responses with multiple parallel tool calls."""
 
-    async def test_parse_multiple_tool_calls(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_parse_multiple_tool_calls(self, sample_messages: list[ChatMessage]) -> None:
         """Multiple tool calls in a single response are all parsed correctly."""
         tool_calls = [
             {
@@ -975,9 +930,7 @@ class TestMultipleToolCalls:
             },
         ]
         response_json = _make_chat_response(content=None, tool_calls=tool_calls)
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json=response_json)
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=response_json))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -1018,9 +971,7 @@ class TestMultipleToolCalls:
         response_json = _make_chat_response(
             content="I'll remember your name!", tool_calls=tool_calls
         )
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(200, json=response_json)
-        )
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=response_json))
         provider = OpenRouterProvider(api_key=API_KEY)
         provider._client = httpx.AsyncClient(
             transport=transport,
@@ -1059,98 +1010,108 @@ class TestMalformedToolCallParsing:
 
     def test_tool_call_missing_function_key(self) -> None:
         """A tool call dict without 'function' key is skipped."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {"id": "call_1", "type": "function"}
-        ])
+        result = OpenRouterProvider._parse_tool_calls([{"id": "call_1", "type": "function"}])
         assert result == []
 
     def test_tool_call_function_not_a_dict(self) -> None:
         """A tool call where 'function' is not a dict is skipped."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {"id": "call_1", "type": "function", "function": "not_a_dict"}
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [{"id": "call_1", "type": "function", "function": "not_a_dict"}]
+        )
         assert result == []
 
     def test_tool_call_missing_id(self) -> None:
         """A tool call without 'id' is skipped."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {
-                "type": "function",
-                "function": {"name": "search", "arguments": "{}"},
-            }
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ]
+        )
         assert result == []
 
     def test_tool_call_missing_name(self) -> None:
         """A tool call without function 'name' is skipped."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {
-                "id": "call_1",
-                "type": "function",
-                "function": {"arguments": "{}"},
-            }
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"arguments": "{}"},
+                }
+            ]
+        )
         assert result == []
 
     def test_tool_call_non_string_id(self) -> None:
         """A tool call with non-string 'id' is skipped."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {
-                "id": 123,
-                "type": "function",
-                "function": {"name": "search", "arguments": "{}"},
-            }
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [
+                {
+                    "id": 123,
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ]
+        )
         assert result == []
 
     def test_tool_call_non_string_arguments_defaults_empty(self) -> None:
         """When 'arguments' is not a string (e.g. a parsed dict), it defaults to ''."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {
-                "id": "call_1",
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "arguments": {"query": "paris"},  # dict instead of string
-                },
-            }
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "arguments": {"query": "paris"},  # dict instead of string
+                    },
+                }
+            ]
+        )
         assert len(result) == 1
         assert result[0].arguments == ""
 
     def test_tool_call_missing_arguments_defaults_empty(self) -> None:
         """When 'arguments' key is missing entirely, it defaults to ''."""
-        result = OpenRouterProvider._parse_tool_calls([
-            {
-                "id": "call_1",
-                "type": "function",
-                "function": {"name": "search"},
-            }
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search"},
+                }
+            ]
+        )
         assert len(result) == 1
         assert result[0].name == "search"
         assert result[0].arguments == ""
 
     def test_mixed_valid_and_invalid_tool_calls(self) -> None:
         """Valid tool calls are parsed; invalid ones are silently skipped."""
-        result = OpenRouterProvider._parse_tool_calls([
-            # Valid
-            {
-                "id": "call_good",
-                "type": "function",
-                "function": {"name": "search", "arguments": '{"q":"test"}'},
-            },
-            # Invalid: missing function
-            {"id": "call_bad1", "type": "function"},
-            # Invalid: not a dict
-            "garbage",
-            # Valid
-            {
-                "id": "call_good2",
-                "type": "function",
-                "function": {"name": "wiki_read", "arguments": '{"key":"x"}'},
-            },
-        ])
+        result = OpenRouterProvider._parse_tool_calls(
+            [
+                # Valid
+                {
+                    "id": "call_good",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": '{"q":"test"}'},
+                },
+                # Invalid: missing function
+                {"id": "call_bad1", "type": "function"},
+                # Invalid: not a dict
+                "garbage",
+                # Valid
+                {
+                    "id": "call_good2",
+                    "type": "function",
+                    "function": {"name": "wiki_read", "arguments": '{"key":"x"}'},
+                },
+            ]
+        )
         assert len(result) == 2
         assert result[0].id == "call_good"
         assert result[1].id == "call_good2"
@@ -1168,9 +1129,7 @@ class TestMalformedToolCallParsing:
 class TestStreamWithTools:
     """Test that tools are correctly included in streaming payloads."""
 
-    async def test_stream_payload_includes_tools(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_stream_payload_includes_tools(self, sample_messages: list[ChatMessage]) -> None:
         """When tools are provided to generate_stream, they appear in the request payload."""
         captured_request: dict[str, Any] = {}
 
@@ -1221,9 +1180,7 @@ class TestStreamWithTools:
 
         await provider.close()
 
-    async def test_stream_payload_without_tools(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_stream_payload_without_tools(self, sample_messages: list[ChatMessage]) -> None:
         """When no tools are provided to generate_stream, they are omitted from payload."""
         captured_request: dict[str, Any] = {}
 
@@ -1301,9 +1258,7 @@ class TestToolChoiceDict:
             headers=provider._client.headers,
         )
 
-        await provider.generate(
-            sample_messages, tools=tools, tool_choice=tool_choice_dict
-        )
+        await provider.generate(sample_messages, tools=tools, tool_choice=tool_choice_dict)
 
         body = captured_request["body"]
         assert body["tool_choice"] == {
@@ -1313,9 +1268,7 @@ class TestToolChoiceDict:
 
         await provider.close()
 
-    async def test_tool_choice_none_string(
-        self, sample_messages: list[ChatMessage]
-    ) -> None:
+    async def test_tool_choice_none_string(self, sample_messages: list[ChatMessage]) -> None:
         """tool_choice='none' disables tool usage."""
         captured_request: dict[str, Any] = {}
 
@@ -1417,9 +1370,11 @@ class TestPackageLevelExports:
     """Test that tool-related types are accessible from the package level."""
 
     def test_tool_definition_importable_from_package(self) -> None:
-        from mai_gram.llm import ToolDefinition as TD
-        assert TD is ToolDefinition
+        from mai_gram.llm import ToolDefinition as ToolDef
+
+        assert ToolDef is ToolDefinition
 
     def test_tool_call_importable_from_package(self) -> None:
-        from mai_gram.llm import ToolCall as TC
-        assert TC is ToolCall
+        from mai_gram.llm import ToolCall as ToolCallAlias
+
+        assert ToolCallAlias is ToolCall

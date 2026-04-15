@@ -6,13 +6,21 @@ Provides an in-memory SQLite database and session for all tests.
 from __future__ import annotations
 
 import os
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from mai_gram.config import Settings
 from mai_gram.db.models import Base
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 # In-memory SQLite URL for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
