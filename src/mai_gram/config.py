@@ -1,12 +1,16 @@
 """Configuration management using Pydantic Settings.
 
 All settings can be overridden via environment variables or a .env file.
+The TOML config (models.toml) is cached and auto-refreshed when the file
+is modified on disk -- no restart needed.
 """
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +19,8 @@ if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -140,25 +146,42 @@ class Settings(BaseSettings):
             tokens.append(self.telegram_bot_token_3.strip())
         return tokens
 
-    def get_allowed_models(self) -> list[str]:
-        """Load the model whitelist from the TOML config file."""
+    # -- TOML config with mtime-based caching --------------------------------
+    # The parsed dict is cached and only re-read when the file's mtime changes,
+    # so editing models.toml takes effect immediately without restarting.
+
+    _toml_cache: dict[str, Any] = {}
+    _toml_mtime: float = 0.0
+
+    def _load_toml(self) -> dict[str, Any]:
+        """Return parsed TOML data, re-reading only when the file has changed."""
         config_path = Path(self.models_config_path)
         if not config_path.exists():
-            return [self.llm_model]
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
-        models_section = data.get("models", {})
-        return models_section.get("allowed", [self.llm_model])
+            return {}
+        try:
+            mtime = config_path.stat().st_mtime
+        except OSError:
+            return {}
+
+        if mtime != self._toml_mtime:
+            with open(config_path, "rb") as f:
+                self._toml_cache = tomllib.load(f)
+            self._toml_mtime = mtime
+            logger.info("Config reloaded: %s (mtime=%.3f)", config_path, mtime)
+
+        return self._toml_cache
+
+    # -- Public TOML accessors ------------------------------------------------
+
+    def get_allowed_models(self) -> list[str]:
+        """Load the model whitelist from the TOML config file."""
+        data = self._load_toml()
+        return data.get("models", {}).get("allowed", [self.llm_model])
 
     def get_default_model(self) -> str:
         """Get the default model from the TOML config."""
-        config_path = Path(self.models_config_path)
-        if not config_path.exists():
-            return self.llm_model
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
-        models_section = data.get("models", {})
-        return models_section.get("default", self.llm_model)
+        data = self._load_toml()
+        return data.get("models", {}).get("default", self.llm_model)
 
     def get_model_params(self, model_id: str) -> dict:
         """Load per-model parameter overrides from the TOML config.
@@ -167,13 +190,8 @@ class Settings(BaseSettings):
         that should be merged into the OpenRouter request body for this model.
         Returns an empty dict if no overrides are defined.
         """
-        config_path = Path(self.models_config_path)
-        if not config_path.exists():
-            return {}
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
-        models_section = data.get("models", {})
-        return dict(models_section.get(model_id, {}))
+        data = self._load_toml()
+        return dict(data.get("models", {}).get(model_id, {}))
 
     def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
         """Load tool enable/disable lists from the models config.
@@ -183,15 +201,9 @@ class Settings(BaseSettings):
         are allowed (whitelist). If disabled is set, those tools are
         blocked (blacklist). enabled takes precedence over disabled.
         """
-        config_path = Path(self.models_config_path)
-        if not config_path.exists():
-            return None, None
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
+        data = self._load_toml()
         tools_section = data.get("tools", {})
-        enabled = tools_section.get("enabled")
-        disabled = tools_section.get("disabled")
-        return enabled, disabled
+        return tools_section.get("enabled"), tools_section.get("disabled")
 
     def get_external_mcp_config(self) -> dict[str, dict]:
         """Load external MCP server configs from the models config.
@@ -203,12 +215,7 @@ class Settings(BaseSettings):
         """
         import json as _json
 
-        config_path = Path(self.models_config_path)
-        if not config_path.exists():
-            return {}
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
-
+        data = self._load_toml()
         mcp_section = data.get("mcp", {})
         mcp_json_path = mcp_section.get("mcp_config_path", "")
         whitelist = set(mcp_section.get("external_servers", []))
@@ -247,6 +254,16 @@ class Settings(BaseSettings):
         return result
 
 
+_settings_instance: Settings | None = None
+
+
 def get_settings() -> Settings:
-    """Create and return a Settings instance."""
-    return Settings()
+    """Return a shared Settings instance (singleton).
+
+    The instance is created once and reused.  TOML-derived values are
+    still refreshed automatically via mtime-based caching in ``_load_toml``.
+    """
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Settings()
+    return _settings_instance

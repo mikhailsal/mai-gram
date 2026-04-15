@@ -105,10 +105,6 @@ class BotHandler:
         self._tool_max_iterations = tool_max_iterations or settings.tool_max_iterations
         self._settings = settings
         self._allowed_users = settings.get_allowed_user_ids()
-        self._allowed_models = settings.get_allowed_models()
-        self._default_model = settings.get_default_model()
-        self._available_prompts = settings.get_available_prompts()
-        self._enabled_tools, self._disabled_tools = settings.get_tool_filter()
         self._external_mcp_pool = external_mcp_pool
 
         if self._allowed_users:
@@ -458,9 +454,11 @@ class BotHandler:
 
         session.state = SetupState.CHOOSING_MODEL
         keyboard_rows = []
-        for model in self._allowed_models:
+        allowed_models = self._settings.get_allowed_models()
+        default_model = self._settings.get_default_model()
+        for model in allowed_models:
             short_name = model.split("/")[-1] if "/" in model else model
-            label = f"{short_name} [default]" if model == self._default_model else short_name
+            label = f"{short_name} [default]" if model == default_model else short_name
             keyboard_rows.append([(label, f"model:{model}")])
 
         kb = build_inline_keyboard(keyboard_rows)
@@ -478,7 +476,8 @@ class BotHandler:
 
         session.state = SetupState.CHOOSING_PROMPT
         keyboard_rows = []
-        for name in self._available_prompts:
+        available_prompts = self._settings.get_available_prompts()
+        for name in available_prompts:
             keyboard_rows.append([(name.replace("_", " ").title(), f"prompt:{name}")])
         keyboard_rows.append([("Custom (type your own)", "prompt:__custom__")])
 
@@ -517,7 +516,7 @@ class BotHandler:
                     )
                 )
             else:
-                prompt_text = self._available_prompts.get(value, "")
+                prompt_text = self._settings.get_available_prompts().get(value, "")
                 if prompt_text:
                     await self._finish_setup(message, session, prompt_text)
                 else:
@@ -607,9 +606,10 @@ class BotHandler:
                 test_mode=self._test_mode,
             )
 
+            enabled_tools, disabled_tools = self._settings.get_tool_filter()
             mcp_manager = MCPManager(
-                enabled_tools=self._enabled_tools,
-                disabled_tools=self._disabled_tools,
+                enabled_tools=enabled_tools,
+                disabled_tools=disabled_tools,
             )
             mcp_manager.register_server(
                 "messages",
@@ -1186,9 +1186,10 @@ class BotHandler:
                 test_mode=self._test_mode,
             )
 
+            enabled_tools, disabled_tools = self._settings.get_tool_filter()
             mcp_manager = MCPManager(
-                enabled_tools=self._enabled_tools,
-                disabled_tools=self._disabled_tools,
+                enabled_tools=enabled_tools,
+                disabled_tools=disabled_tools,
             )
             mcp_manager.register_server(
                 "messages", MessagesMCPServer(message_store, chat.id),

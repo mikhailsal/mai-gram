@@ -1,35 +1,82 @@
 # Model whitelist -- models available for user selection during setup.
 # Users can only choose from this list when creating a new chat via /start.
+#
+# This file is HOT-RELOADED: edits take effect within ~2 seconds,
+# no bot restart required.
 
 [models]
 allowed = [
     "minimax/minimax-m2.7",
     "google/gemini-2.5-flash",
     "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3-flash-preview",
     "google/gemma-4-31b-it:free",
+    "x-ai/grok-4.1-fast",
+    "nvidia/moonshotai/kimi-k2.5",
 ]
 default = "google/gemma-4-31b-it:free"
 
-# Per-model parameter overrides.
-# Any key here is merged into the OpenRouter request body.
-# Supported special keys: provider, reasoning, temperature, max_tokens, etc.
+# ─────────────────────────────────────────────────────────────────────
+# Per-model parameter overrides
+# ─────────────────────────────────────────────────────────────────────
 #
-# Example:
-# [models."google/gemini-2.5-flash"]
-# provider.order = ["Google AI Studio"]
-# provider.allow_fallbacks = false
-# reasoning.effort = "medium"
-# max_tokens = 8192
-
-# Per-model parameter examples:
-# [models."minimax/minimax-m2.7"]
-# temperature = 0.5
+# Any key placed under [models."<model-id>"] is merged into the
+# OpenRouter request body.  Supported keys include:
 #
-# [models."minimax/minimax-m2.7".provider]
-# order = ["Minimax"]
-# allow_fallbacks = false
+#   temperature        float    Sampling temperature (0.0 – 2.0)
+#   max_tokens         int      Maximum response tokens
+#   top_p              float    Nucleus sampling threshold
+#   frequency_penalty  float    Repetition penalty
+#   reasoning.effort   string   "low" | "medium" | "high" (budget tokens)
+#   provider.order     list     Preferred provider priority
+#   provider.allow_fallbacks  bool  Allow fallback to other providers
+#
+# TOML syntax cheat-sheet:
+#   Dotted keys      →  reasoning.effort = "high"
+#   Inline table     →  provider = { order = ["Google"], allow_fallbacks = false }
+#   Sub-table        →  [models."id".provider]
+#                        order = ["Google"]
+#
+# All three forms are equivalent; dotted keys are the most compact.
 
-# Tool configuration.
+# ── Gemini 2.5 Flash ─────────────────────────────────────────────────
+# Gemini benefits heavily from explicit reasoning effort; without it
+# the model often skips chain-of-thought entirely.
+[models."google/gemini-2.5-flash"]
+reasoning.effort = "medium"
+provider.order = ["Google AI Studio"]
+provider.allow_fallbacks = false
+
+# ── Gemini 2.5 Pro ───────────────────────────────────────────────────
+[models."google/gemini-2.5-pro"]
+reasoning.effort = "high"
+provider.order = ["Google AI Studio"]
+provider.allow_fallbacks = false
+
+# ── Gemini 3.1 Flash Lite (preview) ─────────────────────────────────
+[models."google/gemini-3.1-flash-lite-preview"]
+provider.order = ["Google AI Studio"]
+reasoning.effort = "high"
+provider.allow_fallbacks = false
+
+# ── MiniMax M2.7 ─────────────────────────────────────────────────────
+[models."minimax/minimax-m2.7"]
+provider.order = ["Minimax"]
+reasoning.effort = "high"
+provider.allow_fallbacks = false
+
+# ── Kimi K2.5  ─────────────────────────────────────────────────────
+[models."nvidia/moonshotai/kimi-k2.5"]
+reasoning.effort = "high"
+
+
+# ── Gemma 4 31B (free tier) ──────────────────────────────────────────
+# No special overrides needed for the free-tier model.
+reasoning.effort = "high"
+
+# ─────────────────────────────────────────────────────────────────────
+# Tool configuration
+# ─────────────────────────────────────────────────────────────────────
 # Use "enabled" to allow ONLY listed tools (whitelist mode).
 # Use "disabled" to block specific tools (blacklist mode).
 # If both are set, "enabled" takes precedence.
@@ -39,10 +86,12 @@ default = "google/gemma-4-31b-it:free"
 # enabled = ["wiki_create", "wiki_edit", "wiki_read", "wiki_search"]
 # disabled = ["search_messages", "get_messages_by_timerange"]
 
-# External MCP server configuration.
+# ─────────────────────────────────────────────────────────────────────
+# External MCP server configuration
+# ─────────────────────────────────────────────────────────────────────
 # Servers are loaded from the mcp_config_path JSON file (Cursor/Claude format).
 # Only servers listed in external_servers are started and made available.
-#
+
 [mcp]
 mcp_config_path = "~/.cursor/mcp.json"
-external_servers = ["duckduckgo"]
+external_servers = ["exa"]
