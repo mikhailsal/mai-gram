@@ -114,7 +114,7 @@ make chat-import CHAT=test-demo FILE=exported_chat.json
 | **Per-user configuration** | Each user selects their own model and system prompt |
 | **Model whitelist** | Configurable list of allowed models (`config/models.toml`) |
 | **System prompt templates** | Predefined prompts in `prompts/` or custom user input |
-| **Wiki (knowledge base)** | AI can save and recall facts using MCP tools |
+| **Wiki (knowledge base)** | AI can save, edit, search, list, and recall facts via MCP tools; `.md` files on disk are the source of truth |
 | **Dialogue import** | Import conversations from JSON (OpenAI format) |
 | **Custom OpenRouter URL** | Point to a local proxy for debugging |
 | **Console CLI** | Debug and inspect chats from the command line |
@@ -205,8 +205,20 @@ Place `.txt` or `.md` files in the `prompts/` directory. Users can select from t
 ```
 Telegram User  -->  Telegram Bot(s)  -->  mai-gram  -->  OpenRouter  -->  LLM
                                              |
-                                        SQLite DB (messages, wiki, chat config)
+                               ┌─────────────┼─────────────┐
+                               │             │             │
+                          SQLite DB     Wiki .md files   MCP tools
+                       (messages,       (source of     (wiki, messages,
+                        chat config,     truth for       external)
+                        wiki index)      knowledge)
 ```
+
+Wiki entries live as markdown files on disk (`data/<chat_id>/wiki/*.md`)
+and are indexed in SQLite for fast querying. The files are the source of
+truth — the database index is automatically rebuilt from disk on every
+message and can be manually repaired with `mai-chat --repair-wiki`. See
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#wiki-knowledge-base-architecture)
+for the full architecture.
 
 ---
 

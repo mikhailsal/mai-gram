@@ -2,6 +2,45 @@
 
 All notable changes to mai-gram are documented here.
 
+## [1.1.0] - 2026-04-17
+
+### Wiki
+
+- Add `wiki_list` MCP tool — AI can now browse all wiki entries with sorting
+  (by importance, key, or last update) and pagination
+- Implement disk-to-DB synchronization (`sync_from_disk`): `.md` files on disk
+  are the source of truth; the database index is rebuilt automatically and can
+  be repaired manually with `mai-chat --repair-wiki`
+- Remove deprecated `get_top_entries` and `list_entries` methods in favour of
+  the unified `list_entries_sorted`
+
+### LLM Provider
+
+- Reduce default LLM timeout from 120s flat to granular timeouts:
+  connect=10s, read=45s, write=10s, pool=10s — the bot now recovers ~3x
+  faster from hung upstream providers
+- Add `active_requests` counter to track in-flight LLM calls
+- Log "LLM stream started (model=..., messages=N)" at the beginning of every
+  request for hang diagnostics
+
+### Shutdown
+
+- Log "Waiting for N in-flight LLM request(s) to complete..." during shutdown
+  when LLM requests are still pending, explaining why the process may be slow
+  to stop
+
+### Multi-Bot
+
+- Fix missing `[[bots]]` header in `config/bots.toml` that caused TOML parse
+  errors
+
+### Documentation
+
+- Document wiki dual-storage architecture (files = source of truth, DB = index)
+- Add wiki troubleshooting guide (repair, manual editing, backup restore)
+- Document LLM timeout configuration and shutdown diagnostics
+- Update architecture diagram to reflect file-based wiki storage
+
 ## [1.0.0] - 2026-04-15
 
 First stable release. The project was forked from mai-companion and rebuilt as
