@@ -54,7 +54,6 @@ class PromptBuilder:
         cut_above_message_id: int | None = None,
     ) -> list[ChatMessage]:
         """Build full model context: system message + message history."""
-        self._send_datetime = send_datetime
         self._chat_timezone = chat_timezone
         now = current_time or datetime.now(timezone.utc)
 
@@ -122,9 +121,14 @@ class PromptBuilder:
         return normalized
 
     def _message_to_chat_message(self, msg: Message) -> ChatMessage:
-        """Convert a stored Message to a ChatMessage for LLM context."""
+        """Convert a stored Message to a ChatMessage for LLM context.
+
+        Datetime visibility is determined by the per-message ``show_datetime``
+        flag, which was captured at the time the message was saved. This means
+        toggling /datetime only affects future messages.
+        """
         if msg.role == "user":
-            if getattr(self, "_send_datetime", True):
+            if getattr(msg, "show_datetime", False):
                 raw_tz = getattr(msg, "timezone", None) or getattr(self, "_chat_timezone", "UTC")
                 tz_name = str(raw_tz)
                 try:

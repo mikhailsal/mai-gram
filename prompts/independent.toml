@@ -1,6 +1,8 @@
 # Per-prompt config for "independent".
 # The independent companion feels more natural without visible reasoning
 # or tool call details. All tools remain available under the hood.
+# Datetime on — the companion benefits from knowing when messages arrive.
 
 show_reasoning = false
 show_tool_calls = false
+send_datetime = true

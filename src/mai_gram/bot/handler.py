@@ -585,6 +585,10 @@ class BotHandler:
         prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
 
         async with get_session() as db:
+            send_dt = True
+            if prompt_cfg is not None and prompt_cfg.send_datetime is not None:
+                send_dt = prompt_cfg.send_datetime
+
             chat = Chat(
                 id=chat_id,
                 user_id=user_id,
@@ -595,6 +599,7 @@ class BotHandler:
                 timezone=self._settings.default_timezone,
                 show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
                 show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
+                send_datetime=send_dt,
             )
             db.add(chat)
             await db.commit()
@@ -603,15 +608,17 @@ class BotHandler:
 
         reasoning_status = "ON" if chat.show_reasoning else "OFF"
         toolcalls_status = "ON" if chat.show_tool_calls else "OFF"
+        datetime_status = "ON" if chat.send_datetime else "OFF"
         await self._messenger.send_message(
             OutgoingMessage(
                 text=(
                     f"Chat created!\n"
                     f"Model: {session.selected_model}\n"
                     f"Prompt: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}\n"
-                    f"Reasoning: {reasoning_status} | Tool calls: {toolcalls_status}\n\n"
+                    f"Reasoning: {reasoning_status} | Tool calls: {toolcalls_status} "
+                    f"| Datetime: {datetime_status}\n\n"
                     "Send a message to start chatting.\n"
-                    "Toggle display with /reasoning and /toolcalls."
+                    "Toggle display with /reasoning, /toolcalls, and /datetime."
                 ),
                 chat_id=message.chat_id,
             )
@@ -717,12 +724,14 @@ class BotHandler:
 
             now = datetime.now(timezone.utc)
             chat_tz = chat.timezone
+            chat_send_dt = chat.send_datetime
             await message_store.save_message(
                 chat.id,
                 "user",
                 message.text,
                 timestamp=now,
                 timezone_name=chat_tz,
+                show_datetime=chat_send_dt,
             )
 
             llm_messages = await prompt_builder.build_context(
@@ -746,6 +755,7 @@ class BotHandler:
                     content or "",
                     tool_calls=tool_calls_json,
                     timezone_name=chat_tz,
+                    show_datetime=chat_send_dt,
                 )
 
                 if not show_tool_calls:
@@ -787,6 +797,7 @@ class BotHandler:
                     content,
                     tool_call_id=tool_call_id,
                     timezone_name=chat_tz,
+                    show_datetime=chat_send_dt,
                 )
 
                 if not show_tool_calls:
@@ -943,6 +954,7 @@ class BotHandler:
                         timestamp=datetime.now(timezone.utc),
                         reasoning=response_reasoning,
                         timezone_name=chat_tz,
+                        show_datetime=chat_send_dt,
                     )
                     saved_msg_id = saved_msg.id
 
@@ -1395,6 +1407,7 @@ class BotHandler:
             mcp_manager = self._build_mcp_manager(chat, message_store, wiki_store)
 
             regen_tz = chat.timezone
+            regen_send_dt = chat.send_datetime
             llm_messages = await prompt_builder.build_context(
                 chat,
                 current_time=datetime.now(timezone.utc),
@@ -1415,6 +1428,7 @@ class BotHandler:
                     content or "",
                     tool_calls=tool_calls_json,
                     timezone_name=regen_tz,
+                    show_datetime=regen_send_dt,
                 )
 
                 if not show_tool_calls:
@@ -1456,6 +1470,7 @@ class BotHandler:
                     content,
                     tool_call_id=tool_call_id,
                     timezone_name=regen_tz,
+                    show_datetime=regen_send_dt,
                 )
 
                 if not show_tool_calls:
@@ -1609,7 +1624,8 @@ class BotHandler:
                         response_text,
                         timestamp=datetime.now(timezone.utc),
                         reasoning=response_reasoning,
-                        timezone_name=chat.timezone,
+                        timezone_name=regen_tz,
+                        show_datetime=regen_send_dt,
                     )
                     saved_msg_id = saved_msg.id
 

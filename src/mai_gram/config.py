@@ -41,6 +41,7 @@ class PromptConfig:
 
     show_reasoning: bool = True
     show_tool_calls: bool = True
+    send_datetime: bool | None = None
     tools_enabled: list[str] | None = None
     tools_disabled: list[str] | None = None
     mcp_servers_enabled: list[str] | None = None
@@ -302,6 +303,7 @@ class Settings(BaseSettings):
             return PromptConfig(
                 show_reasoning=data.get("show_reasoning", True),
                 show_tool_calls=data.get("show_tool_calls", True),
+                send_datetime=data.get("send_datetime"),
                 tools_enabled=tools.get("enabled"),
                 tools_disabled=tools.get("disabled"),
                 mcp_servers_enabled=mcp.get("enabled"),

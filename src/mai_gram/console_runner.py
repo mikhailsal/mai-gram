@@ -389,12 +389,17 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
                     tool_calls=tool_calls_json,
                     tool_call_id=tool_call_id,
                     reasoning=reasoning_text,
+                    show_datetime=False,
                 )
             except ValueError as exc:
                 logger.warning("Skipping entry %d due to timestamp conflict: %s", i, exc)
                 continue
 
             imported += 1
+
+        if imported > 0:
+            chat.send_datetime = False
+            await session.commit()
 
     return imported
 

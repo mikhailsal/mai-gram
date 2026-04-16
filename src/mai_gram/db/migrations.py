@@ -32,7 +32,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 def register_migration(version: int, description: str) -> Callable[[MigrationFunc], MigrationFunc]:
@@ -122,6 +122,35 @@ async def _migrate_v5(conn: AsyncConnection) -> None:
     if "prompt_name" not in existing_cols:
         await conn.execute(text("ALTER TABLE chats ADD COLUMN prompt_name VARCHAR(100)"))
         logger.info("Added chats.prompt_name column")
+
+
+@register_migration(6, "Add per-message show_datetime column with backfill from chat settings")
+async def _migrate_v6(conn: AsyncConnection) -> None:
+    """Version 6: add Message.show_datetime to track datetime visibility per-message.
+
+    Previously, datetime visibility was a chat-level toggle that retroactively
+    affected all messages. Now each message records whether its timestamp should
+    be shown to the LLM. Existing messages are backfilled from their chat's
+    current send_datetime setting.
+    """
+    result = await conn.execute(text("PRAGMA table_info(messages)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "show_datetime" not in existing_cols:
+        await conn.execute(
+            text("ALTER TABLE messages ADD COLUMN show_datetime BOOLEAN NOT NULL DEFAULT 1")
+        )
+        logger.info("Added messages.show_datetime column")
+
+        # Backfill: set show_datetime from each chat's current send_datetime setting
+        await conn.execute(
+            text(
+                "UPDATE messages SET show_datetime = ("
+                "  SELECT c.send_datetime FROM chats c WHERE c.id = messages.chat_id"
+                ")"
+            )
+        )
+        logger.info("Backfilled messages.show_datetime from chat send_datetime settings")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

@@ -1,9 +1,11 @@
 # Per-prompt config for "creative".
 # Show reasoning to see creative thought process.
 # Disable message history tools — not useful for creative writing.
+# Datetime off — creative writing doesn't need timestamps.
 
 show_reasoning = true
 show_tool_calls = true
+send_datetime = false
 
 [mcp_servers]
 disabled = ["messages"]

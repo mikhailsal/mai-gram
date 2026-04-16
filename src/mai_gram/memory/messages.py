@@ -42,6 +42,7 @@ class MessageStore:
         tool_call_id: str | None = None,
         reasoning: str | None = None,
         timezone_name: str = "UTC",
+        show_datetime: bool = True,
     ) -> Message:
         """Persist a message and return the saved ORM object."""
         if timestamp is not None:
@@ -69,6 +70,7 @@ class MessageStore:
             tool_call_id=tool_call_id,
             reasoning=reasoning,
             timezone=timezone_name,
+            show_datetime=show_datetime,
         )
         if timestamp is not None:
             message.timestamp = timestamp

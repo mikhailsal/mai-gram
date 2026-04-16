@@ -5,6 +5,11 @@
 show_reasoning = true
 show_tool_calls = true
 
+# Whether new messages include date/time visible to the LLM by default.
+# Users can toggle per-chat with /datetime; only future messages are affected.
+# Omit or set to null to use the global default (true).
+# send_datetime = true
+
 # Tool filtering (optional):
 #   enabled = ["wiki_create", ...]   — whitelist, only these tools
 #   disabled = ["search_messages"]   — blacklist, block these tools

@@ -188,6 +188,16 @@ class Message(Base):
         default="UTC",
         doc="IANA timezone active when this message was created.",
     )
+    show_datetime: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        doc=(
+            "Whether this message's timestamp should be visible to the LLM. "
+            "Captured at save time from the chat's send_datetime setting, "
+            "so toggling only affects future messages."
+        ),
+    )
 
     chat: Mapped[Chat] = relationship(back_populates="messages")
 

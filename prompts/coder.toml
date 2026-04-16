@@ -1,6 +1,8 @@
 # Per-prompt config for "coder".
 # Full transparency: reasoning and tool calls visible.
 # All tools and MCP servers available.
+# Datetime off by default — code-focused chats rarely need timestamps.
 
 show_reasoning = true
 show_tool_calls = true
+send_datetime = false
