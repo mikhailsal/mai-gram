@@ -35,7 +35,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_TIMEOUT = 120.0  # seconds – generous for large generations
+DEFAULT_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=45.0,
+    write=10.0,
+    pool=10.0,
+)
 
 
 class OpenRouterProvider(LLMProvider):
@@ -56,7 +61,8 @@ class OpenRouterProvider(LLMProvider):
     app_title:
         Optional ``X-Title`` header (displayed on the OpenRouter dashboard).
     timeout:
-        Request timeout in seconds.
+        Request timeout — either an ``httpx.Timeout`` or a flat number of
+        seconds (applied to every phase).
     max_retries:
         How many times to retry on transient 5xx / network errors.
     """
@@ -69,7 +75,7 @@ class OpenRouterProvider(LLMProvider):
         base_url: str = OPENROUTER_BASE_URL,
         http_referer: str | None = None,
         app_title: str = "mai-gram",
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: httpx.Timeout | float = DEFAULT_TIMEOUT,
         max_retries: int = 2,
     ) -> None:
         if not api_key:
@@ -78,8 +84,10 @@ class OpenRouterProvider(LLMProvider):
         self._api_key = api_key
         self._default_model = default_model
         self._base_url = base_url.rstrip("/")
-        self._timeout = timeout
         self._max_retries = max_retries
+        self._active_requests = 0
+
+        resolved_timeout = timeout if isinstance(timeout, httpx.Timeout) else httpx.Timeout(timeout)
 
         headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
@@ -93,7 +101,7 @@ class OpenRouterProvider(LLMProvider):
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             headers=headers,
-            timeout=httpx.Timeout(timeout),
+            timeout=resolved_timeout,
         )
 
     # ------------------------------------------------------------------
@@ -104,6 +112,11 @@ class OpenRouterProvider(LLMProvider):
     def default_model(self) -> str:
         """Currently configured default model identifier."""
         return self._default_model
+
+    @property
+    def active_requests(self) -> int:
+        """Number of LLM requests currently in flight."""
+        return self._active_requests
 
     async def generate(
         self,
@@ -271,38 +284,46 @@ class OpenRouterProvider(LLMProvider):
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         """POST *path* with automatic retry on transient failures."""
+        model = payload.get("model", self._default_model)
+        msg_count = len(payload.get("messages", []))
+        logger.info("LLM request started (model=%s, messages=%d)", model, msg_count)
+
         last_exc: Exception | None = None
+        self._active_requests += 1
+        try:
+            for attempt in range(1, self._max_retries + 2):  # +2 because range is exclusive
+                try:
+                    response = await self._client.post(path, json=payload)
+                    self._raise_for_status(response)
+                    return response.json()  # type: ignore[no-any-return]
+                except (LLMRateLimitError, LLMProviderError) as exc:
+                    last_exc = exc
+                    if attempt <= self._max_retries:
+                        logger.warning(
+                            "OpenRouter request failed (attempt %d/%d): %s",
+                            attempt,
+                            self._max_retries + 1,
+                            exc,
+                        )
+                        continue
+                    raise
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    if attempt <= self._max_retries:
+                        logger.warning(
+                            "Network error (attempt %d/%d): %s",
+                            attempt,
+                            self._max_retries + 1,
+                            exc,
+                        )
+                        continue
+                    raise LLMProviderError(
+                        f"Network error after {attempt} attempts: {exc}"
+                    ) from exc
 
-        for attempt in range(1, self._max_retries + 2):  # +2 because range is exclusive
-            try:
-                response = await self._client.post(path, json=payload)
-                self._raise_for_status(response)
-                return response.json()  # type: ignore[no-any-return]
-            except (LLMRateLimitError, LLMProviderError) as exc:
-                last_exc = exc
-                if attempt <= self._max_retries:
-                    logger.warning(
-                        "OpenRouter request failed (attempt %d/%d): %s",
-                        attempt,
-                        self._max_retries + 1,
-                        exc,
-                    )
-                    continue
-                raise
-            except httpx.TransportError as exc:
-                last_exc = exc
-                if attempt <= self._max_retries:
-                    logger.warning(
-                        "Network error (attempt %d/%d): %s",
-                        attempt,
-                        self._max_retries + 1,
-                        exc,
-                    )
-                    continue
-                raise LLMProviderError(f"Network error after {attempt} attempts: {exc}") from exc
-
-        # Should not be reached, but just in case
-        raise LLMProviderError(f"Request failed: {last_exc}") from last_exc  # pragma: no cover
+            raise LLMProviderError(f"Request failed: {last_exc}") from last_exc  # pragma: no cover
+        finally:
+            self._active_requests -= 1
 
     # -- Streaming request with retry --------------------------------------
 
@@ -312,37 +333,48 @@ class OpenRouterProvider(LLMProvider):
         payload: dict[str, Any],
     ) -> AsyncIterator[StreamChunk]:
         """Stream SSE from *path* with automatic retry on transient failures."""
+        model = payload.get("model", self._default_model)
+        msg_count = len(payload.get("messages", []))
+        logger.info("LLM stream started (model=%s, messages=%d)", model, msg_count)
+
         last_exc: Exception | None = None
+        self._active_requests += 1
+        try:
+            for attempt in range(1, self._max_retries + 2):
+                try:
+                    async for chunk in self._stream_sse(path, payload):
+                        yield chunk
+                    return  # successful stream completed
+                except (LLMRateLimitError, LLMProviderError) as exc:
+                    last_exc = exc
+                    if attempt <= self._max_retries:
+                        logger.warning(
+                            "OpenRouter stream failed (attempt %d/%d): %s",
+                            attempt,
+                            self._max_retries + 1,
+                            exc,
+                        )
+                        continue
+                    raise
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    if attempt <= self._max_retries:
+                        logger.warning(
+                            "Network error during stream (attempt %d/%d): %s",
+                            attempt,
+                            self._max_retries + 1,
+                            exc,
+                        )
+                        continue
+                    raise LLMProviderError(
+                        f"Network error after {attempt} attempts: {exc}"
+                    ) from exc
 
-        for attempt in range(1, self._max_retries + 2):
-            try:
-                async for chunk in self._stream_sse(path, payload):
-                    yield chunk
-                return  # successful stream completed
-            except (LLMRateLimitError, LLMProviderError) as exc:
-                last_exc = exc
-                if attempt <= self._max_retries:
-                    logger.warning(
-                        "OpenRouter stream failed (attempt %d/%d): %s",
-                        attempt,
-                        self._max_retries + 1,
-                        exc,
-                    )
-                    continue
-                raise
-            except httpx.TransportError as exc:
-                last_exc = exc
-                if attempt <= self._max_retries:
-                    logger.warning(
-                        "Network error during stream (attempt %d/%d): %s",
-                        attempt,
-                        self._max_retries + 1,
-                        exc,
-                    )
-                    continue
-                raise LLMProviderError(f"Network error after {attempt} attempts: {exc}") from exc
-
-        raise LLMProviderError(f"Stream failed: {last_exc}") from last_exc  # pragma: no cover
+            raise LLMProviderError(  # pragma: no cover
+                f"Stream failed: {last_exc}"
+            ) from last_exc
+        finally:
+            self._active_requests -= 1
 
     async def _stream_sse(
         self,

@@ -1378,3 +1378,125 @@ class TestPackageLevelExports:
         from mai_gram.llm import ToolCall as ToolCallAlias
 
         assert ToolCallAlias is ToolCall
+
+
+# ---------------------------------------------------------------------------
+# Timeout configuration
+# ---------------------------------------------------------------------------
+
+
+class TestTimeoutConfiguration:
+    """Test that granular timeouts are configured correctly."""
+
+    def test_default_timeout_is_granular(self) -> None:
+        from mai_gram.llm.openrouter import DEFAULT_TIMEOUT
+
+        assert isinstance(DEFAULT_TIMEOUT, httpx.Timeout)
+        assert DEFAULT_TIMEOUT.connect == 10.0
+        assert DEFAULT_TIMEOUT.read == 45.0
+        assert DEFAULT_TIMEOUT.write == 10.0
+        assert DEFAULT_TIMEOUT.pool == 10.0
+
+    def test_float_timeout_backwards_compat(self) -> None:
+        """A plain float timeout is applied uniformly (backwards compatibility)."""
+        provider = OpenRouterProvider(api_key=API_KEY, timeout=60.0)
+        timeout = provider._client.timeout
+        assert timeout.connect == 60.0
+        assert timeout.read == 60.0
+        await_provider_close = provider.close()
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(await_provider_close)
+
+    def test_httpx_timeout_object_passed_through(self) -> None:
+        custom = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
+        provider = OpenRouterProvider(api_key=API_KEY, timeout=custom)
+        timeout = provider._client.timeout
+        assert timeout.connect == 5.0
+        assert timeout.read == 30.0
+        assert timeout.write == 5.0
+        assert timeout.pool == 5.0
+
+
+# ---------------------------------------------------------------------------
+# Active requests counter
+# ---------------------------------------------------------------------------
+
+
+class TestActiveRequestsCounter:
+    """Test that the active_requests counter tracks in-flight requests."""
+
+    def test_initial_active_requests_is_zero(self) -> None:
+        provider = OpenRouterProvider(api_key=API_KEY)
+        assert provider.active_requests == 0
+
+    async def test_active_requests_during_generate(
+        self, sample_messages: list[ChatMessage]
+    ) -> None:
+        """Counter increments during a request and decrements after."""
+        seen_active: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_active.append(provider.active_requests)
+            return httpx.Response(200, json=_make_chat_response())
+
+        transport = httpx.MockTransport(handler)
+        provider = OpenRouterProvider(api_key=API_KEY)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        await provider.generate(sample_messages)
+
+        assert seen_active == [1]
+        assert provider.active_requests == 0
+        await provider.close()
+
+    async def test_active_requests_during_stream(self, sample_messages: list[ChatMessage]) -> None:
+        """Counter increments during streaming and decrements after."""
+        tokens = ["Hi"]
+        sse_text = _make_stream_lines(tokens)
+
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=sse_text.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        provider = OpenRouterProvider(api_key=API_KEY)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        during_stream: list[int] = []
+        async for _chunk in provider.generate_stream(sample_messages):
+            during_stream.append(provider.active_requests)
+
+        assert all(v == 1 for v in during_stream)
+        assert provider.active_requests == 0
+        await provider.close()
+
+    async def test_active_requests_decrements_on_error(
+        self, sample_messages: list[ChatMessage]
+    ) -> None:
+        """Counter decrements even when the request fails."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(500, json=_make_error_response("boom"))
+        )
+        provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        with pytest.raises(LLMProviderError):
+            await provider.generate(sample_messages)
+
+        assert provider.active_requests == 0
+        await provider.close()

@@ -199,6 +199,12 @@ async def shutdown() -> None:
         _config_watcher_task.cancel()
         _config_watcher_task = None
 
+    if _llm_provider and _llm_provider.active_requests > 0:
+        logger.info(
+            "Waiting for %d in-flight LLM request(s) to complete...",
+            _llm_provider.active_requests,
+        )
+
     for messenger in _messengers:
         await messenger.stop()
     _messengers.clear()
