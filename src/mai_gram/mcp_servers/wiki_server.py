@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,8 @@ from mai_gram.mcp_servers.messages_server import MCPToolSpec
 if TYPE_CHECKING:
     from mai_gram.memory.knowledge_base import WikiStore
 
+logger = logging.getLogger(__name__)
+
 
 class WikiMCPServer:
     """Expose wiki CRUD/search tools for MCP-style tool calling."""
@@ -19,6 +22,16 @@ class WikiMCPServer:
     def __init__(self, store: WikiStore, chat_id: str) -> None:
         self._store = store
         self._chat_id = chat_id
+        self._synced = False
+
+    async def _ensure_synced(self) -> None:
+        """Run disk-to-DB sync once per server lifetime."""
+        if self._synced:
+            return
+        self._synced = True
+        report = await self._store.sync_from_disk(self._chat_id)
+        if report.total_changes > 0:
+            logger.info("Wiki sync for %s: %s", self._chat_id, report.summary())
 
     def _append_changelog(self, action: str, payload: dict[str, Any]) -> None:
         now = datetime.now(timezone.utc)
@@ -178,6 +191,7 @@ class WikiMCPServer:
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a named wiki tool."""
+        await self._ensure_synced()
         if tool_name == "wiki_create":
             result = await self._call_create(arguments)
             self._append_changelog("create", arguments)

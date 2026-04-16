@@ -57,8 +57,9 @@ class PromptBuilder:
         self._chat_timezone = chat_timezone
         now = current_time or datetime.now(timezone.utc)
 
-        wiki_entries = await self._wiki_store.get_top_entries(
-            chat.id, limit=self._wiki_context_limit
+        await self._wiki_store.sync_from_disk(chat.id)
+        wiki_entries, _ = await self._wiki_store.list_entries_sorted(
+            chat.id, sort_by="importance", limit=self._wiki_context_limit
         )
 
         recent_messages = await self._message_store.get_recent(

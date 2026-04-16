@@ -10,6 +10,8 @@ from mai_gram.db.models import Chat
 from mai_gram.memory.knowledge_base import WikiStore
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -104,16 +106,43 @@ class TestWikiDelete:
         assert deleted is False
 
 
-class TestWikiList:
-    async def test_list_entries(self, store: WikiStore, chat: Chat) -> None:
+class TestWikiListSorted:
+    async def test_list_entries_sorted_by_importance(self, store: WikiStore, chat: Chat) -> None:
         await store.create_entry(chat.id, key="a", content="A", importance=100)
         await store.create_entry(chat.id, key="b", content="B", importance=200)
-        entries = await store.list_entries(chat.id)
+        entries, total = await store.list_entries_sorted(chat.id)
+        assert total == 2
         assert len(entries) == 2
+        assert entries[0].key == "b"
 
-    async def test_list_empty(self, store: WikiStore, chat: Chat) -> None:
-        entries = await store.list_entries(chat.id)
+    async def test_list_entries_sorted_empty(self, store: WikiStore, chat: Chat) -> None:
+        entries, total = await store.list_entries_sorted(chat.id)
         assert entries == []
+        assert total == 0
+
+    async def test_list_entries_sorted_by_key(self, store: WikiStore, chat: Chat) -> None:
+        await store.create_entry(chat.id, key="zebra", content="Z", importance=100)
+        await store.create_entry(chat.id, key="apple", content="A", importance=9000)
+        entries, _ = await store.list_entries_sorted(chat.id, sort_by="key")
+        assert entries[0].key == "apple"
+        assert entries[1].key == "zebra"
+
+    async def test_list_entries_sorted_with_limit(self, store: WikiStore, chat: Chat) -> None:
+        await store.create_entry(chat.id, key="low", content="L", importance=100)
+        await store.create_entry(chat.id, key="high", content="H", importance=9000)
+        await store.create_entry(chat.id, key="mid", content="M", importance=5000)
+        entries, total = await store.list_entries_sorted(chat.id, limit=2)
+        assert total == 3
+        assert len(entries) == 2
+        assert entries[0].key == "high"
+
+    async def test_list_entries_sorted_with_offset(self, store: WikiStore, chat: Chat) -> None:
+        await store.create_entry(chat.id, key="low", content="L", importance=100)
+        await store.create_entry(chat.id, key="high", content="H", importance=9000)
+        entries, total = await store.list_entries_sorted(chat.id, offset=1)
+        assert total == 2
+        assert len(entries) == 1
+        assert entries[0].key == "low"
 
 
 class TestWikiDecay:
@@ -141,11 +170,96 @@ class TestWikiSanitizeKey:
             await store.create_entry(chat.id, key="!!!", content="x", importance=1)
 
 
-class TestWikiTopEntries:
-    async def test_top_entries_ordered_by_importance(self, store: WikiStore, chat: Chat) -> None:
-        await store.create_entry(chat.id, key="low", content="low", importance=100)
-        await store.create_entry(chat.id, key="high", content="high", importance=9000)
-        await store.create_entry(chat.id, key="mid", content="mid", importance=5000)
-        top = await store.get_top_entries(chat.id, limit=2)
-        assert len(top) == 2
-        assert top[0].key == "high"
+class TestWikiSync:
+    async def test_sync_creates_db_rows_from_disk(
+        self, store: WikiStore, chat: Chat, tmp_path: Path
+    ) -> None:
+        wiki_dir = tmp_path / chat.id / "wiki"
+        wiki_dir.mkdir(parents=True)
+        (wiki_dir / "9999_human_name.md").write_text("Alice", encoding="utf-8")
+        (wiki_dir / "5000_favorite_color.md").write_text("Blue", encoding="utf-8")
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert len(report.created) == 2
+        assert "human_name" in report.created
+        assert "favorite_color" in report.created
+        entries, total = await store.list_entries_sorted(chat.id)
+        assert total == 2
+
+    async def test_sync_removes_orphaned_db_rows(
+        self, store: WikiStore, chat: Chat, tmp_path: Path
+    ) -> None:
+        await store.create_entry(chat.id, key="old_fact", content="Gone", importance=1000)
+        wiki_dir = tmp_path / chat.id / "wiki"
+        (wiki_dir / "1000_old_fact.md").unlink()
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert "old_fact" in report.db_rows_deleted
+        entries, total = await store.list_entries_sorted(chat.id)
+        assert total == 0
+
+    async def test_sync_updates_content_from_disk(
+        self, store: WikiStore, chat: Chat, tmp_path: Path
+    ) -> None:
+        await store.create_entry(chat.id, key="fact", content="Old text", importance=5000)
+        wiki_dir = tmp_path / chat.id / "wiki"
+        (wiki_dir / "5000_fact.md").write_text("New text from disk", encoding="utf-8")
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert "fact" in report.updated
+        content = await store.read_entry(chat.id, "fact")
+        assert content == "New text from disk"
+
+    async def test_sync_updates_importance_from_filename(
+        self, store: WikiStore, chat: Chat, tmp_path: Path
+    ) -> None:
+        await store.create_entry(chat.id, key="fact", content="Text", importance=5000)
+        wiki_dir = tmp_path / chat.id / "wiki"
+        (wiki_dir / "5000_fact.md").rename(wiki_dir / "9000_fact.md")
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert "fact" in report.updated
+        entries, _ = await store.list_entries_sorted(chat.id)
+        assert entries[0].importance == 9000.0
+
+    async def test_sync_noop_when_already_in_sync(
+        self, store: WikiStore, chat: Chat, tmp_path: Path
+    ) -> None:
+        await store.create_entry(chat.id, key="fact", content="Text", importance=5000)
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert report.total_changes == 0
+
+    async def test_sync_no_wiki_dir_cleans_db(
+        self, store: WikiStore, chat: Chat, session: AsyncSession
+    ) -> None:
+        from mai_gram.db.models import KnowledgeEntry
+
+        entry = KnowledgeEntry(
+            chat_id=chat.id, category="wiki", key="orphan", value="x", importance=1.0
+        )
+        session.add(entry)
+        await session.flush()
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert "orphan" in report.db_rows_deleted
+
+    async def test_sync_skips_non_wiki_files(
+        self, store: WikiStore, chat: Chat, tmp_path: Path
+    ) -> None:
+        wiki_dir = tmp_path / chat.id / "wiki"
+        wiki_dir.mkdir(parents=True)
+        (wiki_dir / "readme.md").write_text("not a wiki file", encoding="utf-8")
+        (wiki_dir / "5000_valid.md").write_text("Valid", encoding="utf-8")
+
+        report = await store.sync_from_disk(chat.id)
+
+        assert len(report.created) == 1
+        assert "valid" in report.created
+        assert "readme.md" in report.skipped_files

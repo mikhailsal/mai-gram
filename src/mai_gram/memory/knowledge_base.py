@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,34 @@ from mai_gram.db.models import KnowledgeEntry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SyncReport:
+    """Describes what changed during a disk-to-DB sync."""
+
+    created: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
+    db_rows_deleted: list[str] = field(default_factory=list)
+    skipped_files: list[str] = field(default_factory=list)
+
+    @property
+    def total_changes(self) -> int:
+        return len(self.created) + len(self.updated) + len(self.db_rows_deleted)
+
+    def summary(self) -> str:
+        parts: list[str] = []
+        if self.created:
+            parts.append(f"{len(self.created)} created")
+        if self.updated:
+            parts.append(f"{len(self.updated)} updated")
+        if self.db_rows_deleted:
+            parts.append(f"{len(self.db_rows_deleted)} orphaned DB rows removed")
+        if self.skipped_files:
+            parts.append(f"{len(self.skipped_files)} files skipped")
+        return ", ".join(parts) if parts else "no changes needed"
 
 
 def _escape_like_pattern(query: str) -> str:
@@ -141,30 +171,6 @@ class WikiStore:
         )
         return list(result.scalars().all())
 
-    async def get_top_entries(
-        self,
-        chat_id: str,
-        *,
-        limit: int = 20,
-    ) -> list[KnowledgeEntry]:
-        """Return highest-importance entries first."""
-        result = await self._session.execute(
-            select(KnowledgeEntry)
-            .where(KnowledgeEntry.chat_id == chat_id)
-            .order_by(desc(KnowledgeEntry.importance), desc(KnowledgeEntry.updated_at))
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def list_entries(self, chat_id: str) -> list[KnowledgeEntry]:
-        """Return all entries for one companion."""
-        result = await self._session.execute(
-            select(KnowledgeEntry)
-            .where(KnowledgeEntry.chat_id == chat_id)
-            .order_by(desc(KnowledgeEntry.importance), KnowledgeEntry.key.asc())
-        )
-        return list(result.scalars().all())
-
     async def list_entries_sorted(
         self,
         chat_id: str,
@@ -199,6 +205,93 @@ class WikiStore:
         query = query.offset(offset).limit(limit)
         result = await self._session.execute(query)
         return list(result.scalars().all()), total_count
+
+    async def sync_from_disk(self, chat_id: str) -> SyncReport:
+        """Synchronise DB rows with .md files on disk (disk is source of truth).
+
+        For each wiki file on disk:
+        - If no DB row exists, create one from the file content and filename.
+        - If a DB row exists but content or importance differs, update it.
+
+        For each DB row with no corresponding file on disk:
+        - Delete the orphaned DB row.
+
+        Returns a SyncReport describing what changed.
+        """
+        report = SyncReport()
+        wiki_dir = self._wiki_dir(chat_id)
+        if not wiki_dir.exists():
+            db_entries = await self._all_entries_map(chat_id)
+            for key, entry in db_entries.items():
+                await self._session.delete(entry)
+                report.db_rows_deleted.append(key)
+            if report.db_rows_deleted:
+                await self._session.flush()
+            return report
+
+        disk_entries: dict[str, tuple[int, str, Path]] = {}
+        for md_file in sorted(wiki_dir.glob("*.md")):
+            if md_file.name == "changelog.jsonl":
+                continue
+            parsed = self._parse_wiki_filename(md_file.name)
+            if parsed is None:
+                report.skipped_files.append(md_file.name)
+                continue
+            importance, safe_key = parsed
+            content = md_file.read_text(encoding="utf-8")
+            disk_entries[safe_key] = (importance, content, md_file)
+
+        db_entries = await self._all_entries_map(chat_id)
+
+        for safe_key, (importance, content, _path) in disk_entries.items():
+            db_entry = db_entries.pop(safe_key, None)
+            if db_entry is None:
+                new_entry = KnowledgeEntry(
+                    chat_id=chat_id,
+                    category="wiki",
+                    key=safe_key,
+                    value=content,
+                    importance=float(importance),
+                )
+                self._session.add(new_entry)
+                report.created.append(safe_key)
+            else:
+                changed = False
+                if db_entry.value != content:
+                    db_entry.value = content
+                    changed = True
+                if int(db_entry.importance) != importance:
+                    db_entry.importance = float(importance)
+                    changed = True
+                if changed:
+                    report.updated.append(safe_key)
+
+        for key, entry in db_entries.items():
+            await self._session.delete(entry)
+            report.db_rows_deleted.append(key)
+
+        await self._session.flush()
+        return report
+
+    async def _all_entries_map(self, chat_id: str) -> dict[str, KnowledgeEntry]:
+        """Return all DB entries for a chat_id as a {key: entry} dict."""
+        result = await self._session.execute(
+            select(KnowledgeEntry).where(KnowledgeEntry.chat_id == chat_id)
+        )
+        return {entry.key: entry for entry in result.scalars().all()}
+
+    @staticmethod
+    def _parse_wiki_filename(filename: str) -> tuple[int, str] | None:
+        """Parse ``NNNN_key.md`` into (importance, key), or None if unparseable."""
+        if not filename.endswith(".md"):
+            return None
+        stem = filename[:-3]
+        match = re.match(r"^(\d+)_(.+)$", stem)
+        if not match:
+            return None
+        importance = int(match.group(1))
+        key = match.group(2)
+        return importance, key
 
     async def delete_entry(self, chat_id: str, key: str) -> bool:
         """Delete an entry from both disk and DB."""

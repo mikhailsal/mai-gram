@@ -288,8 +288,8 @@ class MemorySummarizer:
         if not self._wiki_store:
             return []
 
-        entries = await self._wiki_store.get_top_entries(
-            companion_id, limit=self._wiki_context_limit
+        entries, _ = await self._wiki_store.list_entries_sorted(
+            companion_id, sort_by="importance", limit=self._wiki_context_limit
         )
         return [(e.key, e.value, int(e.importance)) for e in entries]
 

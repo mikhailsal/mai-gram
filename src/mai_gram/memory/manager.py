@@ -60,4 +60,7 @@ class MemoryManager:
         return await self._message_store.search(chat_id, query, limit=limit)
 
     async def get_wiki_top(self, chat_id: str, *, limit: int = 20) -> list[KnowledgeEntry]:
-        return await self._wiki_store.get_top_entries(chat_id, limit=limit)
+        entries, _ = await self._wiki_store.list_entries_sorted(
+            chat_id, sort_by="importance", limit=limit
+        )
+        return entries

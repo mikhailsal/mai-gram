@@ -88,6 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "Use a name from the prompts/ directory, or '__custom__' with a message."
         ),
     )
+    parser.add_argument(
+        "--repair-wiki",
+        action="store_true",
+        dest="repair_wiki",
+        help="Sync wiki DB from disk files (disk is source of truth).",
+    )
     return parser
 
 
@@ -203,13 +209,41 @@ async def _print_history(chat_id: str) -> None:
 async def _print_wiki(chat_id: str, data_dir: str) -> None:
     async with get_session() as session:
         wiki_store = WikiStore(session, data_dir=data_dir)
-        entries = await wiki_store.list_entries(chat_id)
+        report = await wiki_store.sync_from_disk(chat_id)
+        if report.total_changes > 0:
+            print(f"[sync] {report.summary()}")
+            await session.commit()
+        entries, _ = await wiki_store.list_entries_sorted(chat_id)
     print(f"=== Wiki: {chat_id} ===")
     if not entries:
         print("(no wiki entries)")
         return
     for entry in entries:
         print(f"- ({int(entry.importance)}) {entry.key}: {entry.value}")
+
+
+async def _repair_wiki(chat_id: str, data_dir: str) -> None:
+    async with get_session() as session:
+        wiki_store = WikiStore(session, data_dir=data_dir)
+        report = await wiki_store.sync_from_disk(chat_id)
+        await session.commit()
+    print(f"=== Wiki Repair: {chat_id} ===")
+    if report.total_changes == 0:
+        print("Database is already in sync with disk files.")
+        return
+    print(f"Result: {report.summary()}")
+    if report.created:
+        for key in report.created:
+            print(f"  + created: {key}")
+    if report.updated:
+        for key in report.updated:
+            print(f"  ~ updated: {key}")
+    if report.db_rows_deleted:
+        for key in report.db_rows_deleted:
+            print(f"  - removed orphan DB row: {key}")
+    if report.skipped_files:
+        for fname in report.skipped_files:
+            print(f"  ? skipped unparseable file: {fname}")
 
 
 async def _print_prompt(
@@ -464,6 +498,9 @@ async def _run(args: argparse.Namespace) -> None:
     try:
         if args.history:
             await _print_history(chat_id)
+            return
+        if args.repair_wiki:
+            await _repair_wiki(chat_id, settings.memory_data_dir)
             return
         if args.wiki:
             await _print_wiki(chat_id, settings.memory_data_dir)
