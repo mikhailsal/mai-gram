@@ -68,12 +68,16 @@ class TestSettings:
             telegram_bot_token="token1",
             telegram_bot_token_2="token2",
             telegram_bot_token_3="",
+            bots_config_path="/nonexistent/bots.toml",
             _env_file=None,  # type: ignore[call-arg]
         )
         assert settings.get_all_bot_tokens() == ["token1", "token2"]
 
     def test_get_all_bot_tokens_empty(self) -> None:
-        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        settings = Settings(
+            bots_config_path="/nonexistent/bots.toml",
+            _env_file=None,  # type: ignore[call-arg]
+        )
         assert settings.get_all_bot_tokens() == []
 
 

@@ -165,6 +165,41 @@ class WikiStore:
         )
         return list(result.scalars().all())
 
+    async def list_entries_sorted(
+        self,
+        chat_id: str,
+        *,
+        sort_by: str = "importance",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[KnowledgeEntry], int]:
+        """Return entries with flexible sorting and pagination.
+
+        Returns a tuple of (entries, total_count).
+        sort_by options: "importance" (default), "key", "updated".
+        """
+        from sqlalchemy import func as sql_func
+
+        count_result = await self._session.execute(
+            select(sql_func.count())
+            .select_from(KnowledgeEntry)
+            .where(KnowledgeEntry.chat_id == chat_id)
+        )
+        total_count = count_result.scalar() or 0
+
+        query = select(KnowledgeEntry).where(KnowledgeEntry.chat_id == chat_id)
+
+        if sort_by == "key":
+            query = query.order_by(KnowledgeEntry.key.asc(), desc(KnowledgeEntry.importance))
+        elif sort_by == "updated":
+            query = query.order_by(desc(KnowledgeEntry.updated_at), desc(KnowledgeEntry.importance))
+        else:
+            query = query.order_by(desc(KnowledgeEntry.importance), KnowledgeEntry.key.asc())
+
+        query = query.offset(offset).limit(limit)
+        result = await self._session.execute(query)
+        return list(result.scalars().all()), total_count
+
     async def delete_entry(self, chat_id: str, key: str) -> bool:
         """Delete an entry from both disk and DB."""
         safe_key = self._sanitize_key(key)

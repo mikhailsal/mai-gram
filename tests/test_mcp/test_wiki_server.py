@@ -36,6 +36,7 @@ class TestWikiMCPServer:
             "wiki_edit",
             "wiki_read",
             "wiki_search",
+            "wiki_list",
         ]
 
     async def test_call_wiki_create(self, session: AsyncSession, tmp_path: Path) -> None:
@@ -88,6 +89,70 @@ class TestWikiMCPServer:
         result = await server.call_tool("wiki_search", {"query": "Alex"})
 
         assert "human_name (9999): Alex" in result
+
+    async def test_call_wiki_list_empty(self, session: AsyncSession, tmp_path: Path) -> None:
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+
+        result = await server.call_tool("wiki_list", {})
+
+        assert "No wiki entries found" in result
+
+    async def test_call_wiki_list_returns_entries(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        chat_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(chat_id, "human_name", "Alex", 9999)
+        await store.create_entry(chat_id, "favorite_color", "Blue", 5000)
+        server = WikiMCPServer(store, chat_id)
+
+        result = await server.call_tool("wiki_list", {})
+
+        assert "1-2 of 2 total" in result
+        assert "[9999] human_name: Alex" in result
+        assert "[5000] favorite_color: Blue" in result
+
+    async def test_call_wiki_list_sorted_by_key(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        chat_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(chat_id, "zebra", "A zebra", 100)
+        await store.create_entry(chat_id, "apple", "An apple", 9000)
+        server = WikiMCPServer(store, chat_id)
+
+        result = await server.call_tool("wiki_list", {"sort_by": "key"})
+
+        lines = result.strip().split("\n")
+        entry_lines = [line for line in lines if line.startswith("[")]
+        assert entry_lines[0].startswith("[9000] apple")
+        assert entry_lines[1].startswith("[100] zebra")
+
+    async def test_call_wiki_list_pagination(self, session: AsyncSession, tmp_path: Path) -> None:
+        chat_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        for i in range(5):
+            await store.create_entry(chat_id, f"entry_{i}", f"Content {i}", 1000 + i)
+        server = WikiMCPServer(store, chat_id)
+
+        result = await server.call_tool("wiki_list", {"limit": 2, "offset": 0})
+        assert "1-2 of 5 total" in result
+        assert "offset=2" in result
+
+        result2 = await server.call_tool("wiki_list", {"limit": 2, "offset": 4})
+        assert "5-5 of 5 total" in result2
+
+    async def test_call_wiki_list_offset_past_end(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        chat_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        await store.create_entry(chat_id, "only_entry", "Test", 5000)
+        server = WikiMCPServer(store, chat_id)
+
+        result = await server.call_tool("wiki_list", {"offset": 10})
+        assert "No more wiki entries" in result
 
     async def test_changelog_appends_for_create_and_edit(
         self,

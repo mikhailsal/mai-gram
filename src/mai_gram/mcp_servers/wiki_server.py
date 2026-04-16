@@ -137,6 +137,43 @@ class WikiMCPServer:
                     "additionalProperties": False,
                 },
             ),
+            MCPToolSpec(
+                name="wiki_list",
+                description=(
+                    "List all entries in your wiki. Use this to see everything you know about "
+                    "your human. Supports sorting and pagination so you can browse all entries "
+                    "systematically."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["importance", "key", "updated"],
+                            "default": "importance",
+                            "description": (
+                                "Sort order: 'importance' (highest first, default), "
+                                "'key' (alphabetical), or 'updated' (most recently changed first)"
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 20,
+                            "description": "Maximum number of entries to return",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0,
+                            "description": "Skip this many entries (for pagination)",
+                        },
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
@@ -154,6 +191,8 @@ class WikiMCPServer:
             return await self._call_read(arguments)
         if tool_name == "wiki_search":
             return await self._call_search(arguments)
+        if tool_name == "wiki_list":
+            return await self._call_list(arguments)
         raise ValueError(f"Unknown tool: {tool_name}")
 
     async def _call_create(self, arguments: dict[str, Any]) -> str:
@@ -209,6 +248,43 @@ class WikiMCPServer:
         if content is None:
             return f"Wiki entry '{key}' not found."
         return content
+
+    async def _call_list(self, arguments: dict[str, Any]) -> str:
+        sort_by = arguments.get("sort_by", "importance")
+        if sort_by not in ("importance", "key", "updated"):
+            raise ValueError("wiki_list 'sort_by' must be 'importance', 'key', or 'updated'")
+
+        raw_limit = arguments.get("limit", 20)
+        if not isinstance(raw_limit, int):
+            raise ValueError("wiki_list 'limit' must be an integer")
+        limit = max(1, min(raw_limit, 50))
+
+        raw_offset = arguments.get("offset", 0)
+        if not isinstance(raw_offset, int):
+            raise ValueError("wiki_list 'offset' must be an integer")
+        offset = max(0, raw_offset)
+
+        entries, total_count = await self._store.list_entries_sorted(
+            self._chat_id, sort_by=sort_by, limit=limit, offset=offset
+        )
+
+        if not entries:
+            if offset > 0:
+                return f"No more wiki entries (total: {total_count})."
+            return "No wiki entries found."
+
+        showing_end = min(offset + len(entries), total_count)
+        header = (
+            f"Wiki entries {offset + 1}-{showing_end} of {total_count} total (sorted by {sort_by})"
+        )
+        if showing_end < total_count:
+            header += f" — use offset={showing_end} to see more"
+
+        lines = [header, ""]
+        for entry in entries:
+            lines.append(f"[{int(entry.importance)}] {entry.key}: {entry.value}")
+
+        return "\n".join(lines)
 
     async def _call_search(self, arguments: dict[str, Any]) -> str:
         query = arguments.get("query")
