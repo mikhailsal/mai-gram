@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_PREVIEW_MAX_CHARS = 120
+
+
+def _content_preview(text: str, max_chars: int = _PREVIEW_MAX_CHARS) -> str:
+    """Return the first line or first *max_chars* characters, whichever is shorter."""
+    first_line = text.split("\n", 1)[0].strip()
+    if len(first_line) <= max_chars:
+        return first_line
+    return first_line[:max_chars] + "…"
+
 
 class WikiMCPServer:
     """Expose wiki CRUD/search tools for MCP-style tool calling."""
@@ -129,7 +139,9 @@ class WikiMCPServer:
             MCPToolSpec(
                 name="wiki_search",
                 description=(
-                    "Search your wiki for entries matching a query. Searches both keys and content."
+                    "Search your wiki for entries matching a query. "
+                    "Searches both keys and content. "
+                    "Returns a short preview — use wiki_read for full content."
                 ),
                 input_schema={
                     "type": "object",
@@ -153,9 +165,9 @@ class WikiMCPServer:
             MCPToolSpec(
                 name="wiki_list",
                 description=(
-                    "List all entries in your wiki. Use this to see everything you know about "
-                    "your human. Supports sorting and pagination so you can browse all entries "
-                    "systematically."
+                    "List all entries in your wiki with keys, importance, and a short preview. "
+                    "Use this to browse what you know about your human. To read the full content "
+                    "of any entry, call wiki_read with the entry's key."
                 ),
                 input_schema={
                     "type": "object",
@@ -296,7 +308,8 @@ class WikiMCPServer:
 
         lines = [header, ""]
         for entry in entries:
-            lines.append(f"[{int(entry.importance)}] {entry.key}: {entry.value}")
+            preview = _content_preview(entry.value)
+            lines.append(f"[{int(entry.importance)}] {entry.key}: {preview}")
 
         return "\n".join(lines)
 
@@ -314,5 +327,8 @@ class WikiMCPServer:
         if not matches:
             return "No wiki entries found."
 
-        lines = [f"{entry.key} ({int(entry.importance)}): {entry.value}" for entry in matches]
+        lines = [
+            f"{entry.key} ({int(entry.importance)}): {_content_preview(entry.value)}"
+            for entry in matches
+        ]
         return "\n".join(lines)

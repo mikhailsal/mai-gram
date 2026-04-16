@@ -6,13 +6,43 @@ import json
 from typing import TYPE_CHECKING
 
 from mai_gram.db.models import Chat
-from mai_gram.mcp_servers.wiki_server import WikiMCPServer
+from mai_gram.mcp_servers.wiki_server import WikiMCPServer, _content_preview
 from mai_gram.memory.knowledge_base import WikiStore
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class TestContentPreview:
+    """Test the _content_preview helper."""
+
+    def test_short_content_unchanged(self) -> None:
+        assert _content_preview("Hello world") == "Hello world"
+
+    def test_long_single_line_truncated(self) -> None:
+        text = "A" * 200
+        result = _content_preview(text)
+        assert len(result) == 121  # 120 + "…"
+        assert result.endswith("…")
+
+    def test_multiline_uses_first_line(self) -> None:
+        text = "First line\nSecond line\nThird line"
+        assert _content_preview(text) == "First line"
+
+    def test_custom_max_chars(self) -> None:
+        text = "A" * 50
+        result = _content_preview(text, max_chars=10)
+        assert result == "A" * 10 + "…"
+
+    def test_empty_string(self) -> None:
+        assert _content_preview("") == ""
+
+    def test_first_line_long_truncated(self) -> None:
+        text = "B" * 200 + "\nshort second line"
+        result = _content_preview(text)
+        assert result == "B" * 120 + "…"
 
 
 async def _create_companion(session: AsyncSession, chat_id: str = "test@testbot") -> str:
@@ -90,6 +120,21 @@ class TestWikiMCPServer:
 
         assert "human_name (9999): Alex" in result
 
+    async def test_call_wiki_search_truncates_long_content(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        chat_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        long_content = "Searchable " + "X" * 500
+        await store.create_entry(chat_id, "long_entry", long_content, 5000)
+        server = WikiMCPServer(store, chat_id)
+
+        result = await server.call_tool("wiki_search", {"query": "Searchable"})
+
+        assert "long_entry (5000):" in result
+        assert "X" * 500 not in result
+        assert "…" in result
+
     async def test_call_wiki_list_empty(self, session: AsyncSession, tmp_path: Path) -> None:
         chat_id = await _create_companion(session)
         server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
@@ -112,6 +157,21 @@ class TestWikiMCPServer:
         assert "1-2 of 2 total" in result
         assert "[9999] human_name: Alex" in result
         assert "[5000] favorite_color: Blue" in result
+
+    async def test_call_wiki_list_truncates_long_content(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        chat_id = await _create_companion(session)
+        store = WikiStore(session, data_dir=tmp_path)
+        long_content = "A" * 500
+        await store.create_entry(chat_id, "long_entry", long_content, 5000)
+        server = WikiMCPServer(store, chat_id)
+
+        result = await server.call_tool("wiki_list", {})
+
+        assert "[5000] long_entry:" in result
+        assert "A" * 500 not in result
+        assert "…" in result
 
     async def test_call_wiki_list_sorted_by_key(
         self, session: AsyncSession, tmp_path: Path
