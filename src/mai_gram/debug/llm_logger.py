@@ -178,6 +178,14 @@ class LLMLoggerProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
         extra_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        self._sequence += 1
+        timestamp = self._timestamp_iso()
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        stream_usage = None
+        finish_reason: str | None = None
+        has_tool_calls = False
+
         async for chunk in self._provider.generate_stream(
             messages,
             model=model,
@@ -187,7 +195,58 @@ class LLMLoggerProvider(LLMProvider):
             tool_choice=tool_choice,
             extra_params=extra_params,
         ):
+            if chunk.content:
+                content_parts.append(chunk.content)
+            if chunk.reasoning:
+                reasoning_parts.append(chunk.reasoning)
+            if chunk.tool_calls_delta:
+                has_tool_calls = True
+            if chunk.finish_reason:
+                finish_reason = chunk.finish_reason
+            if chunk.usage is not None:
+                stream_usage = chunk.usage
             yield chunk
+
+        self._calls_total += 1
+        if has_tool_calls:
+            self._calls_with_tools += 1
+
+        if stream_usage is not None:
+            self._prompt_tokens_total += stream_usage.prompt_tokens
+            self._completion_tokens_total += stream_usage.completion_tokens
+            self._total_tokens_total += stream_usage.total_tokens
+            self._last_call_prompt_tokens = stream_usage.prompt_tokens
+            self._last_call_completion_tokens = stream_usage.completion_tokens
+            self._last_call_total_tokens = stream_usage.total_tokens
+            call_cost = self._cost_tracker.record(stream_usage, model_name=model)
+            self._last_call_cost_usd = call_cost.estimated_cost_usd
+
+        entry = {
+            "entry_type": "llm_stream_call",
+            "sequence": self._sequence,
+            "timestamp": timestamp,
+            "chat_id": self._chat_id,
+            "request": {
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "tool_choice": tool_choice,
+                "messages": [_serialize_message(msg) for msg in messages],
+                "tools": [_serialize_tool_def(tool) for tool in tools or []],
+            },
+            "response": {
+                "content": "".join(content_parts),
+                "reasoning": "".join(reasoning_parts) or None,
+                "finish_reason": finish_reason,
+                "has_tool_calls": has_tool_calls,
+                "usage": {
+                    "prompt_tokens": stream_usage.prompt_tokens if stream_usage else 0,
+                    "completion_tokens": stream_usage.completion_tokens if stream_usage else 0,
+                    "total_tokens": stream_usage.total_tokens if stream_usage else 0,
+                },
+            },
+        }
+        self._append_entry(timestamp, entry)
 
     async def count_tokens(self, messages: list[ChatMessage], *, model: str | None = None) -> int:
         return await self._provider.count_tokens(messages, model=model)

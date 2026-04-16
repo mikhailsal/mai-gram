@@ -69,6 +69,19 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Real conversation mode (disables test mode transparency notice).",
     )
+    parser.add_argument(
+        "--model",
+        metavar="MODEL_ID",
+        help="Model ID for --start setup (skips model selection step).",
+    )
+    parser.add_argument(
+        "--prompt",
+        metavar="PROMPT_NAME",
+        help=(
+            "Prompt name for --start setup (skips prompt selection step). "
+            "Use a name from the prompts/ directory, or '__custom__' with a message."
+        ),
+    )
     return parser
 
 
@@ -491,6 +504,18 @@ async def _run(args: argparse.Namespace) -> None:
 
         if args.start:
             await messenger.dispatch_message(_incoming_command(chat_id, user_id, "start"))
+            if args.model:
+                await messenger.dispatch_callback(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    callback_data=f"model:{args.model}",
+                )
+            if args.prompt:
+                await messenger.dispatch_callback(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    callback_data=f"prompt:{args.prompt}",
+                )
         if args.callbacks:
             for cb_data in args.callbacks:
                 await messenger.dispatch_callback(

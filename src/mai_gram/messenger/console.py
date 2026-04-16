@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+from html import unescape as html_unescape
 from itertools import count
 from typing import Any, TextIO
 
@@ -14,6 +16,38 @@ from mai_gram.messenger.base import (
     OutgoingMessage,
     SendResult,
 )
+
+
+def _html_to_plain_text(html: str) -> str:
+    """Convert HTML-formatted text to readable plain text for console output.
+
+    Handles common Telegram HTML tags: <b>, <i>, <code>, <pre>,
+    <blockquote>, <a>, and strips the rest.
+    """
+    text = html
+
+    text = re.sub(r"<blockquote[^>]*>\s*", "\n> ", text)
+    text = text.replace("</blockquote>", "\n")
+
+    text = re.sub(r"<b>(.*?)</b>", r"**\1**", text)
+    text = re.sub(r"<strong>(.*?)</strong>", r"**\1**", text)
+    text = re.sub(r"<i>(.*?)</i>", r"_\1_", text)
+    text = re.sub(r"<em>(.*?)</em>", r"_\1_", text)
+    text = re.sub(r"<code>(.*?)</code>", r"`\1`", text)
+
+    text = re.sub(r'<a\s+href="([^"]*)"[^>]*>(.*?)</a>', r"\2 (\1)", text)
+
+    text = re.sub(r"<pre[^>]*>(.*?)</pre>", r"\1", text, flags=re.DOTALL)
+
+    text = re.sub(r"<br\s*/?>", "\n", text)
+
+    text = re.sub(r"<[^>]+>", "", text)
+
+    text = html_unescape(text)
+
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 
 
 def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
@@ -95,7 +129,8 @@ class ConsoleMessenger(Messenger):
 
     async def send_message(self, message: OutgoingMessage) -> SendResult:
         print("--- AI Response ---", file=self._output)
-        print(message.text, file=self._output)
+        display_text = _html_to_plain_text(message.text) if message.parse_mode else message.text
+        print(display_text, file=self._output)
 
         buttons = _extract_buttons(message.keyboard)
         if buttons:
@@ -115,7 +150,9 @@ class ConsoleMessenger(Messenger):
             f"--- Edited AI Response (replaces message {message_id}) ---",
             file=self._output,
         )
-        print(new_text, file=self._output)
+        parse_mode = kwargs.get("parse_mode")
+        display_text = _html_to_plain_text(new_text) if parse_mode else new_text
+        print(display_text, file=self._output)
 
         buttons = _extract_buttons(kwargs.get("keyboard"))
         if buttons:

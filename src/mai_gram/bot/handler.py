@@ -418,6 +418,18 @@ class BotHandler:
 
         data = message.callback_data or ""
 
+        if data.startswith("model:") or data.startswith("prompt:"):
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text=(
+                        f"Setup callback '{data}' ignored — no setup session active.\n"
+                        "Hint: use --start --model MODEL --prompt PROMPT in a single command."
+                    ),
+                    chat_id=message.chat_id,
+                )
+            )
+            return
+
         if data == "regen":
             await self._show_confirmation(
                 message,
