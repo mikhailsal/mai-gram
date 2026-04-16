@@ -39,7 +39,16 @@ python -m mai_gram.main
 For debugging without Telegram:
 
 ```bash
-mai-chat -c test-demo --start
+# Create a test chat (model + prompt in one command)
+mai-chat -c test-demo --start --model google/gemma-4-31b-it:free --prompt default
+
+# Send messages
 mai-chat -c test-demo "Hello!"
+
+# Inspect state
 mai-chat -c test-demo --history
+mai-chat -c test-demo --wiki
+mai-chat -c test-demo --show-prompt
 ```
+
+See [docs/DEBUGGING.md](DEBUGGING.md) for the full reference.

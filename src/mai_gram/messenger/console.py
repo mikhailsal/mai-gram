@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
-from html import unescape as html_unescape
 from itertools import count
 from typing import Any, TextIO
 
@@ -16,38 +14,6 @@ from mai_gram.messenger.base import (
     OutgoingMessage,
     SendResult,
 )
-
-
-def _html_to_plain_text(html: str) -> str:
-    """Convert HTML-formatted text to readable plain text for console output.
-
-    Handles common Telegram HTML tags: <b>, <i>, <code>, <pre>,
-    <blockquote>, <a>, and strips the rest.
-    """
-    text = html
-
-    text = re.sub(r"<blockquote[^>]*>\s*", "\n> ", text)
-    text = text.replace("</blockquote>", "\n")
-
-    text = re.sub(r"<b>(.*?)</b>", r"**\1**", text)
-    text = re.sub(r"<strong>(.*?)</strong>", r"**\1**", text)
-    text = re.sub(r"<i>(.*?)</i>", r"_\1_", text)
-    text = re.sub(r"<em>(.*?)</em>", r"_\1_", text)
-    text = re.sub(r"<code>(.*?)</code>", r"`\1`", text)
-
-    text = re.sub(r'<a\s+href="([^"]*)"[^>]*>(.*?)</a>', r"\2 (\1)", text)
-
-    text = re.sub(r"<pre[^>]*>(.*?)</pre>", r"\1", text, flags=re.DOTALL)
-
-    text = re.sub(r"<br\s*/?>", "\n", text)
-
-    text = re.sub(r"<[^>]+>", "", text)
-
-    text = html_unescape(text)
-
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    return text.strip()
 
 
 def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
@@ -106,16 +72,29 @@ def _extract_buttons(keyboard: Any) -> list[tuple[str, str]]:
 
 
 class ConsoleMessenger(Messenger):
-    """Non-interactive messenger that prints messages to stdout."""
+    """Non-interactive messenger that prints messages to stdout.
 
-    def __init__(self, *, output: TextIO | None = None) -> None:
+    By default, intermediate streaming edits are buffered and only
+    the final version of each message is printed (when a new message
+    arrives or ``flush_edits()`` is called). Pass ``stream_debug=True``
+    to print every edit for debugging the streaming behaviour itself.
+    """
+
+    def __init__(
+        self,
+        *,
+        output: TextIO | None = None,
+        stream_debug: bool = False,
+    ) -> None:
         import sys
 
         self._output = output or sys.stdout
+        self._stream_debug = stream_debug
         self._message_handlers: list[MessageHandler] = []
         self._callback_handlers: list[MessageHandler] = []
         self._command_handlers: dict[str, MessageHandler] = {}
         self._id_counter = count(start=1)
+        self._pending_edits: dict[str, tuple[str, dict[str, Any]]] = {}
 
     @property
     def platform_name(self) -> str:
@@ -127,17 +106,36 @@ class ConsoleMessenger(Messenger):
     async def stop(self) -> None:
         return None
 
-    async def send_message(self, message: OutgoingMessage) -> SendResult:
-        print("--- AI Response ---", file=self._output)
-        display_text = _html_to_plain_text(message.text) if message.parse_mode else message.text
-        print(display_text, file=self._output)
-
-        buttons = _extract_buttons(message.keyboard)
+    def _print_message(self, header: str, text: str, kwargs: dict[str, Any] | None = None) -> None:
+        """Print a message block with optional parse_mode and buttons."""
+        print(header, file=self._output)
+        parse_mode = (kwargs or {}).get("parse_mode")
+        if parse_mode:
+            print(f"[parse_mode={parse_mode}]", file=self._output)
+        print(text, file=self._output)
+        buttons = _extract_buttons((kwargs or {}).get("keyboard"))
         if buttons:
             print("", file=self._output)
             print("--- Buttons ---", file=self._output)
-            for index, (text, callback_data) in enumerate(buttons, start=1):
-                print(f"[{index}] {text}  ->  {callback_data}", file=self._output)
+            for index, (bt, cb) in enumerate(buttons, start=1):
+                print(f"[{index}] {bt}  ->  {cb}", file=self._output)
+
+    def flush_edits(self) -> None:
+        """Print all buffered edits. Call after the handler finishes."""
+        for msg_id, (text, kwargs) in self._pending_edits.items():
+            self._print_message(f"--- AI Response (final edit of {msg_id}) ---", text, kwargs)
+        self._pending_edits.clear()
+
+    async def send_message(self, message: OutgoingMessage) -> SendResult:
+        self.flush_edits()
+        self._print_message(
+            "--- AI Response ---",
+            message.text,
+            {
+                "parse_mode": message.parse_mode,
+                "keyboard": message.keyboard,
+            },
+        )
 
         message_id = f"console-{next(self._id_counter)}"
         return SendResult(success=True, message_id=message_id)
@@ -146,21 +144,14 @@ class ConsoleMessenger(Messenger):
         self, chat_id: str, message_id: str, new_text: str, **kwargs: Any
     ) -> SendResult:
         del chat_id
-        print(
-            f"--- Edited AI Response (replaces message {message_id}) ---",
-            file=self._output,
-        )
-        parse_mode = kwargs.get("parse_mode")
-        display_text = _html_to_plain_text(new_text) if parse_mode else new_text
-        print(display_text, file=self._output)
-
-        buttons = _extract_buttons(kwargs.get("keyboard"))
-        if buttons:
-            print("", file=self._output)
-            print("--- Buttons ---", file=self._output)
-            for index, (text, callback_data) in enumerate(buttons, start=1):
-                print(f"[{index}] {text}  ->  {callback_data}", file=self._output)
-
+        if self._stream_debug:
+            self._print_message(
+                f"--- Edited AI Response (replaces {message_id}) ---",
+                new_text,
+                kwargs,
+            )
+        else:
+            self._pending_edits[message_id] = (new_text, dict(kwargs))
         return SendResult(success=True, message_id=message_id)
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:

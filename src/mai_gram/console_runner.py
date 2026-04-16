@@ -70,6 +70,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Real conversation mode (disables test mode transparency notice).",
     )
     parser.add_argument(
+        "--stream-debug",
+        action="store_true",
+        dest="stream_debug",
+        help="Print every streaming edit (by default only the final response is shown).",
+    )
+    parser.add_argument(
         "--model",
         metavar="MODEL_ID",
         help="Model ID for --start setup (skips model selection step).",
@@ -490,7 +496,7 @@ async def _run(args: argparse.Namespace) -> None:
             await _print_prompt(chat_id, settings.memory_data_dir, llm, test_mode=test_mode)
             return
 
-        messenger = ConsoleMessenger()
+        messenger = ConsoleMessenger(stream_debug=args.stream_debug)
         test_mode = not args.real
         _handler = BotHandler(
             messenger,
@@ -534,6 +540,8 @@ async def _run(args: argparse.Namespace) -> None:
             raise SystemExit(
                 "Error: nothing to do. Provide a message, --start, --cb, or an inspection flag."
             )
+
+        messenger.flush_edits()
 
         if logger_provider is not None:
             stats = logger_provider.get_session_stats()

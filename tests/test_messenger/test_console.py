@@ -27,7 +27,7 @@ class TestConsoleMessenger:
         assert "[1] Choose a Preset  ->  personality:presets" in captured
 
     async def test_edit_message_renders_replacement_note(self, capsys) -> None:
-        messenger = ConsoleMessenger()
+        messenger = ConsoleMessenger(stream_debug=True)
 
         await messenger.edit_message(
             chat_id="chat-1",
@@ -36,8 +36,24 @@ class TestConsoleMessenger:
         )
 
         captured = capsys.readouterr().out
-        assert "replaces message console-3" in captured
+        assert "replaces console-3" in captured
         assert "Updated response text" in captured
+
+    async def test_edit_message_buffered_by_default(self, capsys) -> None:
+        messenger = ConsoleMessenger()
+
+        await messenger.edit_message(
+            chat_id="chat-1",
+            message_id="console-3",
+            new_text="Buffered text",
+        )
+
+        captured = capsys.readouterr().out
+        assert captured == ""
+
+        messenger.flush_edits()
+        captured = capsys.readouterr().out
+        assert "Buffered text" in captured
 
     async def test_dispatch_routes_to_registered_handlers(self) -> None:
         messenger = ConsoleMessenger()
