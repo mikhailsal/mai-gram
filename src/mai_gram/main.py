@@ -125,8 +125,12 @@ async def startup() -> None:
             ", ".join(external_mcp_configs.keys()),
         )
 
+    bot_configs = settings.get_bot_configs()
+
     for i, token in enumerate(bot_tokens, start=1):
         messenger = TelegramMessenger(token)
+
+        bot_config = settings.get_bot_config_by_token(token) if bot_configs else None
 
         _handler = BotHandler(
             messenger,
@@ -136,6 +140,7 @@ async def startup() -> None:
             short_term_limit=settings.short_term_limit,
             tool_max_iterations=settings.tool_max_iterations,
             external_mcp_pool=_external_mcp_pool,
+            bot_config=bot_config,
         )
 
         await messenger.start()

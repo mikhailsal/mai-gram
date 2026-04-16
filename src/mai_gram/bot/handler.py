@@ -46,6 +46,7 @@ from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from mai_gram.config import BotConfig
     from mai_gram.llm.provider import LLMProvider
     from mai_gram.mcp_servers.external import ExternalMCPPool
     from mai_gram.messenger.base import Messenger
@@ -97,6 +98,7 @@ class BotHandler:
         tool_max_iterations: int | None = None,
         test_mode: bool = False,
         external_mcp_pool: ExternalMCPPool | None = None,
+        bot_config: BotConfig | None = None,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
@@ -116,8 +118,14 @@ class BotHandler:
         self._short_term_limit = short_term_limit or settings.short_term_limit
         self._tool_max_iterations = tool_max_iterations or settings.tool_max_iterations
         self._settings = settings
-        self._allowed_users = settings.get_allowed_user_ids()
+        self._bot_config = bot_config
         self._external_mcp_pool = external_mcp_pool
+
+        # Per-bot user whitelist takes precedence over the global ALLOWED_USERS
+        if bot_config and bot_config.allowed_users is not None:
+            self._allowed_users = {str(uid) for uid in bot_config.allowed_users}
+        else:
+            self._allowed_users = settings.get_allowed_user_ids()
 
         if self._allowed_users:
             logger.info(
@@ -496,12 +504,28 @@ class BotHandler:
         self._setup_sessions[user_id] = session
         await self._show_model_selection(session)
 
+    def _get_allowed_models_for_bot(self) -> list[str]:
+        """Return the model list for this bot, respecting per-bot restrictions."""
+        global_models = self._settings.get_allowed_models()
+        if self._bot_config and self._bot_config.allowed_models:
+            bot_set = set(self._bot_config.allowed_models)
+            return [m for m in global_models if m in bot_set]
+        return global_models
+
+    def _get_available_prompts_for_bot(self) -> dict[str, str]:
+        """Return prompt templates available for this bot, respecting per-bot restrictions."""
+        all_prompts = self._settings.get_available_prompts()
+        if self._bot_config and self._bot_config.allowed_prompts:
+            bot_set = set(self._bot_config.allowed_prompts)
+            return {k: v for k, v in all_prompts.items() if k in bot_set}
+        return all_prompts
+
     async def _show_model_selection(self, session: SetupSession) -> None:
         from mai_gram.messenger.telegram import build_inline_keyboard
 
         session.state = SetupState.CHOOSING_MODEL
         keyboard_rows = []
-        allowed_models = self._settings.get_allowed_models()
+        allowed_models = self._get_allowed_models_for_bot()
         default_model = self._settings.get_default_model()
         for model in allowed_models:
             short_name = model.split("/")[-1] if "/" in model else model
@@ -523,10 +547,13 @@ class BotHandler:
 
         session.state = SetupState.CHOOSING_PROMPT
         keyboard_rows = []
-        available_prompts = self._settings.get_available_prompts()
+        available_prompts = self._get_available_prompts_for_bot()
         for name in available_prompts:
             keyboard_rows.append([(name.replace("_", " ").title(), f"prompt:{name}")])
-        keyboard_rows.append([("Custom (type your own)", "prompt:__custom__")])
+
+        # Only show "Custom" if no per-bot prompt restriction is active
+        if not (self._bot_config and self._bot_config.allowed_prompts):
+            keyboard_rows.append([("Custom (type your own)", "prompt:__custom__")])
 
         kb = build_inline_keyboard(keyboard_rows)
 
@@ -550,11 +577,28 @@ class BotHandler:
         category, value = parts
 
         if category == "model" and session.state == SetupState.CHOOSING_MODEL:
+            allowed = self._get_allowed_models_for_bot()
+            if allowed and value not in allowed:
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="This model is not available for this bot. Please choose another.",
+                        chat_id=session.chat_id,
+                    )
+                )
+                return
             session.selected_model = value
             await self._show_prompt_selection(session)
 
         elif category == "prompt" and session.state == SetupState.CHOOSING_PROMPT:
             if value == "__custom__":
+                if self._bot_config and self._bot_config.allowed_prompts:
+                    await self._messenger.send_message(
+                        OutgoingMessage(
+                            text="Custom prompts are not available for this bot.",
+                            chat_id=session.chat_id,
+                        )
+                    )
+                    return
                 session.state = SetupState.AWAITING_CUSTOM_PROMPT
                 await self._messenger.send_message(
                     OutgoingMessage(
@@ -563,7 +607,8 @@ class BotHandler:
                     )
                 )
             else:
-                prompt_text = self._settings.get_available_prompts().get(value, "")
+                available = self._get_available_prompts_for_bot()
+                prompt_text = available.get(value, "")
                 if prompt_text:
                     await self._finish_setup(message, session, prompt_text, prompt_name=value)
                 else:

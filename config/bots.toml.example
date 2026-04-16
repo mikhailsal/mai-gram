@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────
+# Multi-bot configuration for mai-gram
+# ─────────────────────────────────────────────────────────────────────
+#
+# Copy this file to config/bots.toml and fill in your tokens.
+# When bots.toml exists, the legacy TELEGRAM_BOT_TOKEN* env vars are
+# ignored and all bots are loaded from here instead.
+#
+# NOTE: bots.toml is gitignored because it contains secrets.
+#
+# Each [[bots]] entry defines one Telegram bot with optional
+# per-bot restrictions. You can add as many bots as you need.
+#
+# Fields:
+#   token           (required)  Telegram Bot API token from @BotFather
+#   allowed_users   (optional)  List of Telegram user IDs that may use this bot.
+#                               If omitted, falls back to the global ALLOWED_USERS
+#                               env var. An empty list [] means NO users can access.
+#   allowed_models  (optional)  Model IDs the user can select during /start.
+#                               If omitted, all models from config/models.toml
+#                               are available. Must be a subset of models.toml.
+#   allowed_prompts (optional)  Prompt template names (filenames without extension
+#                               from the prompts/ directory). If omitted, all
+#                               prompts are available and custom prompts are
+#                               allowed. When set, custom prompts are disabled.
+#
+# ─────────────────────────────────────────────────────────────────────
+
+# Bot for Alice — full access, all models and prompts
+[[bots]]
+token = "123456:ABC-DEF..."
+allowed_users = [111111111]
+
+# Bot for Bob — restricted to specific models and prompts
+[[bots]]
+token = "789012:GHI-JKL..."
+allowed_users = [222222222]
+allowed_models = [
+    "google/gemini-2.5-flash",
+    "google/gemma-4-31b-it:free",
+]
+allowed_prompts = ["default", "coder"]
+
+# Shared bot — multiple users, no model/prompt restrictions
+[[bots]]
+token = "345678:MNO-PQR..."
+allowed_users = [111111111, 222222222, 333333333]
+
+# Open bot — no user restriction (uses global ALLOWED_USERS fallback)
+# If ALLOWED_USERS env var is empty, anyone can use this bot.
+[[bots]]
+token = "901234:STU-VWX..."

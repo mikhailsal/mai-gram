@@ -48,6 +48,23 @@ class PromptConfig:
     mcp_servers_disabled: list[str] | None = None
 
 
+@dataclass
+class BotConfig:
+    """Per-bot configuration loaded from ``config/bots.toml``.
+
+    Each Telegram bot can have its own restrictions:
+    - ``token``: the bot API token (required).
+    - ``allowed_users``: user IDs that may use this bot (empty = use global fallback).
+    - ``allowed_models``: model IDs selectable during /start (empty = use global list).
+    - ``allowed_prompts``: prompt template names selectable during /start (empty = all).
+    """
+
+    token: str
+    allowed_users: list[int] | None = None
+    allowed_models: list[str] | None = None
+    allowed_prompts: list[str] | None = None
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,6 +138,12 @@ class Settings(BaseSettings):
         description="Path to TOML file defining available models",
     )
 
+    # -- Multi-bot config --
+    bots_config_path: str = Field(
+        default="config/bots.toml",
+        description="Path to TOML file defining per-bot configurations",
+    )
+
     # -- Prompts directory --
     prompts_dir: str = Field(
         default="prompts",
@@ -164,7 +187,14 @@ class Settings(BaseSettings):
         return {uid.strip() for uid in self.allowed_users.split(",") if uid.strip()}
 
     def get_all_bot_tokens(self) -> list[str]:
-        """Return all configured Telegram bot tokens."""
+        """Return all configured Telegram bot tokens.
+
+        If ``config/bots.toml`` exists, tokens are loaded from there.
+        Otherwise, falls back to the legacy ``TELEGRAM_BOT_TOKEN*`` env vars.
+        """
+        bot_configs = self.get_bot_configs()
+        if bot_configs:
+            return [bc.token for bc in bot_configs]
         tokens = []
         if self.telegram_bot_token.strip():
             tokens.append(self.telegram_bot_token.strip())
@@ -173,6 +203,60 @@ class Settings(BaseSettings):
         if self.telegram_bot_token_3.strip():
             tokens.append(self.telegram_bot_token_3.strip())
         return tokens
+
+    _bots_cache: list[BotConfig] | None = None
+    _bots_mtime: float = 0.0
+
+    def get_bot_configs(self) -> list[BotConfig]:
+        """Load per-bot configurations from ``config/bots.toml``.
+
+        Returns an empty list if the file doesn't exist (legacy env-var mode).
+        The result is mtime-cached, so edits are picked up automatically.
+        """
+        bots_path = Path(self.bots_config_path)
+        if not bots_path.exists():
+            return []
+
+        try:
+            mtime = bots_path.stat().st_mtime
+        except OSError:
+            return []
+
+        if mtime != self._bots_mtime or self._bots_cache is None:
+            with open(bots_path, "rb") as f:
+                data = tomllib.load(f)
+            self._bots_mtime = mtime
+
+            configs: list[BotConfig] = []
+            for entry in data.get("bots", []):
+                token = entry.get("token", "").strip()
+                if not token:
+                    logger.warning("Skipping bot entry with empty token in bots.toml")
+                    continue
+                configs.append(
+                    BotConfig(
+                        token=token,
+                        allowed_users=entry.get("allowed_users"),
+                        allowed_models=entry.get("allowed_models"),
+                        allowed_prompts=entry.get("allowed_prompts"),
+                    )
+                )
+            self._bots_cache = configs
+            logger.info(
+                "Loaded %d bot(s) from %s (mtime=%.3f)",
+                len(configs),
+                bots_path,
+                mtime,
+            )
+
+        return self._bots_cache
+
+    def get_bot_config_by_token(self, token: str) -> BotConfig | None:
+        """Find the BotConfig for a given token, or None if not found."""
+        for bc in self.get_bot_configs():
+            if bc.token == token:
+                return bc
+        return None
 
     # -- TOML config with mtime-based caching --------------------------------
     # The parsed dict is cached and only re-read when the file's mtime changes,

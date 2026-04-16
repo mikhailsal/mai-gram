@@ -109,7 +109,8 @@ make chat-import CHAT=test-demo FILE=exported_chat.json
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-bot support** | Run up to 3 Telegram bots simultaneously |
+| **Multi-bot support** | Run 20+ Telegram bots with per-bot settings (`config/bots.toml`) |
+| **Per-bot restrictions** | Whitelist users, models, and prompts per bot |
 | **Per-user configuration** | Each user selects their own model and system prompt |
 | **Model whitelist** | Configurable list of allowed models (`config/models.toml`) |
 | **System prompt templates** | Predefined prompts in `prompts/` or custom user input |
@@ -123,18 +124,48 @@ make chat-import CHAT=test-demo FILE=exported_chat.json
 
 ## Configuration
 
+### Multi-Bot Setup (config/bots.toml) — Recommended
+
+For running multiple bots with per-bot restrictions, create `config/bots.toml` (gitignored for security):
+
+```bash
+cp config/bots.toml.example config/bots.toml
+# Edit config/bots.toml: add your bot tokens and settings
+```
+
+```toml
+# Bot for Alice — full access
+[[bots]]
+token = "123456:ABC-DEF..."
+allowed_users = [111111111]
+
+# Bot for Bob — restricted models and prompts
+[[bots]]
+token = "789012:GHI-JKL..."
+allowed_users = [222222222]
+allowed_models = ["google/gemini-2.5-flash"]
+allowed_prompts = ["default", "coder"]
+```
+
+Each bot can have:
+- **`allowed_users`** — Telegram user IDs that may use this bot (omit to use global `ALLOWED_USERS`)
+- **`allowed_models`** — subset of models from `config/models.toml` (omit for all)
+- **`allowed_prompts`** — subset of prompt templates from `prompts/` (omit for all + custom)
+
+When `config/bots.toml` exists, legacy `TELEGRAM_BOT_TOKEN*` env vars are ignored.
+
 ### Environment Variables (.env)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Yes | - | Primary bot token from @BotFather |
-| `TELEGRAM_BOT_TOKEN_2` | No | - | Second bot token |
-| `TELEGRAM_BOT_TOKEN_3` | No | - | Third bot token |
+| `TELEGRAM_BOT_TOKEN` | Legacy | - | Primary bot token (ignored if bots.toml exists) |
+| `TELEGRAM_BOT_TOKEN_2` | Legacy | - | Second bot token (ignored if bots.toml exists) |
+| `TELEGRAM_BOT_TOKEN_3` | Legacy | - | Third bot token (ignored if bots.toml exists) |
 | `OPENROUTER_API_KEY` | Yes | - | OpenRouter API key |
 | `OPENROUTER_BASE_URL` | No | `https://openrouter.ai/api/v1` | API base URL (for proxy) |
 | `LLM_MODEL` | No | `openai/gpt-4o-mini` | Default model |
 | `DATABASE_URL` | No | `sqlite+aiosqlite:///./data/mai_gram.db` | Database URL |
-| `ALLOWED_USERS` | No | - | Comma-separated Telegram user IDs |
+| `ALLOWED_USERS` | No | - | Comma-separated Telegram user IDs (global fallback) |
 | `DEBUG` | No | `false` | Enable debug mode |
 
 ### Model Whitelist (config/models.toml)

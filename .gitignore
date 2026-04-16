@@ -21,8 +21,9 @@ env/
 *.swo
 *~
 
-# Environment variables
+# Environment variables and secrets
 .env
+config/bots.toml
 
 # Database
 *.db
