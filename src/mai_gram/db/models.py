@@ -62,6 +62,15 @@ class Chat(Base):
         default="",
         doc="System prompt text (from template or user-provided)",
     )
+    prompt_name: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        default=None,
+        doc=(
+            "Name of the selected prompt template (e.g. 'default', 'coder'). "
+            "Used to load per-prompt config at runtime. NULL for custom prompts."
+        ),
+    )
     display_name: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,

@@ -1,5 +1,9 @@
-# Display settings for the "creative" prompt.
-# Creative writing benefits from seeing the AI's thought process.
+# Per-prompt config for "creative".
+# Show reasoning to see creative thought process.
+# Disable message history tools — not useful for creative writing.
 
 show_reasoning = true
 show_tool_calls = true
+
+[mcp_servers]
+disabled = ["messages"]

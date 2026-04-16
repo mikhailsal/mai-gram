@@ -24,10 +24,27 @@ else:
 
 @dataclass
 class PromptConfig:
-    """Per-prompt display settings loaded from a companion TOML file."""
+    """Per-prompt display and tool/MCP settings loaded from a companion TOML file.
+
+    Tool filtering uses the same whitelist/blacklist semantics as the global
+    ``[tools]`` section in models.toml:
+    - ``tools_enabled`` (whitelist) — only these tools are available.
+    - ``tools_disabled`` (blacklist) — these tools are blocked.
+    - If both are set, ``tools_enabled`` takes precedence.
+    - ``None`` means "no per-prompt override" → fall back to global config.
+
+    MCP server filtering controls which server groups are registered:
+    - ``mcp_servers_enabled`` — only register these servers (e.g. ["wiki", "exa"]).
+    - ``mcp_servers_disabled`` — skip these servers (e.g. ["messages"]).
+    - Built-in names: "messages", "wiki". External: server names from [mcp] config.
+    """
 
     show_reasoning: bool = True
     show_tool_calls: bool = True
+    tools_enabled: list[str] | None = None
+    tools_disabled: list[str] | None = None
+    mcp_servers_enabled: list[str] | None = None
+    mcp_servers_disabled: list[str] | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -266,11 +283,11 @@ class Settings(BaseSettings):
         return result
 
     def get_prompt_config(self, prompt_name: str) -> PromptConfig:
-        """Load per-prompt display config from a companion TOML file.
+        """Load per-prompt config from a companion TOML file.
 
         Looks for ``<prompts_dir>/<prompt_name>.toml``. If the file doesn't
         exist or can't be parsed, returns the default PromptConfig (everything
-        visible).
+        visible, no tool/MCP overrides).
         """
         config_path = Path(self.prompts_dir) / f"{prompt_name}.toml"
         if not config_path.exists():
@@ -278,9 +295,17 @@ class Settings(BaseSettings):
         try:
             with open(config_path, "rb") as f:
                 data = tomllib.load(f)
+
+            tools = data.get("tools", {})
+            mcp = data.get("mcp_servers", {})
+
             return PromptConfig(
                 show_reasoning=data.get("show_reasoning", True),
                 show_tool_calls=data.get("show_tool_calls", True),
+                tools_enabled=tools.get("enabled"),
+                tools_disabled=tools.get("disabled"),
+                mcp_servers_enabled=mcp.get("enabled"),
+                mcp_servers_disabled=mcp.get("disabled"),
             )
         except Exception:
             logger.warning("Failed to parse prompt config: %s", config_path)

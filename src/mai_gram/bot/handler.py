@@ -591,6 +591,7 @@ class BotHandler:
                 bot_id=bot_id,
                 llm_model=session.selected_model,
                 system_prompt=system_prompt,
+                prompt_name=prompt_name,
                 timezone=self._settings.default_timezone,
                 show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
                 show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
@@ -624,6 +625,62 @@ class BotHandler:
             chat.show_tool_calls,
         )
 
+    # -- MCP manager builder --
+
+    def _build_mcp_manager(
+        self,
+        chat: Chat,
+        message_store: MessageStore,
+        wiki_store: WikiStore,
+    ) -> MCPManager:
+        """Build an MCPManager with tool/server filters from global and per-prompt config."""
+        from mai_gram.config import PromptConfig
+
+        global_enabled, global_disabled = self._settings.get_tool_filter()
+        prompt_cfg: PromptConfig | None = None
+        if chat.prompt_name:
+            prompt_cfg = self._settings.get_prompt_config(chat.prompt_name)
+
+        enabled_tools = global_enabled
+        disabled_tools = global_disabled
+        if prompt_cfg is not None and (
+            prompt_cfg.tools_enabled is not None or prompt_cfg.tools_disabled is not None
+        ):
+            enabled_tools = prompt_cfg.tools_enabled
+            disabled_tools = prompt_cfg.tools_disabled
+
+        mcp_manager = MCPManager(
+            enabled_tools=enabled_tools,
+            disabled_tools=disabled_tools,
+        )
+
+        mcp_servers_enabled = prompt_cfg.mcp_servers_enabled if prompt_cfg else None
+        mcp_servers_disabled = prompt_cfg.mcp_servers_disabled if prompt_cfg else None
+
+        def _is_server_allowed(name: str) -> bool:
+            if mcp_servers_enabled is not None:
+                return name in mcp_servers_enabled
+            if mcp_servers_disabled is not None:
+                return name not in mcp_servers_disabled
+            return True
+
+        if _is_server_allowed("messages"):
+            mcp_manager.register_server(
+                "messages",
+                MessagesMCPServer(message_store, chat.id),
+            )
+        if _is_server_allowed("wiki"):
+            mcp_manager.register_server(
+                "wiki",
+                WikiMCPServer(wiki_store, chat.id),
+            )
+        if self._external_mcp_pool is not None:
+            for srv_name, srv in self._external_mcp_pool.get_all_servers().items():
+                if _is_server_allowed(srv_name):
+                    mcp_manager.register_server(f"ext:{srv_name}", srv)
+
+        return mcp_manager
+
     # -- Conversation --
 
     async def _handle_conversation(self, message: IncomingMessage) -> None:
@@ -656,22 +713,7 @@ class BotHandler:
                 test_mode=self._test_mode,
             )
 
-            enabled_tools, disabled_tools = self._settings.get_tool_filter()
-            mcp_manager = MCPManager(
-                enabled_tools=enabled_tools,
-                disabled_tools=disabled_tools,
-            )
-            mcp_manager.register_server(
-                "messages",
-                MessagesMCPServer(message_store, chat.id),
-            )
-            mcp_manager.register_server(
-                "wiki",
-                WikiMCPServer(wiki_store, chat.id),
-            )
-            if self._external_mcp_pool is not None:
-                for srv_name, srv in self._external_mcp_pool.get_all_servers().items():
-                    mcp_manager.register_server(f"ext:{srv_name}", srv)
+            mcp_manager = self._build_mcp_manager(chat, message_store, wiki_store)
 
             now = datetime.now(timezone.utc)
             chat_tz = chat.timezone
@@ -1350,22 +1392,7 @@ class BotHandler:
                 test_mode=self._test_mode,
             )
 
-            enabled_tools, disabled_tools = self._settings.get_tool_filter()
-            mcp_manager = MCPManager(
-                enabled_tools=enabled_tools,
-                disabled_tools=disabled_tools,
-            )
-            mcp_manager.register_server(
-                "messages",
-                MessagesMCPServer(message_store, chat.id),
-            )
-            mcp_manager.register_server(
-                "wiki",
-                WikiMCPServer(wiki_store, chat.id),
-            )
-            if self._external_mcp_pool is not None:
-                for srv_name, srv in self._external_mcp_pool.get_all_servers().items():
-                    mcp_manager.register_server(f"ext:{srv_name}", srv)
+            mcp_manager = self._build_mcp_manager(chat, message_store, wiki_store)
 
             regen_tz = chat.timezone
             llm_messages = await prompt_builder.build_context(

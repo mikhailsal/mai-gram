@@ -1,5 +1,6 @@
-# Display settings for the "independent" prompt.
-# The independent companion feels more natural without visible reasoning.
+# Per-prompt config for "independent".
+# The independent companion feels more natural without visible reasoning
+# or tool call details. All tools remain available under the hood.
 
 show_reasoning = false
 show_tool_calls = false

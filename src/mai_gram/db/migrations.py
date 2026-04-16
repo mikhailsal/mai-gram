@@ -32,7 +32,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 def register_migration(version: int, description: str) -> Callable[[MigrationFunc], MigrationFunc]:
@@ -111,6 +111,17 @@ async def _migrate_v4(conn: AsyncConnection) -> None:
             text("ALTER TABLE messages ADD COLUMN timezone VARCHAR(50) NOT NULL DEFAULT 'UTC'")
         )
         logger.info("Added messages.timezone column")
+
+
+@register_migration(5, "Add prompt_name column to chats")
+async def _migrate_v5(conn: AsyncConnection) -> None:
+    """Version 5: add Chat.prompt_name for per-prompt config lookup at runtime."""
+    result = await conn.execute(text("PRAGMA table_info(chats)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "prompt_name" not in existing_cols:
+        await conn.execute(text("ALTER TABLE chats ADD COLUMN prompt_name VARCHAR(100)"))
+        logger.info("Added chats.prompt_name column")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

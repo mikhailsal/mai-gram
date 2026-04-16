@@ -1,5 +1,6 @@
-# Display settings for the "coder" prompt.
-# Seeing reasoning and tool calls is valuable when working on code.
+# Per-prompt config for "coder".
+# Full transparency: reasoning and tool calls visible.
+# All tools and MCP servers available.
 
 show_reasoning = true
 show_tool_calls = true

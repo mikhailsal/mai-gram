@@ -1,6 +1,18 @@
-# Display settings for the "default" prompt.
-# These values are applied when a user selects this prompt during /start setup.
-# Users can still toggle them at any time with /reasoning and /toolcalls.
+# Per-prompt config for "default".
+# Applied when a user selects this prompt during /start setup.
+# Users can still toggle display with /reasoning and /toolcalls.
 
 show_reasoning = true
 show_tool_calls = true
+
+# Tool filtering (optional):
+#   enabled = ["wiki_create", ...]   — whitelist, only these tools
+#   disabled = ["search_messages"]   — blacklist, block these tools
+# If neither is set, falls back to the global [tools] in models.toml.
+# [tools]
+
+# MCP server filtering (optional):
+#   enabled = ["wiki", "messages"]   — only register these servers
+#   disabled = ["messages"]          — skip these servers
+# Built-in: "messages", "wiki". External: names from [mcp] config (e.g. "exa").
+# [mcp_servers]
