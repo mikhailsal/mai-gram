@@ -1,0 +1,5 @@
+# Display settings for the "coder" prompt.
+# Seeing reasoning and tool calls is valuable when working on code.
+
+show_reasoning = true
+show_tool_calls = true

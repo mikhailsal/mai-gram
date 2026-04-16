@@ -1,0 +1,5 @@
+# Display settings for the "creative" prompt.
+# Creative writing benefits from seeing the AI's thought process.
+
+show_reasoning = true
+show_tool_calls = true

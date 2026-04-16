@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,15 @@ if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
+
+@dataclass
+class PromptConfig:
+    """Per-prompt display settings loaded from a companion TOML file."""
+
+    show_reasoning: bool = True
+    show_tool_calls: bool = True
+
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +264,27 @@ class Settings(BaseSettings):
             if f.is_file() and f.suffix in (".txt", ".md"):
                 result[f.stem] = f.read_text(encoding="utf-8").strip()
         return result
+
+    def get_prompt_config(self, prompt_name: str) -> PromptConfig:
+        """Load per-prompt display config from a companion TOML file.
+
+        Looks for ``<prompts_dir>/<prompt_name>.toml``. If the file doesn't
+        exist or can't be parsed, returns the default PromptConfig (everything
+        visible).
+        """
+        config_path = Path(self.prompts_dir) / f"{prompt_name}.toml"
+        if not config_path.exists():
+            return PromptConfig()
+        try:
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+            return PromptConfig(
+                show_reasoning=data.get("show_reasoning", True),
+                show_tool_calls=data.get("show_tool_calls", True),
+            )
+        except Exception:
+            logger.warning("Failed to parse prompt config: %s", config_path)
+            return PromptConfig()
 
 
 _settings_instance: Settings | None = None

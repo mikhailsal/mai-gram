@@ -553,7 +553,7 @@ class BotHandler:
             else:
                 prompt_text = self._settings.get_available_prompts().get(value, "")
                 if prompt_text:
-                    await self._finish_setup(message, session, prompt_text)
+                    await self._finish_setup(message, session, prompt_text, prompt_name=value)
                 else:
                     await self._messenger.send_message(
                         OutgoingMessage(
@@ -571,11 +571,18 @@ class BotHandler:
             await self._finish_setup(message, session, message.text.strip())
 
     async def _finish_setup(
-        self, message: IncomingMessage, session: SetupSession, system_prompt: str
+        self,
+        message: IncomingMessage,
+        session: SetupSession,
+        system_prompt: str,
+        *,
+        prompt_name: str | None = None,
     ) -> None:
         chat_id = self._chat_id_for(message)
         user_id = message.user_id
         bot_id = message.bot_id or ""
+
+        prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
 
         async with get_session() as db:
             chat = Chat(
@@ -585,28 +592,36 @@ class BotHandler:
                 llm_model=session.selected_model,
                 system_prompt=system_prompt,
                 timezone=self._settings.default_timezone,
+                show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
+                show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
             )
             db.add(chat)
             await db.commit()
 
         self.clear_setup_session(message.user_id)
 
+        reasoning_status = "ON" if chat.show_reasoning else "OFF"
+        toolcalls_status = "ON" if chat.show_tool_calls else "OFF"
         await self._messenger.send_message(
             OutgoingMessage(
                 text=(
                     f"Chat created!\n"
                     f"Model: {session.selected_model}\n"
-                    f"Prompt: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}\n\n"
-                    "Send a message to start chatting."
+                    f"Prompt: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}\n"
+                    f"Reasoning: {reasoning_status} | Tool calls: {toolcalls_status}\n\n"
+                    "Send a message to start chatting.\n"
+                    "Toggle display with /reasoning and /toolcalls."
                 ),
                 chat_id=message.chat_id,
             )
         )
         logger.info(
-            "Created chat: id=%s model=%s prompt_len=%d",
+            "Created chat: id=%s model=%s prompt_len=%d reasoning=%s toolcalls=%s",
             chat_id,
             session.selected_model,
             len(system_prompt),
+            chat.show_reasoning,
+            chat.show_tool_calls,
         )
 
     # -- Conversation --

@@ -1,0 +1,6 @@
+# Display settings for the "default" prompt.
+# These values are applied when a user selects this prompt during /start setup.
+# Users can still toggle them at any time with /reasoning and /toolcalls.
+
+show_reasoning = true
+show_tool_calls = true

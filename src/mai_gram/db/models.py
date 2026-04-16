@@ -71,13 +71,13 @@ class Chat(Base):
     show_reasoning: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
-        default=False,
+        default=True,
         doc="Whether to display LLM reasoning in Telegram messages",
     )
     show_tool_calls: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
-        default=False,
+        default=True,
         doc="Whether to display tool call details in Telegram messages",
     )
     send_datetime: Mapped[bool] = mapped_column(

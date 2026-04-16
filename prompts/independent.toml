@@ -1,0 +1,5 @@
+# Display settings for the "independent" prompt.
+# The independent companion feels more natural without visible reasoning.
+
+show_reasoning = false
+show_tool_calls = false
