@@ -48,12 +48,20 @@ def get_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
             if db_path and db_path != ":memory:":
                 Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
+        is_sqlite = "sqlite" in database_url
         _engine = create_async_engine(
             database_url,
             echo=echo,
-            # SQLite-specific: enable WAL mode for better concurrency
-            connect_args={"check_same_thread": False} if "sqlite" in database_url else {},
+            connect_args={"check_same_thread": False} if is_sqlite else {},
         )
+
+        if is_sqlite:
+            from sqlalchemy import event
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _register_sqlite_functions(dbapi_conn: object, _rec: object) -> None:
+                dbapi_conn.create_function("unicode_lower", 1, lambda s: s.lower() if s else s)  # type: ignore[attr-defined]
+
         logger.info("Database engine created: %s", _sanitize_url(database_url))
     return _engine
 

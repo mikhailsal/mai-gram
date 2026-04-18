@@ -178,6 +178,9 @@ class ConsoleMessenger(Messenger):
     def register_callback_handler(self, handler: MessageHandler) -> None:
         self._callback_handlers.append(handler)
 
+    def register_document_handler(self, handler: MessageHandler) -> None:
+        pass
+
     async def dispatch_message(self, message: IncomingMessage) -> None:
         """Route a synthetic incoming message through registered handlers."""
         if message.message_type == MessageType.COMMAND:

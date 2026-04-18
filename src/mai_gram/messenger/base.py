@@ -58,6 +58,14 @@ class IncomingMessage:
     bot_id:
         Identifier of the bot that received this message (e.g., Telegram bot username).
         Used to distinguish companions created via different bots by the same human.
+    document_file_id:
+        Platform-specific file identifier for uploaded documents.
+    document_file_name:
+        Original filename of the uploaded document.
+    document_mime_type:
+        MIME type of the uploaded document.
+    document_file_size:
+        Size of the uploaded document in bytes.
     raw:
         The original platform-specific message object for advanced use cases.
     """
@@ -73,6 +81,10 @@ class IncomingMessage:
     callback_data: str | None = None
     timestamp: datetime | None = None
     bot_id: str = ""
+    document_file_id: str | None = None
+    document_file_name: str | None = None
+    document_mime_type: str | None = None
+    document_file_size: int | None = None
     raw: Any = field(default=None, repr=False, compare=False)
 
 
@@ -267,6 +279,32 @@ class Messenger(ABC):
         handler:
             Async function that will be called for callback queries.
         """
+
+    def register_document_handler(self, handler: MessageHandler) -> None:  # noqa: B027
+        """Register a handler for incoming document uploads.
+
+        Not all platforms support document uploads. The default is a no-op.
+
+        Parameters
+        ----------
+        handler:
+            Async function that will be called for document messages.
+        """
+
+    async def download_file(self, file_id: str) -> bytes:
+        """Download a file by its platform-specific file ID.
+
+        Parameters
+        ----------
+        file_id:
+            The platform-specific file identifier.
+
+        Returns
+        -------
+        bytes
+            The raw file content.
+        """
+        raise NotImplementedError("This platform does not support file downloads")
 
     async def set_profile_photo(self, photo_path: str) -> bool:
         """Set the bot's profile photo.

@@ -117,8 +117,8 @@ class MessageStore:
         limit: int = 20,
         oldest_first: bool = False,
     ) -> list[Message]:
-        """Search messages by content using SQL LIKE."""
-        escaped = _escape_like_pattern(query)
+        """Search messages by content (case-insensitive, Unicode-aware)."""
+        escaped = _escape_like_pattern(query.lower())
         pattern = f"%{escaped}%"
         order = asc(Message.id) if oldest_first else desc(Message.id)
         result = await self._session.execute(
@@ -126,7 +126,7 @@ class MessageStore:
             .where(
                 and_(
                     Message.chat_id == chat_id,
-                    Message.content.like(pattern, escape="\\"),
+                    func.unicode_lower(Message.content).like(pattern, escape="\\"),
                 )
             )
             .order_by(order)

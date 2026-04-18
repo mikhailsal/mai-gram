@@ -79,6 +79,12 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     """Create an in-memory async engine for testing."""
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
+    from sqlalchemy import event
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _register_sqlite_functions(dbapi_conn: object, _rec: object) -> None:
+        dbapi_conn.create_function("unicode_lower", 1, lambda s: s.lower() if s else s)  # type: ignore[union-attr]
+
     # Create all tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

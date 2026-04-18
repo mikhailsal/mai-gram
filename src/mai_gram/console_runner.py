@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -311,71 +310,24 @@ async def _print_prompt(
 # -- Import command --
 
 
-def _extract_messages_from_proxy_request(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract messages from an AI Proxy v2 request JSON.
-
-    The proxy format stores the full request/response cycle. Messages come
-    from ``request_body.messages`` and the assistant's response is appended
-    from ``response_body.choices[0].message``.
-    """
-    request_body = data.get("request_body") or data.get("client_request_body")
-    if not isinstance(request_body, dict):
-        raise SystemExit("Error: proxy request JSON has no request_body.")
-
-    messages = request_body.get("messages")
-    if not isinstance(messages, list):
-        raise SystemExit("Error: proxy request_body has no messages array.")
-
-    result = list(messages)
-
-    response_body = data.get("response_body") or data.get("client_response_body")
-    if isinstance(response_body, dict):
-        choices = response_body.get("choices", [])
-        if choices and isinstance(choices[0], dict):
-            resp_message = choices[0].get("message", {})
-            if isinstance(resp_message, dict) and resp_message.get("role") == "assistant":
-                result.append(resp_message)
-
-    timestamp = data.get("timestamp")
-    if isinstance(timestamp, str):
-        for msg in result:
-            if isinstance(msg, dict) and "timestamp" not in msg:
-                msg["timestamp"] = timestamp
-
-    return result
-
-
 async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
-    """Import a dialogue from a JSON file.
+    """Import a dialogue from a JSON file using the shared importer module."""
+    from mai_gram.core.importer import ImportError as ImportParseError
+    from mai_gram.core.importer import parse_import_json, save_imported_messages
 
-    Supports two formats:
-    1. Array of message objects (OpenAI chat completion format):
-       [{"role": "user", "content": "..."}, ...]
-    2. AI Proxy v2 request JSON (object with request_body.messages):
-       {"request_body": {"messages": [...]}, "response_body": {"choices": [...]}}
-
-    Reasoning content is stored in the dedicated reasoning column.
-    """
     path = Path(json_path)
     if not path.exists():
         raise SystemExit(f"Error: file not found: {json_path}")
 
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"Error: invalid JSON: {exc}") from exc
+        file_data = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit(f"Error: cannot read file: {exc}") from exc
 
-    if isinstance(data, dict):
-        if "request_body" in data or "client_request_body" in data:
-            data = _extract_messages_from_proxy_request(data)
-        else:
-            raise SystemExit(
-                "Error: JSON object does not look like a proxy request. "
-                "Expected a JSON array or an object with request_body."
-            )
-
-    if not isinstance(data, list):
-        raise SystemExit("Error: expected a JSON array of message objects.")
+    try:
+        messages_data = parse_import_json(file_data)
+    except ImportParseError as exc:
+        raise SystemExit(f"Error: {exc}") from exc
 
     async with get_session() as session:
         result = await session.execute(select(Chat).where(Chat.id == chat_id))
@@ -384,71 +336,7 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
             raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.")
 
         message_store = MessageStore(session)
-        imported = 0
-
-        for i, entry in enumerate(data):
-            if not isinstance(entry, dict):
-                raise SystemExit(f"Error: entry {i} is not a JSON object.")
-
-            role = entry.get("role")
-            if role not in {"system", "user", "assistant", "tool"}:
-                raise SystemExit(f"Error: entry {i} has invalid role '{role}'.")
-
-            content = entry.get("content", "")
-            if not isinstance(content, str):
-                content = str(content) if content is not None else ""
-
-            reasoning_text: str | None = None
-            reasoning_raw = entry.get("reasoning")
-            if isinstance(reasoning_raw, str) and reasoning_raw.strip():
-                reasoning_text = reasoning_raw.strip()
-
-            tool_calls_raw = entry.get("tool_calls")
-            tool_calls_json: str | None = None
-            if isinstance(tool_calls_raw, list) and tool_calls_raw:
-                tc_list = []
-                for tc in tool_calls_raw:
-                    if isinstance(tc, dict):
-                        func = tc.get("function", tc)
-                        tc_list.append(
-                            {
-                                "id": tc.get("id", f"import_{i}"),
-                                "name": func.get("name", "unknown"),
-                                "arguments": func.get("arguments", "{}"),
-                            }
-                        )
-                if tc_list:
-                    tool_calls_json = json.dumps(tc_list)
-
-            tool_call_id = entry.get("tool_call_id")
-            if tool_call_id is not None and not isinstance(tool_call_id, str):
-                tool_call_id = str(tool_call_id)
-
-            timestamp = None
-            ts_raw = entry.get("timestamp")
-            if isinstance(ts_raw, str):
-                with contextlib.suppress(ValueError):
-                    timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-
-            if role == "system":
-                continue
-
-            try:
-                await message_store.save_message(
-                    chat_id=chat_id,
-                    role=role,
-                    content=content,
-                    timestamp=timestamp,
-                    tool_calls=tool_calls_json,
-                    tool_call_id=tool_call_id,
-                    reasoning=reasoning_text,
-                    show_datetime=False,
-                )
-            except ValueError as exc:
-                logger.warning("Skipping entry %d due to timestamp conflict: %s", i, exc)
-                continue
-
-            imported += 1
+        imported = await save_imported_messages(chat_id, messages_data, message_store)
 
         if imported > 0:
             chat.send_datetime = False

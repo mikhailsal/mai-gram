@@ -109,6 +109,16 @@ def _convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingM
         command = None
         command_args = None
 
+    doc_file_id: str | None = None
+    doc_file_name: str | None = None
+    doc_mime_type: str | None = None
+    doc_file_size: int | None = None
+    if message.document:
+        doc_file_id = message.document.file_id
+        doc_file_name = message.document.file_name
+        doc_mime_type = message.document.mime_type
+        doc_file_size = message.document.file_size
+
     return IncomingMessage(
         platform="telegram",
         chat_id=str(message.chat_id),
@@ -120,6 +130,10 @@ def _convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingM
         command_args=command_args,
         timestamp=message.date,
         bot_id=bot_id,
+        document_file_id=doc_file_id,
+        document_file_name=doc_file_name,
+        document_mime_type=doc_mime_type,
+        document_file_size=doc_file_size,
         raw=update,
     )
 
@@ -197,6 +211,7 @@ class TelegramMessenger(Messenger):
         self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
         self._message_handlers: list[MessageHandler] = []
         self._callback_handlers: list[MessageHandler] = []
+        self._document_handlers: list[MessageHandler] = []
         self._command_handlers: dict[str, MessageHandler] = {}
         self._command_descriptions: dict[str, str] = {}
 
@@ -249,6 +264,15 @@ class TelegramMessenger(Messenger):
         # Register callback query handler
         if self._callback_handlers:
             self._app.add_handler(CallbackQueryHandler(self._handle_callback_query))
+
+        # Register document handler (before general text handler)
+        if self._document_handlers:
+            self._app.add_handler(
+                TGMessageHandler(
+                    filters.Document.ALL,
+                    self._handle_document,
+                )
+            )
 
         # Register general message handler (must be last)
         if self._message_handlers:
@@ -471,6 +495,19 @@ class TelegramMessenger(Messenger):
         """Register a handler for callback queries (button presses)."""
         self._callback_handlers.append(handler)
 
+    def register_document_handler(self, handler: MessageHandler) -> None:
+        """Register a handler for incoming document uploads."""
+        self._document_handlers.append(handler)
+
+    async def download_file(self, file_id: str) -> bytes:
+        """Download a file from Telegram servers by file_id."""
+        if self._app is None:
+            raise MessengerError("Messenger not started")
+
+        tg_file = await self._app.bot.get_file(file_id)
+        byte_array = await tg_file.download_as_bytearray()
+        return bytes(byte_array)
+
     async def set_profile_photo(self, photo_path: str) -> bool:
         """Set the bot's profile photo."""
         if self._app is None:
@@ -500,6 +537,13 @@ class TelegramMessenger(Messenger):
                 await handler(msg)
 
         return wrapper
+
+    async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle incoming document uploads."""
+        msg = _convert_update_to_message(update, bot_id=self._bot_id)
+        if msg:
+            for handler in self._document_handlers:
+                await handler(msg)
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming text messages."""
