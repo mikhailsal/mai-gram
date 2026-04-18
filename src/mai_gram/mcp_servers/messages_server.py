@@ -102,23 +102,26 @@ class MessagesMCPServer:
             MCPToolSpec(
                 name="get_messages_by_timerange",
                 description=(
-                    "Get messages from a specific time period. Useful for exploring "
-                    "conversation history on particular dates. Supports pagination to "
-                    "avoid overloading context — call multiple times with increasing "
-                    "offset to see more messages."
+                    "Get messages from a specific time period. When only start_date "
+                    "is given, returns messages from that date onward (no upper bound). "
+                    "Supports pagination to avoid overloading context — call multiple "
+                    "times with increasing offset to see more messages."
                 ),
                 input_schema={
                     "type": "object",
                     "properties": {
                         "start_date": {
                             "type": "string",
-                            "description": "Start date in YYYY-MM-DD format (inclusive)",
+                            "description": (
+                                "Start date in YYYY-MM-DD format (inclusive). "
+                                "When used alone, returns all messages from this date onward."
+                            ),
                         },
                         "end_date": {
                             "type": "string",
                             "description": (
                                 "End date in YYYY-MM-DD format (inclusive). "
-                                "If not provided, same as start_date."
+                                "If not provided, no upper date limit is applied."
                             ),
                         },
                         "limit": {
@@ -239,8 +242,9 @@ class MessagesMCPServer:
             ) from err
 
         end_date_str = arguments.get("end_date")
+        end_date: date | None = None
         if end_date_str is None:
-            end_date = start_date
+            pass
         elif not isinstance(end_date_str, str):
             raise ValueError("'end_date' must be a string")
         else:
@@ -275,11 +279,11 @@ class MessagesMCPServer:
         )
 
         if not messages:
-            return (
-                f"No messages found for {start_date_str}"
-                + (f" to {end_date_str}" if end_date_str and end_date_str != start_date_str else "")
-                + "."
-            )
+            if end_date_str and end_date_str != start_date_str:
+                return f"No messages found from {start_date_str} to {end_date_str}."
+            if end_date_str is None:
+                return f"No messages found from {start_date_str} onward."
+            return f"No messages found for {start_date_str}."
 
         # Header with pagination info
         showing_end = min(offset + len(messages), total_count)
@@ -296,16 +300,19 @@ class MessagesMCPServer:
     @staticmethod
     def _format_message_with_id(msg: Message) -> str:
         """Format a message with ID, timestamp in its stored timezone, role, and content."""
-        tz_name = getattr(msg, "timezone", "UTC") or "UTC"
-        try:
-            tz: ZoneInfo | timezone = ZoneInfo(tz_name)
-        except (KeyError, ValueError):
-            tz = timezone.utc
-            tz_name = "UTC"
-        ts = msg.timestamp.replace(tzinfo=timezone.utc).astimezone(tz)
-        return (
-            f"[#{msg.id}] [{ts.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}] {msg.role}: {msg.content}"
-        )
+        show_dt = getattr(msg, "show_datetime", True)
+        if show_dt is False:
+            ts_str = "imported, real date unknown"
+        else:
+            tz_name = getattr(msg, "timezone", "UTC") or "UTC"
+            try:
+                tz: ZoneInfo | timezone = ZoneInfo(tz_name)
+            except (KeyError, ValueError):
+                tz = timezone.utc
+                tz_name = "UTC"
+            ts = msg.timestamp.replace(tzinfo=timezone.utc).astimezone(tz)
+            ts_str = f"{ts.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}"
+        return f"[#{msg.id}] [{ts_str}] {msg.role}: {msg.content}"
 
     @staticmethod
     def _format_message(timestamp: datetime, role: str, content: str) -> str:

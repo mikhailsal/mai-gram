@@ -195,7 +195,7 @@ class TestGetMessageContext:
 
 class TestGetMessagesByTimerange:
     async def test_get_messages_by_timerange_basic(self, session: AsyncSession) -> None:
-        """Verify get_messages_by_timerange returns messages for a date."""
+        """Without end_date, returns all messages from start_date onward."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
         await store.save_message(
@@ -207,6 +207,27 @@ class TestGetMessagesByTimerange:
 
         server = MessagesMCPServer(store, chat_id)
         result = await server.call_tool("get_messages_by_timerange", {"start_date": "2026-02-14"})
+
+        assert "msg-day1" in result
+        assert "msg-day2" in result
+        assert "Showing messages 1-2 of 2 total" in result
+
+    async def test_get_messages_by_timerange_single_day(self, session: AsyncSession) -> None:
+        """With end_date == start_date, returns only that day's messages."""
+        chat_id = await _create_companion(session)
+        store = MessageStore(session)
+        await store.save_message(
+            chat_id, "user", "msg-day1", timestamp=datetime(2026, 2, 14, 10, 0)
+        )
+        await store.save_message(
+            chat_id, "user", "msg-day2", timestamp=datetime(2026, 2, 15, 10, 0)
+        )
+
+        server = MessagesMCPServer(store, chat_id)
+        result = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "end_date": "2026-02-14"},
+        )
 
         assert "msg-day1" in result
         assert "msg-day2" not in result
@@ -291,13 +312,13 @@ class TestGetMessagesByTimerange:
         assert "msg-4" in msg_lines[0]  # Newest first
 
     async def test_get_messages_by_timerange_empty(self, session: AsyncSession) -> None:
-        """Verify empty result message."""
+        """Verify empty result message when no end_date is given."""
         chat_id = await _create_companion(session)
         server = MessagesMCPServer(MessageStore(session), chat_id)
 
         result = await server.call_tool("get_messages_by_timerange", {"start_date": "2026-02-14"})
 
-        assert "No messages found" in result
+        assert "No messages found from 2026-02-14 onward" in result
 
     async def test_get_messages_by_timerange_invalid_date(self, session: AsyncSession) -> None:
         """Verify invalid date format raises error."""

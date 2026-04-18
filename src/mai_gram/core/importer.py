@@ -6,10 +6,9 @@ and saves messages to the database via MessageStore.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -102,14 +101,16 @@ async def save_imported_messages(
 ) -> int:
     """Save a list of parsed message dicts to the database.
 
-    Skips system messages. When multiple messages share the same timestamp
-    (common in proxy format where all messages inherit a single timestamp),
-    each subsequent message gets a 1ms increment to maintain chronological order.
+    Skips system messages. Each non-system message receives a timestamp
+    based on the import moment (now) with 1-second increments. Original
+    timestamps from the JSON are ignored. The ``show_datetime=False`` flag
+    tells the formatter to display "[imported, real date unknown]" instead
+    of the synthetic timestamp.
 
     Returns the count of successfully imported messages.
     """
     imported = 0
-    last_saved_ts: datetime | None = None
+    import_base = datetime.now(tz=timezone.utc)
 
     logger.info(
         "save_imported_messages: chat_id=%s, total entries=%d",
@@ -161,28 +162,14 @@ async def save_imported_messages(
         if tool_call_id is not None and not isinstance(tool_call_id, str):
             tool_call_id = str(tool_call_id)
 
-        timestamp = None
-        ts_raw = entry.get("timestamp")
-        if isinstance(ts_raw, str):
-            with contextlib.suppress(ValueError):
-                timestamp = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-
-        if timestamp is not None and last_saved_ts is not None and timestamp <= last_saved_ts:
-            new_ts = last_saved_ts + timedelta(milliseconds=1)
-            logger.debug(
-                "Entry %d: bumping timestamp %s -> %s",
-                i,
-                timestamp.isoformat(),
-                new_ts.isoformat(),
-            )
-            timestamp = new_ts
+        timestamp = import_base + timedelta(seconds=imported)
 
         logger.debug(
             "Entry %d: saving role=%s, content_len=%d, ts=%s",
             i,
             role,
             len(content),
-            timestamp.isoformat() if timestamp else "None",
+            timestamp.isoformat(),
         )
 
         try:
@@ -200,8 +187,6 @@ async def save_imported_messages(
             logger.warning("Skipping entry %d due to timestamp conflict: %s", i, exc)
             continue
 
-        if timestamp is not None:
-            last_saved_ts = timestamp
         imported += 1
         logger.debug("Entry %d saved successfully (imported=%d)", i, imported)
 

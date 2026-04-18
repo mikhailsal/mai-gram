@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
@@ -171,21 +172,28 @@ class TestSaveImportedMessages:
 
     async def test_saves_user_and_assistant(self, session: AsyncSession, chat: Chat) -> None:
         messages_data = [
-            {"role": "user", "content": "Hello", "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "assistant", "content": "Hi!", "timestamp": "2024-01-15T14:30:01Z"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
         ]
         store = MessageStore(session)
+        before = datetime.now(tz=timezone.utc)
         count = await save_imported_messages(chat.id, messages_data, store)
         assert count == 2
 
-        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        result = await session.execute(
+            select(Message).where(Message.chat_id == chat.id).order_by(Message.id)
+        )
         saved = list(result.scalars().all())
         assert len(saved) == 2
+        assert saved[1].timestamp > saved[0].timestamp
+        ts0 = saved[0].timestamp.replace(tzinfo=timezone.utc)
+        assert ts0 >= before
+        assert ts0 - before < timedelta(seconds=5)
 
     async def test_skips_system_messages(self, session: AsyncSession, chat: Chat) -> None:
         messages_data = [
             {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Hello", "timestamp": "2024-01-15T14:30:00Z"},
+            {"role": "user", "content": "Hello"},
         ]
         store = MessageStore(session)
         count = await save_imported_messages(chat.id, messages_data, store)
@@ -195,7 +203,7 @@ class TestSaveImportedMessages:
         messages_data = [
             "not a dict",
             {"role": "invalid_role", "content": "Bad"},
-            {"role": "user", "content": "Good", "timestamp": "2024-01-15T14:30:00Z"},
+            {"role": "user", "content": "Good"},
         ]
         store = MessageStore(session)
         count = await save_imported_messages(chat.id, messages_data, store)
@@ -215,13 +223,11 @@ class TestSaveImportedMessages:
                         },
                     }
                 ],
-                "timestamp": "2024-01-15T14:30:00Z",
             },
             {
                 "role": "tool",
                 "content": "Created.",
                 "tool_call_id": "tc1",
-                "timestamp": "2024-01-15T14:30:01Z",
             },
         ]
         store = MessageStore(session)
@@ -240,7 +246,6 @@ class TestSaveImportedMessages:
                 "role": "assistant",
                 "content": "Answer",
                 "reasoning": "I thought about it.",
-                "timestamp": "2024-01-15T14:30:00Z",
             },
         ]
         store = MessageStore(session)
@@ -253,7 +258,7 @@ class TestSaveImportedMessages:
 
     async def test_show_datetime_is_false(self, session: AsyncSession, chat: Chat) -> None:
         messages_data = [
-            {"role": "user", "content": "Hello", "timestamp": "2024-01-15T14:30:00Z"},
+            {"role": "user", "content": "Hello"},
         ]
         store = MessageStore(session)
         await save_imported_messages(chat.id, messages_data, store)
@@ -262,35 +267,23 @@ class TestSaveImportedMessages:
         saved = list(result.scalars().all())
         assert saved[0].show_datetime is False
 
-    async def test_handles_timestamp_conflicts_gracefully(
-        self, session: AsyncSession, chat: Chat
-    ) -> None:
-        messages_data = [
-            {"role": "user", "content": "First", "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "assistant", "content": "Reply", "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "user", "content": "Second", "timestamp": "2024-01-15T14:30:01Z"},
-        ]
-        store = MessageStore(session)
-        count = await save_imported_messages(chat.id, messages_data, store)
-        assert count == 3
-
     async def test_empty_list_returns_zero(self, session: AsyncSession, chat: Chat) -> None:
         store = MessageStore(session)
         count = await save_imported_messages(chat.id, [], store)
         assert count == 0
 
-    async def test_auto_increments_duplicate_timestamps(
+    async def test_assigns_sequential_import_timestamps(
         self, session: AsyncSession, chat: Chat
     ) -> None:
-        """When all messages share the same timestamp (e.g., proxy format),
-        the importer should auto-increment to maintain chronological order."""
+        """All imported messages get sequential timestamps based on the import moment."""
         messages_data = [
-            {"role": "user", "content": "Msg 1", "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "assistant", "content": "Msg 2", "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "user", "content": "Msg 3", "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "assistant", "content": "Msg 4", "timestamp": "2024-01-15T14:30:00Z"},
+            {"role": "user", "content": "Msg 1"},
+            {"role": "assistant", "content": "Msg 2"},
+            {"role": "user", "content": "Msg 3"},
+            {"role": "assistant", "content": "Msg 4"},
         ]
         store = MessageStore(session)
+        before = datetime.now(tz=timezone.utc)
         count = await save_imported_messages(chat.id, messages_data, store)
         assert count == 4
 
@@ -299,13 +292,38 @@ class TestSaveImportedMessages:
         )
         saved = list(result.scalars().all())
         assert len(saved) == 4
+
         for j in range(1, len(saved)):
-            assert saved[j].timestamp > saved[j - 1].timestamp
+            diff = saved[j].timestamp - saved[j - 1].timestamp
+            assert diff == timedelta(seconds=1)
+
+        ts0 = saved[0].timestamp.replace(tzinfo=timezone.utc)
+        assert ts0 >= before
+        assert ts0 - before < timedelta(seconds=5)
+
+    async def test_ignores_original_timestamps(self, session: AsyncSession, chat: Chat) -> None:
+        """Original timestamps from the JSON are ignored; import date is used instead."""
+        messages_data = [
+            {"role": "user", "content": "Msg 1", "timestamp": "2024-06-15T10:00:00Z"},
+            {"role": "assistant", "content": "Msg 2", "timestamp": "2024-09-20T15:30:00Z"},
+        ]
+        store = MessageStore(session)
+        before = datetime.now(tz=timezone.utc)
+        count = await save_imported_messages(chat.id, messages_data, store)
+        assert count == 2
+
+        result = await session.execute(
+            select(Message).where(Message.chat_id == chat.id).order_by(Message.id)
+        )
+        saved = list(result.scalars().all())
+        ts0 = saved[0].timestamp.replace(tzinfo=timezone.utc)
+        assert ts0 >= before
+        assert saved[0].timestamp.year == before.year
 
     async def test_handles_non_string_content(self, session: AsyncSession, chat: Chat) -> None:
         messages_data = [
-            {"role": "user", "content": None, "timestamp": "2024-01-15T14:30:00Z"},
-            {"role": "assistant", "content": 42, "timestamp": "2024-01-15T14:30:01Z"},
+            {"role": "user", "content": None},
+            {"role": "assistant", "content": 42},
         ]
         store = MessageStore(session)
         count = await save_imported_messages(chat.id, messages_data, store)
