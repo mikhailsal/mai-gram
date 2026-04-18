@@ -34,6 +34,15 @@ python -m mai_gram.main
 4. Select a system prompt (or type your own)
 5. Start chatting!
 
+### Importing Existing Conversations
+
+If you have chat history from another AI tool, you can import it:
+
+- **Via Telegram**: Send `/import`, select a model, upload a `.json` file
+- **Via CLI**: `mai-chat -c test-demo --import-json conversation.json`
+
+See [CONFIGURATION.md](CONFIGURATION.md#dialogue-import) for supported formats.
+
 ## Console Mode
 
 For debugging without Telegram:

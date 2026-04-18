@@ -114,9 +114,16 @@ request JSON.
 | `--wiki` | Show wiki entries |
 | `--repair-wiki` | Sync wiki DB from disk files (see below) |
 | `--list` | List all chats with message counts |
-| `--import-json PATH` | Import dialogue from JSON |
+| `--import-json PATH` | Import dialogue from JSON file |
 | `--real` | Disable test mode transparency notice |
 | `--user-id ID` | Override synthetic user ID |
+
+### Per-prompt tool filtering
+
+When a prompt's `.toml` config restricts tools or MCP servers, those
+restrictions apply in the console CLI the same way as in Telegram. To
+verify which tools are active for a prompt, use `--show-prompt` to
+inspect the assembled context including the tool list.
 
 ### Test companion naming
 

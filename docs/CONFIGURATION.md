@@ -79,6 +79,52 @@ restarting (mtime-based polling every 2 seconds).
 Place `.txt` or `.md` files in the `prompts/` directory. During `/start`,
 users see these as selectable options alongside "Custom (type your own)".
 
+### Per-Prompt Configuration (TOML)
+
+Each prompt template can have a companion `.toml` file with the same
+base name (e.g. `coder.txt` + `coder.toml`). This TOML file controls
+display defaults and tool availability for chats using that prompt.
+
+```toml
+# prompts/coder.toml
+[display]
+show_reasoning = true
+show_tool_calls = true
+send_datetime = false
+
+[tools]
+# disabled = ["wiki_search"]   # blacklist specific tools
+
+[mcp_servers]
+# disabled = ["messages"]      # blacklist MCP server groups
+```
+
+Available settings:
+
+| Section | Key | Type | Description |
+|---------|-----|------|-------------|
+| `[display]` | `show_reasoning` | bool | Show LLM reasoning to the user (default: true) |
+| `[display]` | `show_tool_calls` | bool | Show tool call messages (default: true) |
+| `[display]` | `send_datetime` | bool | Include timestamps in messages sent to the LLM |
+| `[tools]` | `enabled` | list | Whitelist — only these tools are available |
+| `[tools]` | `disabled` | list | Blacklist — these tools are hidden |
+| `[mcp_servers]` | `enabled` | list | Whitelist for MCP server groups (`messages`, `wiki`) |
+| `[mcp_servers]` | `disabled` | list | Blacklist for MCP server groups |
+
+When both `enabled` and `disabled` are set, `enabled` takes precedence.
+Per-prompt config overrides global config when present. Users can still
+toggle display settings at runtime with `/reasoning` and `/toolcalls`.
+
+### Bundled Prompt Templates
+
+| Template | Description |
+|----------|-------------|
+| `default` | General-purpose AI companion with full tool access |
+| `coder` | Programming assistant with reasoning and tool calls visible |
+| `creative` | Creative writing — message history search disabled |
+| `independent` | Companion mode — reasoning and tool calls hidden |
+| `english-teacher` | Language learning via translation exercises with wiki-based progress tracking |
+
 ## LLM Timeout Configuration
 
 The LLM client uses granular timeouts to protect against hung upstream
@@ -95,6 +141,32 @@ If the upstream provider accepts the connection but never responds, the
 request fails after **45 seconds** and is retried (up to 3 total
 attempts). This prevents the old scenario where a hung provider could
 block the bot for 2+ minutes.
+
+## Dialogue Import
+
+mai-gram can import conversation history from other AI tools in two ways:
+
+### Via Telegram (`/import` command)
+
+1. Send `/import` to the bot
+2. Select an LLM model from the inline keyboard
+3. Upload a `.json` file with the conversation
+4. Messages are replayed into the chat with formatting and rate limiting
+
+### Via CLI
+
+```bash
+mai-chat -c test-demo --import-json path/to/messages.json
+```
+
+### Supported Formats
+
+- **OpenAI chat format**: `[{role, content, timestamp?, reasoning?, tool_calls?}]`
+- **AI Proxy v2 request JSON**: automatically detected and converted
+
+Imported messages receive synthetic timestamps (not the original dates)
+and are marked as imported — the AI sees `[imported, real date unknown]`
+instead of potentially misleading original timestamps.
 
 ## Custom OpenRouter URL
 
