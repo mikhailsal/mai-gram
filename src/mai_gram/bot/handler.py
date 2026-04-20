@@ -199,6 +199,11 @@ class BotHandler:
             self._handle_import,
             description="Import conversation from JSON file",
         )
+        messenger.register_command_handler(
+            "resend_last",
+            self._handle_resend_last,
+            description="Re-send last AI message (if truncated)",
+        )
         messenger.register_message_handler(self._handle_message)
         messenger.register_callback_handler(self._handle_callback)
         messenger.register_document_handler(self._handle_document)
@@ -350,6 +355,7 @@ class BotHandler:
             "/datetime - Toggle date/time in messages sent to LLM\n"
             "/reasoning - Toggle display of LLM reasoning\n"
             "/toolcalls - Toggle display of tool call details\n"
+            "/resend_last - Re-send last AI message (if truncated)\n"
             "/help - Show this help message\n\n"
             "Just send a message to chat!"
         )
@@ -448,6 +454,80 @@ class BotHandler:
                 chat_id=message.chat_id,
             )
         )
+
+    # -- Resend last --
+
+    async def _handle_resend_last(self, message: IncomingMessage) -> None:
+        """Re-send the last assistant message from DB (handles truncation)."""
+        self._message_logger.log_incoming(message)
+        if not await self._check_access(message):
+            return
+
+        chat_id = self._chat_id_for(message)
+        tg_chat_id = message.chat_id
+
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="No chat configured. Use /start first.",
+                        chat_id=tg_chat_id,
+                    )
+                )
+                return
+
+            result = await session.execute(
+                select(Message)
+                .where(
+                    Message.chat_id == chat_id,
+                    Message.role == "assistant",
+                    Message.content.isnot(None),
+                    Message.content != "",
+                )
+                .order_by(Message.id.desc())
+                .limit(1)
+            )
+            last_msg = result.scalar_one_or_none()
+
+            if not last_msg:
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="No assistant message found to resend.",
+                        chat_id=tg_chat_id,
+                    )
+                )
+                return
+
+        old_tg_ids = self._response_message_ids.pop(tg_chat_id, [])
+        for old_id in old_tg_ids:
+            await self._messenger.delete_message(tg_chat_id, old_id)
+
+        from mai_gram.messenger.telegram import build_inline_keyboard
+
+        kb_buttons = [[("\U0001f504 Regenerate", "regen")]]
+        kb_buttons[0].append(("\u2702 Cut this & above", f"cut:{last_msg.id}"))
+        action_kb = build_inline_keyboard(kb_buttons)
+
+        show_reasoning = chat.show_reasoning
+        reasoning = last_msg.reasoning if last_msg.reasoning else None
+
+        sent_ids = await self._send_response(
+            tg_chat_id,
+            response_text=last_msg.content,
+            response_reasoning=reasoning,
+            show_reasoning=show_reasoning,
+            keyboard=action_kb,
+        )
+        self._response_message_ids[tg_chat_id] = sent_ids
+
+        if sent_ids:
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text=f"\u2705 Resent last AI message ({len(sent_ids)} part(s)).",
+                    chat_id=tg_chat_id,
+                )
+            )
 
     # -- Import command --
 
@@ -1250,6 +1330,8 @@ class BotHandler:
                 last_display_len = 0
                 edit_interval = 1.0
                 edit_min_chars = 60
+                committed_content_offset = 0
+                reasoning_committed = False
 
                 async for chunk in run_with_tools_stream(
                     self._llm,
@@ -1285,6 +1367,8 @@ class BotHandler:
                         placeholder_msg_id = None
                         last_edit_time = 0.0
                         last_display_len = 0
+                        committed_content_offset = 0
+                        reasoning_committed = False
                         continue
 
                     if chunk.reasoning:
@@ -1295,40 +1379,65 @@ class BotHandler:
                     current_reasoning = "".join(reasoning_parts)
                     current_content = "".join(content_parts)
 
-                    display_text = ""
-                    live_parse_mode: str | None = None
-                    if show_reasoning and current_reasoning.strip():
-                        from mai_gram.core.md_to_telegram import markdown_to_html
-
-                        r_esc = _html.escape(current_reasoning.strip())
-                        c_html = (
-                            markdown_to_html(current_content) if current_content.strip() else ""
-                        )
-                        display_text = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
-                        if c_html:
-                            display_text += f"\n\n{c_html}"
-                        live_parse_mode = "html"
-                    elif current_content.strip():
-                        from mai_gram.core.md_to_telegram import markdown_to_html
-
-                        display_text = markdown_to_html(current_content)
-                        live_parse_mode = "html"
-                    else:
-                        continue
-
                     display_len = len(current_reasoning) + len(current_content)
                     now_mono = time.monotonic()
                     chars_since_edit = display_len - last_display_len
                     time_since_edit = now_mono - last_edit_time
 
                     should_edit = (
-                        display_text.strip()
+                        (current_content.strip() or current_reasoning.strip())
                         and (time_since_edit >= edit_interval or chars_since_edit >= edit_min_chars)
                         and chars_since_edit > 0
                     )
 
-                    if should_edit:
-                        live_text = display_text + " \u258d"
+                    if not should_edit:
+                        continue
+
+                    from mai_gram.core.md_to_telegram import markdown_to_html
+                    from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+
+                    remaining_content = current_content[committed_content_offset:]
+
+                    header_html = ""
+                    if show_reasoning and current_reasoning.strip() and not reasoning_committed:
+                        r_esc = _html.escape(current_reasoning.strip())
+                        header_html = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
+
+                    content_html = (
+                        markdown_to_html(remaining_content) if remaining_content.strip() else ""
+                    )
+
+                    if header_html and content_html:
+                        live_text = header_html + "\n\n" + content_html + " \u258d"
+                    elif header_html:
+                        live_text = header_html + " \u258d"
+                    elif content_html:
+                        live_text = content_html + " \u258d"
+                    else:
+                        continue
+
+                    live_parse_mode: str | None = "html"
+
+                    if len(live_text) > SAFE_MAX_LENGTH:
+                        await self._commit_overflow(
+                            tg_chat_id=tg_chat_id,
+                            header_html=header_html,
+                            reasoning_committed=reasoning_committed,
+                            placeholder_msg_id=placeholder_msg_id,
+                            sent_msg_ids=sent_msg_ids,
+                            remaining_content=remaining_content,
+                            current_content=current_content,
+                            committed_content_offset=committed_content_offset,
+                        )
+                        if header_html and not reasoning_committed:
+                            reasoning_committed = True
+                        new_offset = self._last_commit_offset
+                        new_ph = self._last_commit_placeholder
+                        committed_content_offset = new_offset
+                        placeholder_msg_id = new_ph
+                    else:
+                        raw_fb = remaining_content or current_reasoning
+                        fallback = raw_fb[:SAFE_MAX_LENGTH] + " \u258d"
                         if placeholder_msg_id is None:
                             result = await self._messenger.send_message(
                                 OutgoingMessage(
@@ -1338,10 +1447,9 @@ class BotHandler:
                                 )
                             )
                             if not result.success and live_parse_mode:
-                                fallback = current_content or current_reasoning
                                 result = await self._messenger.send_message(
                                     OutgoingMessage(
-                                        text=fallback + " \u258d",
+                                        text=fallback,
                                         chat_id=tg_chat_id,
                                     )
                                 )
@@ -1355,14 +1463,14 @@ class BotHandler:
                                 parse_mode=live_parse_mode,
                             )
                             if not edit_result.success and live_parse_mode:
-                                fallback = current_content or current_reasoning
                                 await self._messenger.edit_message(
                                     tg_chat_id,
                                     placeholder_msg_id,
-                                    fallback + " \u258d",
+                                    fallback,
                                 )
-                        last_edit_time = now_mono
-                        last_display_len = display_len
+
+                    last_edit_time = now_mono
+                    last_display_len = display_len
 
                 response_text = "".join(content_parts)
                 response_reasoning = "".join(reasoning_parts) or None
@@ -1388,24 +1496,13 @@ class BotHandler:
                 from mai_gram.messenger.telegram import build_inline_keyboard
 
                 err_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
-                if placeholder_msg_id:
-                    await self._messenger.edit_message(
-                        tg_chat_id,
-                        placeholder_msg_id,
-                        error_text,
-                        keyboard=err_kb,
-                    )
-                    sent_msg_ids.append(placeholder_msg_id)
-                else:
-                    r = await self._messenger.send_message(
-                        OutgoingMessage(
-                            text=error_text,
-                            chat_id=tg_chat_id,
-                            keyboard=err_kb,
-                        )
-                    )
-                    if r.success and r.message_id:
-                        sent_msg_ids.append(r.message_id)
+                await self._deliver_error(
+                    tg_chat_id,
+                    error_text,
+                    placeholder_msg_id=placeholder_msg_id,
+                    keyboard=err_kb,
+                    sent_msg_ids=sent_msg_ids,
+                )
 
                 self._response_message_ids[tg_chat_id] = sent_msg_ids
                 return
@@ -1422,47 +1519,43 @@ class BotHandler:
         usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
 
         if placeholder_msg_id and response_text and response_text.strip():
-            if show_reasoning and response_reasoning and response_reasoning.strip():
-                from mai_gram.core.md_to_telegram import markdown_to_html
+            remaining_raw = response_text[committed_content_offset:]
+            if usage_footer:
+                remaining_raw += f"\n\n{usage_footer}"
 
+            header_html = ""
+            if (
+                show_reasoning
+                and response_reasoning
+                and response_reasoning.strip()
+                and not reasoning_committed
+            ):
                 escaped_r = _html.escape(response_reasoning.strip())
-                html_body = markdown_to_html(response_text)
-                footer_html = f"\n\n<i>{_html.escape(usage_footer)}</i>" if usage_footer else ""
-                display_text = (
-                    f"<blockquote expandable>\U0001f4ad Reasoning\n"
-                    f"{escaped_r}</blockquote>\n\n{html_body}{footer_html}"
+                header_html = (
+                    f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_r}</blockquote>"
                 )
-                await self._messenger.edit_message(
-                    tg_chat_id,
-                    placeholder_msg_id,
-                    display_text,
-                    parse_mode="html",
-                    keyboard=action_kb,
-                )
-            else:
-                text_with_footer = response_text
-                if usage_footer:
-                    text_with_footer += f"\n\n{usage_footer}"
-                await self._edit_with_mdv2_fallback(
-                    tg_chat_id,
-                    placeholder_msg_id,
-                    text_with_footer,
-                    keyboard=action_kb,
-                )
+
+            extra_ids = await self._finalize_placeholder(
+                tg_chat_id,
+                placeholder_msg_id,
+                remaining_raw,
+                header_html=header_html,
+                keyboard=action_kb,
+            )
+            sent_msg_ids.extend(extra_ids)
             sent_msg_ids.append(placeholder_msg_id)
         elif response_text and response_text.strip():
             text_with_footer = response_text
             if usage_footer:
                 text_with_footer += f"\n\n{usage_footer}"
-            final_msg_id = await self._send_response(
+            final_msg_ids = await self._send_response(
                 tg_chat_id,
                 response_text=text_with_footer,
                 response_reasoning=response_reasoning,
                 show_reasoning=show_reasoning,
                 keyboard=action_kb,
             )
-            if final_msg_id:
-                sent_msg_ids.append(final_msg_id)
+            sent_msg_ids.extend(final_msg_ids)
 
     @staticmethod
     def _build_intermediate_display(content: str, reasoning: str, show_reasoning: bool) -> str:
@@ -1487,6 +1580,46 @@ class BotHandler:
         if cost is not None and cost > 0:
             parts.append(f"${cost:.4f}")
         return " | ".join(parts)
+
+    async def _deliver_error(
+        self,
+        chat_id: str,
+        error_text: str,
+        *,
+        placeholder_msg_id: str | None,
+        keyboard: object = None,
+        sent_msg_ids: list[str],
+        max_attempts: int = 5,
+    ) -> None:
+        """Deliver an error message to the user with retry on failure."""
+        for attempt in range(1, max_attempts + 1):
+            if placeholder_msg_id:
+                result = await self._messenger.edit_message(
+                    chat_id,
+                    placeholder_msg_id,
+                    error_text,
+                    keyboard=keyboard,
+                )
+                if result.success:
+                    sent_msg_ids.append(placeholder_msg_id)
+                    return
+            else:
+                r = await self._messenger.send_message(
+                    OutgoingMessage(text=error_text, chat_id=chat_id, keyboard=keyboard)
+                )
+                if r.success and r.message_id:
+                    sent_msg_ids.append(r.message_id)
+                    return
+            if attempt < max_attempts:
+                delay = 2.0 * attempt
+                logger.warning(
+                    "Failed to deliver error (attempt %d/%d), retrying in %.0fs",
+                    attempt,
+                    max_attempts,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+        logger.error("Could not deliver error message after %d attempts", max_attempts)
 
     @staticmethod
     def _user_friendly_error(exc: BaseException) -> str:
@@ -1595,6 +1728,262 @@ class BotHandler:
                 keyboard=keyboard,
             )
 
+    async def _commit_overflow(
+        self,
+        *,
+        tg_chat_id: str,
+        header_html: str,
+        reasoning_committed: bool,
+        placeholder_msg_id: str | None,
+        sent_msg_ids: list[str],
+        remaining_content: str,
+        current_content: str,
+        committed_content_offset: int,
+    ) -> None:
+        """Commit overflowing streamed content into finalized messages.
+
+        After calling, read ``self._last_commit_offset`` and
+        ``self._last_commit_placeholder`` for updated state.
+        """
+        from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+
+        if header_html and not reasoning_committed:
+            if placeholder_msg_id:
+                await self._edit_part(tg_chat_id, placeholder_msg_id, header_html)
+                sent_msg_ids.append(placeholder_msg_id)
+            else:
+                mid = await self._send_part(tg_chat_id, header_html)
+                if mid:
+                    sent_msg_ids.append(mid)
+            placeholder_msg_id = None
+
+        while len(remaining_content) > 0:
+            chunk_text = remaining_content[: SAFE_MAX_LENGTH - 200]
+            para_break = chunk_text.rfind("\n\n")
+            if para_break > len(chunk_text) // 3:
+                chunk_text = chunk_text[:para_break]
+            elif (nl := chunk_text.rfind("\n")) > len(chunk_text) // 3:
+                chunk_text = chunk_text[:nl]
+
+            chunk_html = markdown_to_html(chunk_text)
+            if len(chunk_html) > SAFE_MAX_LENGTH:
+                chunk_html = chunk_html[: SAFE_MAX_LENGTH - 10]
+
+            if placeholder_msg_id:
+                await self._edit_part(tg_chat_id, placeholder_msg_id, chunk_html)
+                sent_msg_ids.append(placeholder_msg_id)
+                placeholder_msg_id = None
+            else:
+                mid = await self._send_part(tg_chat_id, chunk_html)
+                if mid:
+                    sent_msg_ids.append(mid)
+
+            committed_content_offset += len(chunk_text)
+            remaining_content = current_content[committed_content_offset:]
+
+            if len(remaining_content) <= SAFE_MAX_LENGTH - 200:
+                break
+
+        new_placeholder: str | None = None
+        if remaining_content.strip():
+            c_html = markdown_to_html(remaining_content) + " \u258d"
+            result = await self._messenger.send_message(
+                OutgoingMessage(
+                    text=c_html,
+                    chat_id=tg_chat_id,
+                    parse_mode="html",
+                )
+            )
+            if result.success:
+                new_placeholder = result.message_id
+
+        self._last_commit_offset = committed_content_offset
+        self._last_commit_placeholder = new_placeholder
+
+    async def _send_part(self, chat_id: str, text: str, *, keyboard: object = None) -> str | None:
+        """Send a single message part, falling back to plain text if HTML fails."""
+        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+
+        result = await self._messenger.send_message(
+            OutgoingMessage(text=text, chat_id=chat_id, parse_mode="html", keyboard=keyboard)
+        )
+        if result.success:
+            return result.message_id
+        error = (result.error or "").lower()
+        if "too long" in error or "message is too long" in error:
+            return await self._send_part_split(chat_id, text, keyboard=keyboard)
+        if "parse entities" in error or "can't find end tag" in error:
+            import re
+
+            plain = re.sub(r"<[^>]+>", "", text)
+            if len(plain) > SAFE_MAX_LENGTH:
+                return await self._send_part_split(chat_id, text, keyboard=keyboard)
+            result = await self._messenger.send_message(
+                OutgoingMessage(text=plain, chat_id=chat_id, keyboard=keyboard)
+            )
+            if result.success:
+                return result.message_id
+        return None
+
+    async def _send_part_split(
+        self, chat_id: str, text: str, *, keyboard: object = None
+    ) -> str | None:
+        """Emergency split: the text exceeded the limit even after our split."""
+        import re
+
+        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH, split_html_safe
+
+        plain = re.sub(r"<[^>]+>", "", text)
+        chunks = split_html_safe(plain, max_len=SAFE_MAX_LENGTH)
+        last_id: str | None = None
+        for i, chunk in enumerate(chunks):
+            is_last = i == len(chunks) - 1
+            result = await self._messenger.send_message(
+                OutgoingMessage(
+                    text=chunk,
+                    chat_id=chat_id,
+                    keyboard=keyboard if is_last else None,
+                )
+            )
+            if result.success and result.message_id:
+                last_id = result.message_id
+        return last_id
+
+    async def _send_long_message(
+        self,
+        chat_id: str,
+        raw_text: str,
+        *,
+        header_html: str = "",
+        keyboard: object = None,
+    ) -> list[str]:
+        """Send a message, splitting the raw markdown BEFORE HTML conversion.
+
+        Each chunk is independently converted to HTML so split boundaries
+        never break HTML tags. If ``header_html`` is small enough it is
+        prepended to the first part; otherwise it is sent as a separate
+        message. The keyboard is attached only to the last part.
+        """
+        from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH, split_html_safe
+
+        sent_ids: list[str] = []
+        header_sent = False
+
+        max_first = SAFE_MAX_LENGTH // 2 if header_html else SAFE_MAX_LENGTH
+        raw_parts = split_html_safe(raw_text, max_len=max_first)
+        if len(raw_parts) > 1:
+            rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
+            raw_parts = [raw_parts[0]] + rest
+
+        for i, raw_part in enumerate(raw_parts):
+            is_last = i == len(raw_parts) - 1
+            html_part = markdown_to_html(raw_part)
+
+            if i == 0 and header_html and not header_sent:
+                combined = header_html + "\n\n" + html_part
+                if len(combined) <= SAFE_MAX_LENGTH:
+                    html_part = combined
+                    header_sent = True
+                else:
+                    hid = await self._send_part(chat_id, header_html)
+                    if hid:
+                        sent_ids.append(hid)
+                    header_sent = True
+
+            msg_id = await self._send_part(
+                chat_id, html_part, keyboard=keyboard if is_last else None
+            )
+            if msg_id:
+                sent_ids.append(msg_id)
+        return sent_ids
+
+    async def _edit_part(
+        self,
+        chat_id: str,
+        message_id: str,
+        text: str,
+        *,
+        keyboard: object = None,
+    ) -> bool:
+        """Edit a message, falling back to plain text if HTML fails."""
+        result = await self._messenger.edit_message(
+            chat_id, message_id, text, parse_mode="html", keyboard=keyboard
+        )
+        if result.success:
+            return True
+        error = (result.error or "").lower()
+        if "parse entities" in error or "can't find end tag" in error:
+            import re
+
+            plain = re.sub(r"<[^>]+>", "", text)
+            result = await self._messenger.edit_message(
+                chat_id, message_id, plain, keyboard=keyboard
+            )
+            return result.success
+        return False
+
+    async def _finalize_placeholder(
+        self,
+        chat_id: str,
+        placeholder_msg_id: str,
+        raw_text: str,
+        *,
+        header_html: str = "",
+        keyboard: object = None,
+    ) -> list[str]:
+        """Edit the placeholder with first chunk, send rest as new messages.
+
+        Splits raw markdown BEFORE HTML conversion to keep tags intact.
+        Returns extra message IDs (placeholder ID is NOT included).
+        """
+        from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH, split_html_safe
+
+        max_first = SAFE_MAX_LENGTH // 2 if header_html else SAFE_MAX_LENGTH
+        raw_parts = split_html_safe(raw_text, max_len=max_first)
+        if len(raw_parts) > 1:
+            rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
+            raw_parts = [raw_parts[0]] + rest
+
+        first_html = markdown_to_html(raw_parts[0])
+        if header_html:
+            combined = header_html + "\n\n" + first_html
+            if len(combined) <= SAFE_MAX_LENGTH:
+                first_html = combined
+            else:
+                await self._edit_part(chat_id, placeholder_msg_id, header_html)
+                extra_ids: list[str] = []
+                for i, raw_part in enumerate(raw_parts):
+                    is_last = i == len(raw_parts) - 1
+                    html_part = markdown_to_html(raw_part)
+                    msg_id = await self._send_part(
+                        chat_id,
+                        html_part,
+                        keyboard=keyboard if is_last else None,
+                    )
+                    if msg_id:
+                        extra_ids.append(msg_id)
+                return extra_ids
+
+        if len(raw_parts) == 1:
+            await self._edit_part(chat_id, placeholder_msg_id, first_html, keyboard=keyboard)
+            return []
+
+        await self._edit_part(chat_id, placeholder_msg_id, first_html)
+
+        extra_ids = []
+        for i, raw_part in enumerate(raw_parts[1:], start=1):
+            is_last = i == len(raw_parts) - 1
+            html_part = markdown_to_html(raw_part)
+            msg_id = await self._send_part(
+                chat_id, html_part, keyboard=keyboard if is_last else None
+            )
+            if msg_id:
+                extra_ids.append(msg_id)
+        return extra_ids
+
     async def _send_response(
         self,
         chat_id: str,
@@ -1603,54 +1992,31 @@ class BotHandler:
         response_reasoning: str | None = None,
         show_reasoning: bool = False,
         keyboard: object = None,
-    ) -> str | None:
-        """Send the final assistant response, optionally with reasoning.
+    ) -> list[str]:
+        """Send the final assistant response, splitting if needed.
 
-        Returns the Telegram message ID of the sent message, or None.
+        Returns a list of Telegram message IDs for all sent parts.
         """
         if not response_text or not response_text.strip():
-            return None
+            return []
 
         import html as _html
 
+        header_html = ""
         if show_reasoning and response_reasoning and response_reasoning.strip():
-            from mai_gram.core.md_to_telegram import markdown_to_html
-
             escaped_r = _html.escape(response_reasoning.strip())
-            html_body = markdown_to_html(response_text)
-            display_text = (
-                f"<blockquote expandable>\U0001f4ad Reasoning\n"
-                f"{escaped_r}</blockquote>\n\n{html_body}"
-            )
-            result = await self._messenger.send_message(
-                OutgoingMessage(
-                    text=display_text,
-                    chat_id=chat_id,
-                    parse_mode="html",
-                    keyboard=keyboard,
-                )
-            )
-        else:
-            msg_id = await self._send_with_mdv2_fallback(
-                chat_id,
-                response_text,
-                keyboard=keyboard,
-            )
-            self._message_logger.log_outgoing(
-                chat_id,
-                response_text,
-                success=msg_id is not None,
-                message_id=msg_id,
-            )
-            return msg_id
+            header_html = f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_r}</blockquote>"
 
+        sent_ids = await self._send_long_message(
+            chat_id, response_text, header_html=header_html, keyboard=keyboard
+        )
         self._message_logger.log_outgoing(
             chat_id,
             response_text,
-            success=result.success,
-            message_id=result.message_id,
+            success=bool(sent_ids),
+            message_id=sent_ids[-1] if sent_ids else None,
         )
-        return result.message_id if result.success else None
+        return sent_ids
 
     # -- Confirmation & Cut-above --
 
@@ -1921,6 +2287,10 @@ class BotHandler:
                 reasoning_parts: list[str] = []
                 last_edit_time = 0.0
                 last_display_len = 0
+                edit_interval = 1.0
+                edit_min_chars = 60
+                committed_content_offset = 0
+                reasoning_committed = False
 
                 async for chunk in run_with_tools_stream(
                     self._llm,
@@ -1956,6 +2326,8 @@ class BotHandler:
                         placeholder_msg_id = None
                         last_edit_time = 0.0
                         last_display_len = 0
+                        committed_content_offset = 0
+                        reasoning_committed = False
                         continue
 
                     if chunk.reasoning:
@@ -1966,40 +2338,63 @@ class BotHandler:
                     current_reasoning = "".join(reasoning_parts)
                     current_content = "".join(content_parts)
 
-                    display_text = ""
-                    live_parse_mode: str | None = None
-                    if show_reasoning and current_reasoning.strip():
-                        from mai_gram.core.md_to_telegram import markdown_to_html
-
-                        r_esc = _html.escape(current_reasoning.strip())
-                        c_html = (
-                            markdown_to_html(current_content) if current_content.strip() else ""
-                        )
-                        display_text = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
-                        if c_html:
-                            display_text += f"\n\n{c_html}"
-                        live_parse_mode = "html"
-                    elif current_content.strip():
-                        from mai_gram.core.md_to_telegram import markdown_to_html
-
-                        display_text = markdown_to_html(current_content)
-                        live_parse_mode = "html"
-                    else:
-                        continue
-
                     display_len = len(current_reasoning) + len(current_content)
                     now_mono = time.monotonic()
                     chars_since_edit = display_len - last_display_len
                     time_since_edit = now_mono - last_edit_time
 
                     should_edit = (
-                        display_text.strip()
-                        and (time_since_edit >= 1.0 or chars_since_edit >= 60)
+                        (current_content.strip() or current_reasoning.strip())
+                        and (time_since_edit >= edit_interval or chars_since_edit >= edit_min_chars)
                         and chars_since_edit > 0
                     )
 
-                    if should_edit:
-                        live_text = display_text + " \u258d"
+                    if not should_edit:
+                        continue
+
+                    from mai_gram.core.md_to_telegram import markdown_to_html
+                    from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+
+                    remaining_content = current_content[committed_content_offset:]
+
+                    header_html = ""
+                    if show_reasoning and current_reasoning.strip() and not reasoning_committed:
+                        r_esc = _html.escape(current_reasoning.strip())
+                        header_html = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
+
+                    content_html = (
+                        markdown_to_html(remaining_content) if remaining_content.strip() else ""
+                    )
+
+                    if header_html and content_html:
+                        live_text = header_html + "\n\n" + content_html + " \u258d"
+                    elif header_html:
+                        live_text = header_html + " \u258d"
+                    elif content_html:
+                        live_text = content_html + " \u258d"
+                    else:
+                        continue
+
+                    live_parse_mode: str | None = "html"
+
+                    if len(live_text) > SAFE_MAX_LENGTH:
+                        await self._commit_overflow(
+                            tg_chat_id=tg_chat_id,
+                            header_html=header_html,
+                            reasoning_committed=reasoning_committed,
+                            placeholder_msg_id=placeholder_msg_id,
+                            sent_msg_ids=sent_msg_ids,
+                            remaining_content=remaining_content,
+                            current_content=current_content,
+                            committed_content_offset=committed_content_offset,
+                        )
+                        if header_html and not reasoning_committed:
+                            reasoning_committed = True
+                        committed_content_offset = self._last_commit_offset
+                        placeholder_msg_id = self._last_commit_placeholder
+                    else:
+                        raw_fb = remaining_content or current_reasoning
+                        fallback = raw_fb[:SAFE_MAX_LENGTH] + " \u258d"
                         if placeholder_msg_id is None:
                             result = await self._messenger.send_message(
                                 OutgoingMessage(
@@ -2009,10 +2404,9 @@ class BotHandler:
                                 )
                             )
                             if not result.success and live_parse_mode:
-                                fallback = current_content or current_reasoning
                                 result = await self._messenger.send_message(
                                     OutgoingMessage(
-                                        text=fallback + " \u258d",
+                                        text=fallback,
                                         chat_id=tg_chat_id,
                                     )
                                 )
@@ -2026,14 +2420,14 @@ class BotHandler:
                                 parse_mode=live_parse_mode,
                             )
                             if not edit_result.success and live_parse_mode:
-                                fallback = current_content or current_reasoning
                                 await self._messenger.edit_message(
                                     tg_chat_id,
                                     placeholder_msg_id,
-                                    fallback + " \u258d",
+                                    fallback,
                                 )
-                        last_edit_time = now_mono
-                        last_display_len = display_len
+
+                    last_edit_time = now_mono
+                    last_display_len = display_len
 
                 response_text = "".join(content_parts)
                 response_reasoning = "".join(reasoning_parts) or None
@@ -2059,24 +2453,13 @@ class BotHandler:
                 from mai_gram.messenger.telegram import build_inline_keyboard
 
                 err_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
-                if placeholder_msg_id:
-                    await self._messenger.edit_message(
-                        tg_chat_id,
-                        placeholder_msg_id,
-                        error_text,
-                        keyboard=err_kb,
-                    )
-                    sent_msg_ids.append(placeholder_msg_id)
-                else:
-                    r = await self._messenger.send_message(
-                        OutgoingMessage(
-                            text=error_text,
-                            chat_id=tg_chat_id,
-                            keyboard=err_kb,
-                        )
-                    )
-                    if r.success and r.message_id:
-                        sent_msg_ids.append(r.message_id)
+                await self._deliver_error(
+                    tg_chat_id,
+                    error_text,
+                    placeholder_msg_id=placeholder_msg_id,
+                    keyboard=err_kb,
+                    sent_msg_ids=sent_msg_ids,
+                )
 
                 self._response_message_ids[tg_chat_id] = sent_msg_ids
                 return
@@ -2093,47 +2476,43 @@ class BotHandler:
         usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
 
         if placeholder_msg_id and response_text and response_text.strip():
-            if show_reasoning and response_reasoning and response_reasoning.strip():
-                from mai_gram.core.md_to_telegram import markdown_to_html
+            remaining_raw = response_text[committed_content_offset:]
+            if usage_footer:
+                remaining_raw += f"\n\n{usage_footer}"
 
+            header_html = ""
+            if (
+                show_reasoning
+                and response_reasoning
+                and response_reasoning.strip()
+                and not reasoning_committed
+            ):
                 escaped_r = _html.escape(response_reasoning.strip())
-                html_body = markdown_to_html(response_text)
-                footer_html = f"\n\n<i>{_html.escape(usage_footer)}</i>" if usage_footer else ""
-                display_text = (
-                    f"<blockquote expandable>\U0001f4ad Reasoning\n"
-                    f"{escaped_r}</blockquote>\n\n{html_body}{footer_html}"
+                header_html = (
+                    f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_r}</blockquote>"
                 )
-                await self._messenger.edit_message(
-                    tg_chat_id,
-                    placeholder_msg_id,
-                    display_text,
-                    parse_mode="html",
-                    keyboard=action_kb,
-                )
-            else:
-                text_with_footer = response_text
-                if usage_footer:
-                    text_with_footer += f"\n\n{usage_footer}"
-                await self._edit_with_mdv2_fallback(
-                    tg_chat_id,
-                    placeholder_msg_id,
-                    text_with_footer,
-                    keyboard=action_kb,
-                )
+
+            extra_ids = await self._finalize_placeholder(
+                tg_chat_id,
+                placeholder_msg_id,
+                remaining_raw,
+                header_html=header_html,
+                keyboard=action_kb,
+            )
+            sent_msg_ids.extend(extra_ids)
             sent_msg_ids.append(placeholder_msg_id)
         elif response_text and response_text.strip():
             text_with_footer = response_text
             if usage_footer:
                 text_with_footer += f"\n\n{usage_footer}"
-            final_msg_id = await self._send_response(
+            final_msg_ids = await self._send_response(
                 tg_chat_id,
                 response_text=text_with_footer,
                 response_reasoning=response_reasoning,
                 show_reasoning=show_reasoning,
                 keyboard=action_kb,
             )
-            if final_msg_id:
-                sent_msg_ids.append(final_msg_id)
+            sent_msg_ids.extend(final_msg_ids)
 
     # -- DB helpers --
 

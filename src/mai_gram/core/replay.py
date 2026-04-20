@@ -13,6 +13,12 @@ import html as _html
 import logging
 from typing import TYPE_CHECKING, Any
 
+from mai_gram.core.telegram_limits import (
+    MAX_CONTENT_LENGTH_FOR_TRUNCATION,
+    SAFE_MAX_LENGTH,
+    TELEGRAM_MAX_LENGTH,
+    split_html_safe,
+)
 from mai_gram.messenger.base import OutgoingMessage
 
 if TYPE_CHECKING:
@@ -23,49 +29,13 @@ logger = logging.getLogger(__name__)
 
 DELAY_SECONDS = 1.5
 PROGRESS_INTERVAL = 25
-TELEGRAM_MAX_LENGTH = 4096
-SAFE_MAX_LENGTH = 4000
-MAX_CONTENT_LENGTH_FOR_TRUNCATION = 3800
 MAX_SEND_RETRIES = 10
 FLOOD_EXTRA_BUFFER = 5
 
 
-def _split_html_safe(text: str, max_len: int = SAFE_MAX_LENGTH) -> list[str]:
-    """Split text into chunks that fit within Telegram's message limit.
-
-    Tries to split at paragraph boundaries (double newline), then single
-    newlines, then spaces, falling back to hard cut as a last resort.
-    """
-    if len(text) <= max_len:
-        return [text]
-
-    chunks: list[str] = []
-    remaining = text
-
-    while remaining:
-        if len(remaining) <= max_len:
-            chunks.append(remaining)
-            break
-
-        cut_at = -1
-        for sep in ("\n\n", "\n", " "):
-            idx = remaining.rfind(sep, 0, max_len)
-            if idx > max_len // 4:
-                cut_at = idx + len(sep)
-                break
-
-        if cut_at <= 0:
-            cut_at = max_len
-
-        chunks.append(remaining[:cut_at])
-        remaining = remaining[cut_at:]
-
-    return chunks
-
-
 def _format_user_message(content: str) -> list[str]:
     """Format a user message, splitting if necessary."""
-    chunks = _split_html_safe(content, MAX_CONTENT_LENGTH_FOR_TRUNCATION)
+    chunks = split_html_safe(content, MAX_CONTENT_LENGTH_FOR_TRUNCATION)
     result: list[str] = []
     for i, chunk in enumerate(chunks):
         escaped = _html.escape(chunk)
@@ -96,7 +66,7 @@ def _format_assistant_message(content: str, reasoning: str | None = None) -> lis
     if not content.strip():
         return [header.rstrip()]
 
-    content_chunks = _split_html_safe(content, MAX_CONTENT_LENGTH_FOR_TRUNCATION)
+    content_chunks = split_html_safe(content, MAX_CONTENT_LENGTH_FOR_TRUNCATION)
     result: list[str] = []
     for i, chunk in enumerate(content_chunks):
         html_chunk = markdown_to_html(chunk)

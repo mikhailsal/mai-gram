@@ -13,9 +13,9 @@ from mai_gram.core.replay import (
     _format_assistant_message,
     _format_user_message,
     _send_with_retry,
-    _split_html_safe,
     replay_imported_messages,
 )
+from mai_gram.core.telegram_limits import split_html_safe
 from mai_gram.messenger.base import OutgoingMessage, SendResult
 
 
@@ -64,38 +64,38 @@ def _make_mock_messenger(*, fail_pattern: list[bool] | None = None) -> AsyncMock
 
 
 class TestSplitHtmlSafe:
-    """Tests for _split_html_safe()."""
+    """Tests for split_html_safe()."""
 
     def test_short_text_not_split(self) -> None:
-        result = _split_html_safe("Hello world", max_len=100)
+        result = split_html_safe("Hello world", max_len=100)
         assert result == ["Hello world"]
 
     def test_splits_at_paragraph_boundary(self) -> None:
         text = "A" * 50 + "\n\n" + "B" * 50
-        result = _split_html_safe(text, max_len=60)
+        result = split_html_safe(text, max_len=60)
         assert len(result) == 2
         assert result[0].startswith("A")
         assert result[1].startswith("B")
 
     def test_splits_at_newline(self) -> None:
         text = "A" * 50 + "\n" + "B" * 50
-        result = _split_html_safe(text, max_len=60)
+        result = split_html_safe(text, max_len=60)
         assert len(result) == 2
 
     def test_splits_at_space(self) -> None:
         text = "word " * 20
-        result = _split_html_safe(text, max_len=30)
+        result = split_html_safe(text, max_len=30)
         assert len(result) > 1
         assert all(len(chunk) <= 30 for chunk in result)
 
     def test_hard_cut_when_no_boundary(self) -> None:
         text = "X" * 200
-        result = _split_html_safe(text, max_len=50)
+        result = split_html_safe(text, max_len=50)
         assert len(result) == 4
         assert all(len(chunk) <= 50 for chunk in result)
 
     def test_empty_text(self) -> None:
-        result = _split_html_safe("")
+        result = split_html_safe("")
         assert result == [""]
 
 
