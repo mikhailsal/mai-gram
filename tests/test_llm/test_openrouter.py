@@ -648,6 +648,87 @@ class TestGenerateStream:
 
         await provider.close()
 
+    async def test_stream_error_without_sse_prefix(
+        self,
+        sample_messages: list[ChatMessage],
+    ) -> None:
+        """Error JSON sent without 'data: ' SSE prefix is still detected."""
+        raw_error = (
+            json.dumps(
+                {
+                    "id": "gen-abc",
+                    "error": {"code": 524, "message": "Provider returned error"},
+                    "model": "unknown",
+                    "choices": [],
+                }
+            )
+            + "\n"
+        )
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=raw_error.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        with pytest.raises(LLMProviderError, match="Provider returned error"):
+            async for _chunk in provider.generate_stream(sample_messages):
+                pass
+
+        await provider.close()
+
+    async def test_stream_empty_response_raises(self, sample_messages: list[ChatMessage]) -> None:
+        """A stream with no data chunks at all raises LLMProviderError."""
+        empty_stream = "data: [DONE]\n\n"
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=empty_stream.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        with pytest.raises(LLMProviderError, match="without any data"):
+            async for _chunk in provider.generate_stream(sample_messages):
+                pass
+
+        await provider.close()
+
+    async def test_stream_completely_empty(self, sample_messages: list[ChatMessage]) -> None:
+        """A stream that returns no lines at all raises LLMProviderError."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=b"",
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        with pytest.raises(LLMProviderError, match="without any data"):
+            async for _chunk in provider.generate_stream(sample_messages):
+                pass
+
+        await provider.close()
+
 
 # ---------------------------------------------------------------------------
 # Token counting

@@ -392,6 +392,8 @@ class OpenRouterProvider(LLMProvider):
                 (_time.monotonic() - _t0) * 1000,
             )
 
+            any_data_received = False
+
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line:
@@ -399,11 +401,30 @@ class OpenRouterProvider(LLMProvider):
 
                 # OpenAI-compatible SSE format: "data: {...}" or "data: [DONE]"
                 if not line.startswith("data: "):
+                    # Some providers/proxies send error JSON without SSE framing.
+                    if line.startswith("{"):
+                        try:
+                            raw = json.loads(line)
+                            if isinstance(raw, dict) and "error" in raw:
+                                err = raw["error"]
+                                if isinstance(err, dict):
+                                    msg = err.get("message", str(err))
+                                else:
+                                    msg = str(err)
+                                raise LLMProviderError(f"Stream error: {msg}")
+                        except json.JSONDecodeError:
+                            pass
+                    logger.debug("Skipping non-SSE line: %s", line[:120])
                     continue
 
                 data_str = line[len("data: ") :]
 
                 if data_str == "[DONE]":
+                    if not any_data_received:
+                        raise LLMProviderError(
+                            "Stream completed without any data — the provider likely "
+                            "returned an error in an unsupported format"
+                        )
                     return
 
                 try:
@@ -411,6 +432,8 @@ class OpenRouterProvider(LLMProvider):
                 except json.JSONDecodeError:
                     logger.debug("Skipping non-JSON SSE line: %s", data_str[:100])
                     continue
+
+                any_data_received = True
 
                 # Handle inline error objects that some providers send
                 if "error" in data:
@@ -482,6 +505,12 @@ class OpenRouterProvider(LLMProvider):
                         cost=cost_val,
                         is_byok=is_byok_val,
                     )
+
+            if not any_data_received:
+                raise LLMProviderError(
+                    "Stream completed without any data — the provider likely "
+                    "returned an error in an unsupported format"
+                )
 
     # -- Response parsing --------------------------------------------------
 

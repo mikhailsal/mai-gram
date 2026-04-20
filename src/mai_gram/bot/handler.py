@@ -1501,6 +1501,9 @@ class BotHandler:
                 response_text = "".join(content_parts)
                 response_reasoning = "".join(reasoning_parts) or None
 
+                if not response_text or not response_text.strip():
+                    raise LLMProviderError("The model returned an empty response")
+
                 saved_msg_id: int | None = None
                 if response_text and response_text.strip():
                     saved_msg = await message_store.save_message(
@@ -2538,6 +2541,9 @@ class BotHandler:
 
                 response_text = "".join(content_parts)
                 response_reasoning = "".join(reasoning_parts) or None
+
+                if not response_text or not response_text.strip():
+                    raise LLMProviderError("The model returned an empty response")
 
                 saved_msg_id: int | None = None
                 if response_text and response_text.strip():
