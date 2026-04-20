@@ -19,9 +19,10 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mai_gram.bot.middleware import MessageLogger, RateLimitConfig, RateLimiter
 from mai_gram.config import get_settings
@@ -304,16 +305,36 @@ class BotHandler:
 
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
-            if chat:
-                await session.delete(chat)
-                await session.commit()
-                msg = "Chat reset. All history deleted. Use /start to create a new one."
-            else:
-                msg = "No chat to reset. Use /start to create one."
 
-        self.clear_setup_session(message.user_id)
+        if not chat:
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text="No chat to reset. Use /start to create one.",
+                    chat_id=message.chat_id,
+                )
+            )
+            return
 
-        await self._messenger.send_message(OutgoingMessage(text=msg, chat_id=message.chat_id))
+        msg_count = 0
+        async with get_session() as session:
+            result = await session.execute(
+                select(func.count(Message.id)).where(Message.chat_id == chat_id)
+            )
+            msg_count = result.scalar() or 0
+
+        confirm_text = (
+            "\u26a0\ufe0f Reset this chat?\n\n"
+            f"Model: {chat.llm_model}\n"
+            f"Messages: {msg_count}\n\n"
+            "All history and wiki entries will be deleted.\n"
+            "A backup archive will be created before deletion."
+        )
+        await self._show_confirmation(
+            message,
+            confirm_text,
+            confirm_data=f"confirm_reset:{chat_id}",
+            cancel_data="cancel_action",
+        )
 
     async def _handle_model(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
@@ -934,6 +955,12 @@ class BotHandler:
             await self._handle_cut_above(
                 message, int(cut_msg_id_str), original_tg_msg_id=original_tg_msg_id
             )
+            return
+
+        if data.startswith("confirm_reset:"):
+            chat_id = data.split(":", 1)[1]
+            await self._delete_callback_message(message)
+            await self._execute_reset(message, chat_id)
             return
 
         if data == "cancel_action":
@@ -2114,6 +2141,90 @@ class BotHandler:
                 chat_id=message.chat_id,
             )
         )
+
+    # -- Reset with backup --
+
+    async def _create_reset_backup(self, chat_id: str) -> Path | None:
+        """Create a zip archive of the data directory before reset.
+
+        Archives the SQLite database and the chat's wiki directory (if any).
+        Returns the path to the created archive, or None on failure.
+        """
+        import shutil
+        import tempfile
+
+        settings = get_settings()
+        data_dir = Path(settings.memory_data_dir)
+        backups_dir = data_dir / "backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        safe_chat_id = chat_id.replace("@", "_at_")
+        archive_name = f"reset_backup_{safe_chat_id}_{timestamp}"
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                staging = Path(tmp_dir) / archive_name
+                staging.mkdir()
+
+                db_url = settings.database_url
+                if "sqlite" in db_url:
+                    db_path = Path(db_url.split("///")[-1])
+                    if db_path.exists():
+                        shutil.copy2(db_path, staging / db_path.name)
+
+                wiki_dir = data_dir / chat_id / "wiki"
+                if wiki_dir.exists():
+                    shutil.copytree(wiki_dir, staging / "wiki")
+
+                archive_path = shutil.make_archive(
+                    str(backups_dir / archive_name), "zip", tmp_dir, archive_name
+                )
+                result = Path(archive_path)
+                logger.info(
+                    "Reset backup created: %s (%.1f KB)",
+                    result,
+                    result.stat().st_size / 1024,
+                )
+                return result
+        except Exception:
+            logger.exception("Failed to create reset backup for chat %s", chat_id)
+            return None
+
+    async def _execute_reset(self, message: IncomingMessage, chat_id: str) -> None:
+        """Create a backup and then delete the chat and all its history."""
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text="\U0001f4be Creating backup...",
+                chat_id=message.chat_id,
+            )
+        )
+
+        backup_path = await self._create_reset_backup(chat_id)
+
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if chat:
+                await session.delete(chat)
+                await session.commit()
+                if backup_path:
+                    msg = (
+                        "\u2705 Chat reset. All history deleted.\n"
+                        f"\U0001f4be Backup saved: {backup_path.name}\n\n"
+                        "Use /start to create a new chat."
+                    )
+                else:
+                    msg = (
+                        "\u2705 Chat reset. All history deleted.\n"
+                        "\u26a0\ufe0f Backup could not be created (check logs).\n\n"
+                        "Use /start to create a new chat."
+                    )
+            else:
+                msg = "Chat was already deleted. Use /start to create a new one."
+
+        self.clear_setup_session(message.user_id)
+
+        await self._messenger.send_message(OutgoingMessage(text=msg, chat_id=message.chat_id))
 
     # -- Regenerate --
 
