@@ -155,6 +155,7 @@ def markdown_to_mdv2(text: str) -> str:
     result = _convert_code_blocks(text, _placeholder)
     result = _convert_inline_code(result, _placeholder)
     result = _replace_latex_symbols(result)
+    result = _convert_horizontal_rules(result, _placeholder)
     result = _convert_headers_mdv2(result, _placeholder)
     result = _convert_lists(result)
     result = _convert_links(result, _placeholder)
@@ -162,16 +163,12 @@ def markdown_to_mdv2(text: str) -> str:
     result = _convert_italic(result, _placeholder)
     result = _convert_strikethrough(result, _placeholder)
 
-    parts = re.split(r"(\x00PH\d+\x00)", result)
-    final_parts = []
-    for part in parts:
-        if part in placeholders:
-            final_parts.append(placeholders[part])
-        else:
-            final_parts.append(_escape_mdv2(part))
+    return _resolve_placeholders(result, placeholders, escape_fn=_escape_mdv2)
 
-    return "".join(final_parts)
 
+_PLACEHOLDER_RE = re.compile(r"(\x00(?:PH|HH)\d+\x00)")
+_HR_CHAR = "\u2500"
+_HR_LINE = _HR_CHAR * 20
 
 _BULLET = "\u2022"
 _INDENT_UNIT = "    "
@@ -184,6 +181,64 @@ def _protect_list_bullets(text: str) -> str:
     This prevents them from being interpreted as bold/italic markers.
     """
     return re.sub(r"^(\s*)[*\-]\s", rf"\1{_BULLET} ", text, flags=re.MULTILINE)
+
+
+def _convert_horizontal_rules(
+    text: str,
+    placeholder: Callable[[str], str],
+) -> str:
+    """Convert markdown horizontal rules (``***``, ``---``, ``___``) to a visual separator.
+
+    Must run BEFORE bold/italic conversion to prevent ``***`` from being
+    misinterpreted as bold-start (``**`` + leftover ``*``).
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        return placeholder(f"\n{_HR_LINE}\n")
+
+    return re.sub(r"^[ \t]*([*\-_])\1{2,}[ \t]*$", _repl, text, flags=re.MULTILINE)
+
+
+def _resolve_placeholders(
+    text: str,
+    placeholders: dict[str, str],
+    *,
+    escape_fn: Callable[[str], str],
+) -> str:
+    """Resolve placeholder tokens, handling nested placeholders.
+
+    Placeholder values may themselves contain placeholder keys (e.g. when
+    bold wraps a region that already had header placeholders). This function
+    resolves them recursively until no placeholders remain.
+    """
+    parts = _PLACEHOLDER_RE.split(text)
+    final_parts: list[str] = []
+    for part in parts:
+        if part in placeholders:
+            final_parts.append(placeholders[part])
+        else:
+            final_parts.append(escape_fn(part))
+
+    result = "".join(final_parts)
+
+    # Resolve any nested placeholders that ended up inside a placeholder value
+    safety = 10
+    while "\x00" in result and safety > 0:
+        safety -= 1
+        parts = _PLACEHOLDER_RE.split(result)
+        new_parts: list[str] = []
+        changed = False
+        for part in parts:
+            if part in placeholders:
+                new_parts.append(placeholders[part])
+                changed = True
+            else:
+                new_parts.append(part)
+        if not changed:
+            break
+        result = "".join(new_parts)
+
+    return result
 
 
 def _convert_lists(text: str) -> str:
@@ -366,6 +421,7 @@ def markdown_to_html(text: str) -> str:
     result = _html_code_blocks(text, _ph)
     result = _html_inline_code(result, _ph)
     result = _replace_latex_symbols(result)
+    result = _convert_horizontal_rules(result, _ph)
     result = _html_headers(result, _ph)
     result = _convert_lists(result)
     result = _html_blockquotes(result, _ph)
@@ -374,15 +430,7 @@ def markdown_to_html(text: str) -> str:
     result = _html_italic(result, _ph)
     result = _html_strikethrough(result, _ph)
 
-    parts = re.split(r"(\x00HH\d+\x00)", result)
-    final_parts = []
-    for part in parts:
-        if part in placeholders:
-            final_parts.append(placeholders[part])
-        else:
-            final_parts.append(_html_mod.escape(part))
-
-    return "".join(final_parts)
+    return _resolve_placeholders(result, placeholders, escape_fn=_html_mod.escape)
 
 
 def _html_headers(text: str, ph: Callable[[str], str]) -> str:

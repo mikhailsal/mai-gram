@@ -290,3 +290,86 @@ class TestExistingFunctionality:
         assert "&lt;" in result
         assert "&amp;" in result
         assert "&gt;" in result
+
+
+# ---------------------------------------------------------------------------
+# Horizontal rule conversion
+# ---------------------------------------------------------------------------
+
+
+class TestHorizontalRules:
+    def test_triple_asterisk(self) -> None:
+        result = markdown_to_html("above\n\n***\n\nbelow")
+        assert "\u2500" in result
+        assert "above" in result
+        assert "below" in result
+
+    def test_triple_dash(self) -> None:
+        result = markdown_to_html("above\n\n---\n\nbelow")
+        assert "\u2500" in result
+
+    def test_triple_underscore(self) -> None:
+        result = markdown_to_html("above\n\n___\n\nbelow")
+        assert "\u2500" in result
+
+    def test_more_than_three(self) -> None:
+        result = markdown_to_html("*****")
+        assert "\u2500" in result
+
+    def test_hr_mdv2(self) -> None:
+        result = markdown_to_mdv2("***")
+        assert "\u2500" in result
+
+    def test_hr_does_not_match_inline_bold(self) -> None:
+        result = markdown_to_html("this is **bold** text")
+        assert "\u2500" not in result
+        assert "<b>bold</b>" in result
+
+
+# ---------------------------------------------------------------------------
+# Critical bug regression: placeholder leaks
+# ---------------------------------------------------------------------------
+
+
+class TestPlaceholderLeaks:
+    """Regression tests for the *** + header placeholder nesting bug."""
+
+    def test_triple_asterisk_before_headers(self) -> None:
+        text = "Intro **bold**.\n\n***\n\n# Title\n\n## Section\n\nBody text"
+        result = markdown_to_html(text)
+        assert "HH" not in result
+        assert "PH" not in result
+        assert "<b>Title</b>" in result
+        assert "<b>Section</b>" in result
+        assert "\u2500" in result
+
+    def test_real_llm_output_pattern(self) -> None:
+        """The exact pattern that caused the bug in production."""
+        text = (
+            "Intro text **bold marker**.\n\n"
+            "***\n\n"
+            "# HEADER ONE\n\n"
+            "## Header Two\n"
+            "**Bold label:**\n"
+            "1.  **S0:** Item one.\n"
+            "2.  **S2:** Item two.\n"
+            "3.  **S1:** Item three.\n\n"
+            "---\n\n"
+            "## Phase 1: Cascade ($\\rightarrow$)\n"
+            "Some text."
+        )
+        result = markdown_to_html(text)
+        assert "HH" not in result
+        assert "\x00" not in result
+        assert "<b>HEADER ONE</b>" in result
+        assert "<b>Header Two</b>" in result
+        assert "<b>Bold label:</b>" in result
+        assert "<b>S0:</b>" in result
+        assert "\u2192" in result
+        assert "\u2500" in result
+
+    def test_no_placeholder_leak_mdv2(self) -> None:
+        text = "***\n\n# Title\n\n## Section"
+        result = markdown_to_mdv2(text)
+        assert "PH" not in result
+        assert "\x00" not in result
