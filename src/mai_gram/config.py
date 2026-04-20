@@ -122,7 +122,7 @@ class Settings(BaseSettings):
         description="Maximum number of wiki entries to include in prompt context",
     )
     short_term_limit: int = Field(
-        default=50,
+        default=500,
         ge=1,
         description="Recent message window size for short-term context",
     )

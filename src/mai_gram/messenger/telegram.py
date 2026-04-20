@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -184,6 +185,15 @@ def build_reply_keyboard(
         one_time_keyboard=one_time,
         resize_keyboard=resize,
     )
+
+
+_RETRY_AFTER_RE = re.compile(r"retry in (\d+)")
+
+
+def _extract_retry_after(error_text: str) -> int:
+    """Parse the retry-after duration from a Telegram flood control error."""
+    match = _RETRY_AFTER_RE.search(error_text)
+    return int(match.group(1)) if match else 30
 
 
 class TelegramMessenger(Messenger):
@@ -395,7 +405,20 @@ class TelegramMessenger(Messenger):
             except TelegramError as e:
                 last_error = e
                 error_str = str(e).lower()
-                # Retry on transient errors (timeouts, network issues)
+
+                if "flood control" in error_str or "too many requests" in error_str:
+                    retry_after = _extract_retry_after(error_str)
+                    logger.warning(
+                        "Flood control hit (attempt %d/%d): retry in %ds",
+                        attempt,
+                        max_retries + 1,
+                        retry_after,
+                    )
+                    if attempt <= max_retries:
+                        await asyncio.sleep(retry_after)
+                        continue
+                    return SendResult(success=False, error=str(e))
+
                 is_transient = "timed out" in error_str or "network" in error_str
                 if is_transient and attempt <= max_retries:
                     logger.warning(
@@ -404,13 +427,12 @@ class TelegramMessenger(Messenger):
                         max_retries + 1,
                         e,
                     )
-                    await asyncio.sleep(1.0 * attempt)  # Exponential backoff
+                    await asyncio.sleep(1.0 * attempt)
                     continue
-                # Non-transient error or max retries reached
+
                 logger.error("Failed to send Telegram message: %s", e)
                 return SendResult(success=False, error=str(e))
 
-        # Should not reach here, but just in case
         logger.error("Failed to send Telegram message after retries: %s", last_error)
         return SendResult(success=False, error=str(last_error) if last_error else "Unknown error")
 

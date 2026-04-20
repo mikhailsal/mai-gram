@@ -32,7 +32,7 @@ class PromptBuilder:
         wiki_store: WikiStore,
         *,
         wiki_context_limit: int = 20,
-        short_term_limit: int = 50,
+        short_term_limit: int = 500,
         max_context_tokens: int = 120_000,
         test_mode: bool = False,
     ) -> None:
@@ -73,6 +73,7 @@ class PromptBuilder:
             llm_history.append(self._message_to_chat_message(msg))
 
         llm_history = self._normalize_conversation(llm_history)
+        loaded_count = len(llm_history)
 
         system_prompt = self._build_system_prompt(
             chat,
@@ -97,6 +98,16 @@ class PromptBuilder:
                     *llm_history,
                 ]
                 token_count = await self._llm.count_tokens(context)
+
+        final_count = len(llm_history)
+        logger.info(
+            "Context for %s: loaded %d msgs (limit=%d), after truncation %d msgs, ~%d tokens",
+            chat.id,
+            loaded_count,
+            self._short_term_limit,
+            final_count,
+            token_count,
+        )
 
         return context
 

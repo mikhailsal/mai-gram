@@ -1,7 +1,9 @@
 """Rate-limited message replay engine for imported conversations.
 
 Sends imported messages to a Telegram chat with proper throttling
-to stay within Telegram Bot API rate limits (~1 msg/sec per chat).
+to stay within Telegram Bot API rate limits.  Handles message splitting
+for content that exceeds Telegram's 4096-char limit, automatic retry
+with backoff on flood-control errors, and strict ordering guarantees.
 """
 
 from __future__ import annotations
@@ -19,42 +21,98 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DELAY_SECONDS = 1.2
+DELAY_SECONDS = 1.5
 PROGRESS_INTERVAL = 25
-MAX_MESSAGE_LENGTH = 4000
+TELEGRAM_MAX_LENGTH = 4096
+SAFE_MAX_LENGTH = 4000
+MAX_CONTENT_LENGTH_FOR_TRUNCATION = 3800
+MAX_SEND_RETRIES = 10
+FLOOD_EXTRA_BUFFER = 5
 
 
-def _format_user_message(content: str) -> str:
-    """Format a user message for display (sent from bot on behalf of user)."""
-    truncated = content[:MAX_MESSAGE_LENGTH]
-    if len(content) > MAX_MESSAGE_LENGTH:
-        truncated += "..."
-    escaped = _html.escape(truncated)
-    return f"\U0001f464 <b>[You]</b>\n<i>{escaped}</i>"
+def _split_html_safe(text: str, max_len: int = SAFE_MAX_LENGTH) -> list[str]:
+    """Split text into chunks that fit within Telegram's message limit.
+
+    Tries to split at paragraph boundaries (double newline), then single
+    newlines, then spaces, falling back to hard cut as a last resort.
+    """
+    if len(text) <= max_len:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+
+        cut_at = -1
+        for sep in ("\n\n", "\n", " "):
+            idx = remaining.rfind(sep, 0, max_len)
+            if idx > max_len // 4:
+                cut_at = idx + len(sep)
+                break
+
+        if cut_at <= 0:
+            cut_at = max_len
+
+        chunks.append(remaining[:cut_at])
+        remaining = remaining[cut_at:]
+
+    return chunks
 
 
-def _format_assistant_message(content: str, reasoning: str | None = None) -> str:
-    """Format an assistant message using the same style as the regular chat handler."""
+def _format_user_message(content: str) -> list[str]:
+    """Format a user message, splitting if necessary."""
+    chunks = _split_html_safe(content, MAX_CONTENT_LENGTH_FOR_TRUNCATION)
+    result: list[str] = []
+    for i, chunk in enumerate(chunks):
+        escaped = _html.escape(chunk)
+        if i == 0:
+            result.append(f"\U0001f464 <b>[You]</b>\n<i>{escaped}</i>")
+        else:
+            result.append(f"<i>{escaped}</i>")
+    return result
+
+
+def _format_assistant_message(content: str, reasoning: str | None = None) -> list[str]:
+    """Format an assistant message, splitting if necessary."""
     from mai_gram.core.md_to_telegram import markdown_to_html
 
-    parts: list[str] = ["\U0001f916 <b>[AI]</b>\n"]
+    header_parts: list[str] = ["\U0001f916 <b>[AI]</b>\n"]
 
     if reasoning and reasoning.strip():
         reasoning_truncated = reasoning[:2000]
         if len(reasoning) > 2000:
             reasoning_truncated += "..."
         escaped_reasoning = _html.escape(reasoning_truncated.strip())
-        parts.append(
+        header_parts.append(
             f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_reasoning}</blockquote>\n\n"
         )
 
-    if content.strip():
-        truncated = content[:MAX_MESSAGE_LENGTH]
-        if len(content) > MAX_MESSAGE_LENGTH:
-            truncated += "..."
-        parts.append(markdown_to_html(truncated))
+    header = "".join(header_parts)
 
-    return "".join(parts)
+    if not content.strip():
+        return [header.rstrip()]
+
+    content_chunks = _split_html_safe(content, MAX_CONTENT_LENGTH_FOR_TRUNCATION)
+    result: list[str] = []
+    for i, chunk in enumerate(content_chunks):
+        html_chunk = markdown_to_html(chunk)
+        if i == 0:
+            result.append(header + html_chunk)
+        else:
+            result.append(html_chunk)
+
+    if result and len(result[0]) > TELEGRAM_MAX_LENGTH:
+        first = result[0]
+        result = [header.rstrip(), markdown_to_html(content_chunks[0])] + result[1:]
+        if len(result[0]) > TELEGRAM_MAX_LENGTH:
+            result[0] = result[0][:SAFE_MAX_LENGTH] + "..."
+        logger.debug("First chunk was %d chars after HTML; split header from body", len(first))
+
+    return result
 
 
 def _format_tool_message(content: str, tool_call_id: str | None = None) -> str:
@@ -72,6 +130,69 @@ def _build_cut_keyboard(db_message_id: int) -> list[list[tuple[str, str]]]:
     return [[("\u2702 Cut this & above", f"cut:{db_message_id}")]]
 
 
+async def _send_with_retry(
+    messenger: Messenger,
+    msg: OutgoingMessage,
+    *,
+    max_retries: int = MAX_SEND_RETRIES,
+    base_delay: float = DELAY_SECONDS,
+) -> bool:
+    """Send a message with unlimited flood-control retry to guarantee ordering.
+
+    Returns True if the message was delivered, False only on permanent failure.
+    """
+    for attempt in range(1, max_retries + 1):
+        result = await messenger.send_message(msg)
+        if result.success:
+            return True
+
+        error = (result.error or "").lower()
+
+        if "too long" in error or "message is too long" in error:
+            logger.error("Message too long even after splitting (%d chars)", len(msg.text))
+            if len(msg.text) > SAFE_MAX_LENGTH:
+                msg = OutgoingMessage(
+                    text=msg.text[:SAFE_MAX_LENGTH] + "...",
+                    chat_id=msg.chat_id,
+                    parse_mode=msg.parse_mode,
+                    keyboard=msg.keyboard,
+                )
+                continue
+            return False
+
+        if "flood control" in error or "too many requests" in error or "429" in error:
+            import re
+
+            match = re.search(r"retry in (\d+)", error)
+            wait = int(match.group(1)) + FLOOD_EXTRA_BUFFER if match else 30
+            logger.warning(
+                "Flood control on replay (attempt %d/%d): waiting %ds",
+                attempt,
+                max_retries,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            continue
+
+        if "timed out" in error or "network" in error:
+            wait = min(2**attempt, 60)
+            logger.warning(
+                "Transient error on replay (attempt %d/%d): %s - waiting %ds",
+                attempt,
+                max_retries,
+                result.error,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            continue
+
+        logger.error("Permanent send failure: %s", result.error)
+        return False
+
+    logger.error("Exhausted %d retries for message send", max_retries)
+    return False
+
+
 async def replay_imported_messages(
     messenger: Messenger,
     tg_chat_id: str,
@@ -84,7 +205,9 @@ async def replay_imported_messages(
     """Replay imported messages to a Telegram chat with rate limiting.
 
     Sends each message with appropriate formatting and delays between sends.
-    Assistant messages get a "Cut this & above" button.
+    Messages exceeding Telegram's limit are split into multiple parts.
+    Flood control errors trigger automatic retry with backoff.
+    Assistant messages get a "Cut this & above" button (on last part).
 
     Returns the number of messages actually sent to Telegram.
     """
@@ -99,12 +222,16 @@ async def replay_imported_messages(
         if m.role in ("user", "assistant") or (m.role == "tool" and show_tool_calls)
     )
 
-    await messenger.send_message(
+    est_minutes = int(displayable_count * delay_seconds / 60) + 1
+    await _send_with_retry(
+        messenger,
         OutgoingMessage(
-            text=f"\U0001f4e5 Replaying {displayable_count} messages from imported history...\n"
-            f"This will take about {int(displayable_count * delay_seconds / 60) + 1} minute(s).",
+            text=(
+                f"\U0001f4e5 Replaying {displayable_count} messages from imported history...\n"
+                f"This will take about {est_minutes} minute(s)."
+            ),
             chat_id=tg_chat_id,
-        )
+        ),
     )
     await asyncio.sleep(delay_seconds)
 
@@ -113,16 +240,19 @@ async def replay_imported_messages(
             continue
 
         if msg.role == "user":
-            text = _format_user_message(msg.content)
-            result = await messenger.send_message(
-                OutgoingMessage(
-                    text=text,
-                    chat_id=tg_chat_id,
-                    parse_mode="html",
+            parts = _format_user_message(msg.content)
+            for part in parts:
+                ok = await _send_with_retry(
+                    messenger,
+                    OutgoingMessage(
+                        text=part,
+                        chat_id=tg_chat_id,
+                        parse_mode="html",
+                    ),
                 )
-            )
-            if result.success:
-                sent_count += 1
+                if ok and part is parts[-1]:
+                    sent_count += 1
+                await asyncio.sleep(delay_seconds)
 
         elif msg.role == "assistant":
             content = msg.content or ""
@@ -133,56 +263,64 @@ async def replay_imported_messages(
                 if show_tool_calls:
                     text = "\U0001f916 <i>[AI tool call]</i>"
                     kb: Any = _build_cut_keyboard(msg.id)
-                    result = await messenger.send_message(
+                    ok = await _send_with_retry(
+                        messenger,
                         OutgoingMessage(
                             text=text,
                             chat_id=tg_chat_id,
                             parse_mode="html",
                             keyboard=kb,
-                        )
+                        ),
                     )
-                    if result.success:
+                    if ok:
                         sent_count += 1
+                    await asyncio.sleep(delay_seconds)
                 continue
 
-            text = _format_assistant_message(content, reasoning)
+            parts = _format_assistant_message(content, reasoning)
             kb = _build_cut_keyboard(msg.id)
-            result = await messenger.send_message(
-                OutgoingMessage(
-                    text=text,
-                    chat_id=tg_chat_id,
-                    parse_mode="html",
-                    keyboard=kb,
+            for i, part in enumerate(parts):
+                is_last = i == len(parts) - 1
+                ok = await _send_with_retry(
+                    messenger,
+                    OutgoingMessage(
+                        text=part,
+                        chat_id=tg_chat_id,
+                        parse_mode="html",
+                        keyboard=kb if is_last else None,
+                    ),
                 )
-            )
-            if result.success:
-                sent_count += 1
+                if ok and is_last:
+                    sent_count += 1
+                await asyncio.sleep(delay_seconds)
 
         elif msg.role == "tool":
             if not show_tool_calls:
                 continue
             text = _format_tool_message(msg.content, msg.tool_call_id)
-            result = await messenger.send_message(
+            ok = await _send_with_retry(
+                messenger,
                 OutgoingMessage(
                     text=text,
                     chat_id=tg_chat_id,
                     parse_mode="html",
-                )
+                ),
             )
-            if result.success:
+            if ok:
                 sent_count += 1
+            await asyncio.sleep(delay_seconds)
         else:
             continue
 
         if sent_count > 0 and sent_count % progress_interval == 0:
-            await messenger.send_message(
+            await _send_with_retry(
+                messenger,
                 OutgoingMessage(
                     text=f"\u23f3 Replay progress: {sent_count}/{displayable_count} messages...",
                     chat_id=tg_chat_id,
-                )
+                ),
             )
-
-        await asyncio.sleep(delay_seconds)
+            await asyncio.sleep(delay_seconds)
 
     last_assistant_id: int | None = None
     for msg in reversed(messages):
@@ -199,11 +337,12 @@ async def replay_imported_messages(
         )
     summary_parts.append("Send a message to continue the conversation.")
 
-    await messenger.send_message(
+    await _send_with_retry(
+        messenger,
         OutgoingMessage(
             text="\n".join(summary_parts),
             chat_id=tg_chat_id,
-        )
+        ),
     )
 
     return sent_count

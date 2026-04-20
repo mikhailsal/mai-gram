@@ -39,7 +39,7 @@ class TestSettings:
         assert settings.allowed_users == ""
         assert settings.memory_data_dir == "./data"
         assert settings.wiki_context_limit == 20
-        assert settings.short_term_limit == 50
+        assert settings.short_term_limit == 500
         assert settings.tool_max_iterations == 5
 
     def test_override_via_constructor(self) -> None:
