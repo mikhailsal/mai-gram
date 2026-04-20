@@ -1193,8 +1193,6 @@ class BotHandler:
     # -- Conversation --
 
     async def _handle_conversation(self, message: IncomingMessage) -> None:
-        import html as _html
-
         chat_id = self._chat_id_for(message)
 
         async with get_session() as session:
@@ -1398,10 +1396,11 @@ class BotHandler:
 
                     remaining_content = current_content[committed_content_offset:]
 
+                    from mai_gram.core.md_to_telegram import format_reasoning_html
+
                     header_html = ""
                     if show_reasoning and current_reasoning.strip() and not reasoning_committed:
-                        r_esc = _html.escape(current_reasoning.strip())
-                        header_html = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
+                        header_html = format_reasoning_html(current_reasoning)
 
                     content_html = (
                         markdown_to_html(remaining_content) if remaining_content.strip() else ""
@@ -1530,10 +1529,9 @@ class BotHandler:
                 and response_reasoning.strip()
                 and not reasoning_committed
             ):
-                escaped_r = _html.escape(response_reasoning.strip())
-                header_html = (
-                    f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_r}</blockquote>"
-                )
+                from mai_gram.core.md_to_telegram import format_reasoning_html
+
+                header_html = format_reasoning_html(response_reasoning, expandable=True)
 
             extra_ids = await self._finalize_placeholder(
                 tg_chat_id,
@@ -2000,12 +1998,11 @@ class BotHandler:
         if not response_text or not response_text.strip():
             return []
 
-        import html as _html
+        from mai_gram.core.md_to_telegram import format_reasoning_html
 
         header_html = ""
         if show_reasoning and response_reasoning and response_reasoning.strip():
-            escaped_r = _html.escape(response_reasoning.strip())
-            header_html = f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_r}</blockquote>"
+            header_html = format_reasoning_html(response_reasoning, expandable=True)
 
         sent_ids = await self._send_long_message(
             chat_id, response_text, header_html=header_html, keyboard=keyboard
@@ -2122,8 +2119,6 @@ class BotHandler:
 
     async def _handle_regenerate(self, message: IncomingMessage) -> None:
         """Handle the regen callback: delete last assistant message, re-generate."""
-        import html as _html
-
         if not message.callback_data:
             return
 
@@ -2357,10 +2352,11 @@ class BotHandler:
 
                     remaining_content = current_content[committed_content_offset:]
 
+                    from mai_gram.core.md_to_telegram import format_reasoning_html
+
                     header_html = ""
                     if show_reasoning and current_reasoning.strip() and not reasoning_committed:
-                        r_esc = _html.escape(current_reasoning.strip())
-                        header_html = f"<blockquote>\U0001f4ad Reasoning\n{r_esc}</blockquote>"
+                        header_html = format_reasoning_html(current_reasoning)
 
                     content_html = (
                         markdown_to_html(remaining_content) if remaining_content.strip() else ""
@@ -2487,10 +2483,9 @@ class BotHandler:
                 and response_reasoning.strip()
                 and not reasoning_committed
             ):
-                escaped_r = _html.escape(response_reasoning.strip())
-                header_html = (
-                    f"<blockquote expandable>\U0001f4ad Reasoning\n{escaped_r}</blockquote>"
-                )
+                from mai_gram.core.md_to_telegram import format_reasoning_html
+
+                header_html = format_reasoning_html(response_reasoning, expandable=True)
 
             extra_ids = await self._finalize_placeholder(
                 tg_chat_id,

@@ -10,6 +10,9 @@ Supported conversions:
 - ```lang\\nblock``` -> ```lang\\nblock``` (MDv2) or <pre>block</pre> (HTML)
 - [text](url) -> [text](url) (MDv2) or <a href="url">text</a> (HTML)
 - ~~strike~~ -> ~strike~ (MDv2) or <s>strike</s> (HTML)
+- # Header -> bold header with separator
+- $\\rightarrow$ and other LaTeX math symbols -> Unicode equivalents
+- Numbered lists (1. item) and nested list indentation
 """
 
 from __future__ import annotations
@@ -22,6 +25,92 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 SPECIAL_CHARS = r"_*[]()~`>#+-=|{}.!\\"
+
+# LaTeX math symbol -> Unicode mapping
+_LATEX_SYMBOLS: dict[str, str] = {
+    r"\rightarrow": "\u2192",
+    r"\leftarrow": "\u2190",
+    r"\Rightarrow": "\u21d2",
+    r"\Leftarrow": "\u21d0",
+    r"\leftrightarrow": "\u2194",
+    r"\Leftrightarrow": "\u21d4",
+    r"\uparrow": "\u2191",
+    r"\downarrow": "\u2193",
+    r"\mapsto": "\u21a6",
+    r"\leq": "\u2264",
+    r"\geq": "\u2265",
+    r"\neq": "\u2260",
+    r"\approx": "\u2248",
+    r"\equiv": "\u2261",
+    r"\sim": "\u223c",
+    r"\pm": "\u00b1",
+    r"\mp": "\u2213",
+    r"\times": "\u00d7",
+    r"\div": "\u00f7",
+    r"\cdot": "\u00b7",
+    r"\infty": "\u221e",
+    r"\partial": "\u2202",
+    r"\nabla": "\u2207",
+    r"\sum": "\u2211",
+    r"\prod": "\u220f",
+    r"\int": "\u222b",
+    r"\sqrt": "\u221a",
+    r"\forall": "\u2200",
+    r"\exists": "\u2203",
+    r"\in": "\u2208",
+    r"\notin": "\u2209",
+    r"\subset": "\u2282",
+    r"\supset": "\u2283",
+    r"\cup": "\u222a",
+    r"\cap": "\u2229",
+    r"\emptyset": "\u2205",
+    r"\land": "\u2227",
+    r"\lor": "\u2228",
+    r"\neg": "\u00ac",
+    r"\alpha": "\u03b1",
+    r"\beta": "\u03b2",
+    r"\gamma": "\u03b3",
+    r"\delta": "\u03b4",
+    r"\epsilon": "\u03b5",
+    r"\theta": "\u03b8",
+    r"\lambda": "\u03bb",
+    r"\mu": "\u03bc",
+    r"\pi": "\u03c0",
+    r"\sigma": "\u03c3",
+    r"\omega": "\u03c9",
+    r"\Delta": "\u0394",
+    r"\Sigma": "\u03a3",
+    r"\Omega": "\u03a9",
+    r"\Pi": "\u03a0",
+    r"\Theta": "\u0398",
+    r"\Lambda": "\u039b",
+}
+
+_LATEX_INLINE_RE = re.compile(r"\$([^$]+?)\$")
+
+
+def _replace_latex_symbols(text: str) -> str:
+    """Replace LaTeX math expressions with Unicode equivalents.
+
+    Handles both inline ``$...$`` and bare ``\\command`` forms.
+    """
+
+    def _replace_inline(m: re.Match[str]) -> str:
+        inner = m.group(1).strip()
+        result = inner
+        for cmd, uni in _LATEX_SYMBOLS.items():
+            result = result.replace(cmd, uni)
+        result = result.strip()
+        if result != inner:
+            return result
+        return m.group(0)
+
+    text = _LATEX_INLINE_RE.sub(_replace_inline, text)
+
+    for cmd, uni in _LATEX_SYMBOLS.items():
+        text = text.replace(cmd, uni)
+
+    return text
 
 
 def _escape_mdv2(text: str) -> str:
@@ -48,7 +137,8 @@ def markdown_to_mdv2(text: str) -> str:
     """Convert standard markdown to Telegram MarkdownV2.
 
     Processes the text in order: code blocks -> inline code ->
-    links -> bold -> italic -> strikethrough -> escape remaining.
+    LaTeX symbols -> headers -> lists -> links -> bold -> italic ->
+    strikethrough -> escape remaining.
     """
     if not text:
         return text
@@ -64,7 +154,9 @@ def markdown_to_mdv2(text: str) -> str:
 
     result = _convert_code_blocks(text, _placeholder)
     result = _convert_inline_code(result, _placeholder)
-    result = _protect_list_bullets(result)
+    result = _replace_latex_symbols(result)
+    result = _convert_headers_mdv2(result, _placeholder)
+    result = _convert_lists(result)
     result = _convert_links(result, _placeholder)
     result = _convert_bold(result, _placeholder)
     result = _convert_italic(result, _placeholder)
@@ -82,6 +174,8 @@ def markdown_to_mdv2(text: str) -> str:
 
 
 _BULLET = "\u2022"
+_INDENT_UNIT = "    "
+_NESTED_BULLETS = ["\u2022", "\u25e6", "\u25aa", "\u25ab"]
 
 
 def _protect_list_bullets(text: str) -> str:
@@ -90,6 +184,58 @@ def _protect_list_bullets(text: str) -> str:
     This prevents them from being interpreted as bold/italic markers.
     """
     return re.sub(r"^(\s*)[*\-]\s", rf"\1{_BULLET} ", text, flags=re.MULTILINE)
+
+
+def _convert_lists(text: str) -> str:
+    """Convert markdown lists with proper indentation for nested items.
+
+    Handles:
+    - Unordered: ``* item``, ``- item`` with nesting via indentation
+    - Numbered: ``1. item``, ``2. item`` with nesting
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+
+    for line in lines:
+        m_bullet = re.match(r"^(\s*)[*\-]\s+(.*)$", line)
+        m_number = re.match(r"^(\s*)(\d+)\.\s+(.*)$", line)
+
+        if m_bullet:
+            indent = m_bullet.group(1)
+            content = m_bullet.group(2)
+            depth = len(indent) // 4 if indent else 0
+            depth = min(depth, len(_NESTED_BULLETS) - 1)
+            bullet = _NESTED_BULLETS[depth]
+            visual_indent = _INDENT_UNIT * depth
+            result.append(f"{visual_indent}{bullet} {content}")
+        elif m_number:
+            indent = m_number.group(1)
+            number = m_number.group(2)
+            content = m_number.group(3)
+            depth = len(indent) // 4 if indent else 0
+            visual_indent = _INDENT_UNIT * depth
+            result.append(f"{visual_indent}{number}. {content}")
+        else:
+            result.append(line)
+
+    return "\n".join(result)
+
+
+def _convert_headers_mdv2(
+    text: str,
+    placeholder: Callable[[str], str],
+) -> str:
+    r"""Convert markdown headers to bold text with a separator line.
+
+    ``# Title`` becomes ``*Title*`` (bold in MDv2) preceded by a blank line.
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        content = m.group(2).strip()
+        escaped = _escape_inside_entity(content, "*")
+        return placeholder(f"\n*{escaped}*\n")
+
+    return re.sub(r"^(#{1,6})\s+(.+)$", _repl, text, flags=re.MULTILINE)
 
 
 def _convert_code_blocks(
@@ -219,7 +365,9 @@ def markdown_to_html(text: str) -> str:
 
     result = _html_code_blocks(text, _ph)
     result = _html_inline_code(result, _ph)
-    result = _protect_list_bullets(result)
+    result = _replace_latex_symbols(result)
+    result = _html_headers(result, _ph)
+    result = _convert_lists(result)
     result = _html_blockquotes(result, _ph)
     result = _html_links(result, _ph)
     result = _html_bold(result, _ph)
@@ -235,6 +383,20 @@ def markdown_to_html(text: str) -> str:
             final_parts.append(_html_mod.escape(part))
 
     return "".join(final_parts)
+
+
+def _html_headers(text: str, ph: Callable[[str], str]) -> str:
+    """Convert markdown headers to bold HTML with visual separation.
+
+    ``# Title`` becomes ``<b>Title</b>`` preceded by a blank line.
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        content = m.group(2).strip()
+        escaped = _html_mod.escape(content)
+        return ph(f"\n<b>{escaped}</b>\n")
+
+    return re.sub(r"^(#{1,6})\s+(.+)$", _repl, text, flags=re.MULTILINE)
 
 
 def _html_blockquotes(text: str, ph: Callable[[str], str]) -> str:
@@ -336,3 +498,23 @@ def _html_strikethrough(text: str, ph: Callable[[str], str]) -> str:
         return ph(f"<s>{m.group(1)}</s>")
 
     return re.sub(r"~~(.+?)~~", _repl, text, flags=re.DOTALL)
+
+
+# ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+
+def format_reasoning_html(reasoning: str, *, expandable: bool = False) -> str:
+    """Format reasoning text as a Telegram HTML blockquote with parsed markdown.
+
+    Applies markdown-to-HTML conversion to the reasoning content so that
+    list items, bold/italic, nested structures, and LaTeX symbols render
+    correctly inside the blockquote.
+    """
+    if not reasoning or not reasoning.strip():
+        return ""
+
+    inner_html = markdown_to_html(reasoning.strip())
+    tag = "blockquote expandable" if expandable else "blockquote"
+    return f"<{tag}>\U0001f4ad Reasoning\n{inner_html}</{tag.split()[0]}>"
