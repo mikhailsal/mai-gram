@@ -2238,6 +2238,12 @@ class BotHandler:
 
         chat_id = self._chat_id_for(message)
 
+        # Determine whether trailing messages form a tool chain that should
+        # be preserved (assistant with tool_calls + tool results).  When
+        # tools already ran and only the final LLM response failed, we must
+        # keep the tool chain so the LLM can simply retry the text response
+        # without re-executing side-effecting tools (e.g. wiki_create).
+        has_tool_chain = False
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
             if not chat:
@@ -2245,24 +2251,34 @@ class BotHandler:
 
             message_store = MessageStore(session)
 
-            recent = await message_store.get_recent(chat.id, limit=5)
+            recent = await message_store.get_recent(chat.id, limit=20)
             recent_sorted = sorted(recent, key=lambda m: m.id)
 
-            to_delete: list[Message] = []
+            trailing: list[Message] = []
             for msg in reversed(recent_sorted):
                 if msg.role in ("assistant", "tool"):
-                    to_delete.append(msg)
+                    trailing.append(msg)
                 else:
                     break
 
-            for msg in to_delete:
-                await session.delete(msg)
-            await session.flush()
+            has_tool_results = any(m.role == "tool" for m in trailing)
+            has_tool_call_assistant = any(m.role == "assistant" and m.tool_calls for m in trailing)
+            has_tool_chain = has_tool_results and has_tool_call_assistant
 
-        # Delete intermediate messages (tool calls, results, intermediate content)
-        prev_msg_ids = self._response_message_ids.pop(message.chat_id, [])
-        for mid in prev_msg_ids:
-            await self._messenger.delete_message(message.chat_id, mid)
+            if not has_tool_chain:
+                for msg in trailing:
+                    await session.delete(msg)
+                await session.flush()
+
+        if has_tool_chain:
+            # Keep tool chain in DB; only delete the error/button message
+            # from Telegram, not the tool call display messages.
+            self._response_message_ids.pop(message.chat_id, None)
+        else:
+            # Normal regeneration: delete intermediate Telegram messages
+            prev_msg_ids = self._response_message_ids.pop(message.chat_id, [])
+            for mid in prev_msg_ids:
+                await self._messenger.delete_message(message.chat_id, mid)
 
         # Delete the Telegram message with the regen button
         if message.raw and hasattr(message.raw, "callback_query"):
@@ -2270,8 +2286,6 @@ class BotHandler:
             if cb_msg:
                 await self._messenger.delete_message(message.chat_id, str(cb_msg.message_id))
 
-        # Build a synthetic message to re-trigger the conversation pipeline
-        # We need the last user message to reconstruct context
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
             if not chat:
@@ -2281,7 +2295,8 @@ class BotHandler:
             wiki_store = WikiStore(session, data_dir=self._memory_data_dir)
 
             recent = await message_store.get_recent(chat.id, limit=1)
-            if not recent or recent[0].role != "user":
+            last_role = recent[0].role if recent else None
+            if last_role not in ("user", "tool"):
                 await self._messenger.send_message(
                     OutgoingMessage(
                         text="Cannot regenerate: no user message found.",
