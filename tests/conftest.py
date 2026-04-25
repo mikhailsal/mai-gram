@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 # In-memory SQLite URL for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-_DEFAULT_MAX_XDIST_WORKERS = 4
+_DEFAULT_MAX_XDIST_WORKERS = 6
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
