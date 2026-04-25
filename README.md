@@ -117,6 +117,10 @@ mai-chat -c test-demo --start --model openai/gpt-4o-mini --prompt default
 # Chat
 mai-chat -c test-demo "What is 2+2?"
 
+# Slash commands
+mai-chat -c test-demo --command help
+mai-chat -c test-demo --command "timezone Europe/Moscow"
+
 # Inspect
 mai-chat -c test-demo --history
 mai-chat -c test-demo --wiki

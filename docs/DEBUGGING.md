@@ -32,6 +32,16 @@ survive across separate process runs. Once a chat is created, the model
 and prompt are persisted in the database — subsequent calls only need
 the chat ID.
 
+### Dispatch slash commands
+
+Use `--command` to exercise the real command handler path from the CLI:
+
+```bash
+mai-chat -c test-myfeature --command help
+mai-chat -c test-myfeature --command "timezone Europe/Moscow"
+mai-chat -c test-myfeature --command reasoning
+```
+
 ### Sending messages
 
 ```bash
@@ -104,6 +114,7 @@ request JSON.
 |------|-------------|
 | `-c ID` | Set chat ID (remembered for future runs) |
 | `--start` | Run /start setup flow |
+| `--command CMD` | Dispatch a slash command (`name` or `name args...`) |
 | `--model MODEL` | Model ID for setup (use with `--start`) |
 | `--prompt NAME` | Prompt template name for setup (use with `--start`) |
 | `--cb DATA` | Dispatch a callback (button press), repeatable |

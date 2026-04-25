@@ -2196,6 +2196,8 @@ class BotHandler:
 
     async def _execute_reset(self, message: IncomingMessage, chat_id: str) -> None:
         """Create a backup and then delete the chat and all its history."""
+        import shutil
+
         await self._messenger.send_message(
             OutgoingMessage(
                 text="\U0001f4be Creating backup...",
@@ -2210,6 +2212,9 @@ class BotHandler:
             if chat:
                 await session.delete(chat)
                 await session.commit()
+                chat_data_dir = Path(self._memory_data_dir) / chat_id
+                if chat_data_dir.exists():
+                    shutil.rmtree(chat_data_dir, ignore_errors=True)
                 if backup_path:
                     msg = (
                         "\u2705 Chat reset. All history deleted.\n"

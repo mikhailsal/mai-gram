@@ -14,12 +14,20 @@ from sqlalchemy import func as sql_func
 from sqlalchemy import select
 
 from mai_gram.bot.handler import BotHandler
-from mai_gram.config import get_settings
+from mai_gram.config import Settings, get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db import close_db, get_session, init_db, run_migrations
 from mai_gram.db.models import Chat, Message
 from mai_gram.debug import LLMLoggerProvider
 from mai_gram.llm.openrouter import OpenRouterProvider
+from mai_gram.llm.provider import (
+    ChatMessage,
+    LLMAuthenticationError,
+    LLMProvider,
+    LLMResponse,
+    StreamChunk,
+    ToolDefinition,
+)
 from mai_gram.memory.knowledge_base import WikiStore
 from mai_gram.memory.messages import MessageStore
 from mai_gram.messenger.base import IncomingMessage, MessageType
@@ -28,9 +36,51 @@ from mai_gram.messenger.console import ConsoleMessenger
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from mai_gram.llm.provider import LLMProvider
-
 logger = logging.getLogger(__name__)
+
+
+class _OfflineCLIProvider(LLMProvider):
+    """Minimal provider for command-only CLI flows that do not hit the network."""
+
+    async def generate(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> LLMResponse:
+        del messages, model, temperature, max_tokens, tools, tool_choice, extra_params
+        raise LLMAuthenticationError("OpenRouter API key must not be empty")
+
+    async def generate_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
+    ) -> Any:
+        del messages, model, temperature, max_tokens, tools, tool_choice, extra_params
+        raise LLMAuthenticationError("OpenRouter API key must not be empty")
+        yield StreamChunk(content="")
+
+    async def count_tokens(self, messages: list[ChatMessage], *, model: str | None = None) -> int:
+        del model
+        total_chars = 0
+        for msg in messages:
+            total_chars += 16
+            total_chars += len(msg.content)
+        return total_chars // 4
+
+    async def close(self) -> None:
+        return None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -49,6 +99,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dispatch a callback payload (button press). Can be repeated.",
     )
     parser.add_argument("--start", action="store_true", help="Dispatch /start command.")
+    parser.add_argument(
+        "--command",
+        metavar="COMMAND",
+        help=(
+            "Dispatch an arbitrary slash command. Accepts 'name' or "
+            "'name args...'; for example: --command 'timezone Europe/Moscow'."
+        ),
+    )
     parser.add_argument("--history", action="store_true", help="Show conversation history.")
     parser.add_argument("--wiki", action="store_true", help="Show wiki entries.")
     parser.add_argument("--show-prompt", action="store_true", help="Print assembled LLM prompt.")
@@ -153,6 +211,22 @@ def _resolve_user_id(args: argparse.Namespace, settings: object) -> str:
     return "console-user"
 
 
+def _parse_command_text(raw_command: str) -> tuple[str, str | None]:
+    command_text = raw_command.strip()
+    if not command_text:
+        raise SystemExit("Error: --command requires a command name.")
+
+    if command_text.startswith("/"):
+        command_text = command_text[1:]
+
+    command, _, remainder = command_text.partition(" ")
+    command = command.strip()
+    command_args = remainder.strip() or None
+    if not command:
+        raise SystemExit("Error: --command requires a command name.")
+    return command, command_args
+
+
 # -- Display commands --
 
 
@@ -249,6 +323,7 @@ async def _print_prompt(
     chat_id: str,
     data_dir: str,
     llm: LLMProvider,
+    settings: Settings,
     *,
     test_mode: bool = True,
 ) -> None:
@@ -274,11 +349,40 @@ async def _print_prompt(
         context = await prompt_builder.build_context(
             chat,
             send_datetime=chat.send_datetime,
+            chat_timezone=chat.timezone,
+            cut_above_message_id=chat.cut_above_message_id,
         )
 
-        mcp_manager = MCPManager()
-        mcp_manager.register_server("wiki", WikiMCPServer(wiki_store, chat_id))
-        mcp_manager.register_server("messages", MessagesMCPServer(message_store, chat_id))
+        global_enabled, global_disabled = settings.get_tool_filter()
+        prompt_cfg = settings.get_prompt_config(chat.prompt_name) if chat.prompt_name else None
+
+        enabled_tools = global_enabled
+        disabled_tools = global_disabled
+        if prompt_cfg is not None and (
+            prompt_cfg.tools_enabled is not None or prompt_cfg.tools_disabled is not None
+        ):
+            enabled_tools = prompt_cfg.tools_enabled
+            disabled_tools = prompt_cfg.tools_disabled
+
+        mcp_manager = MCPManager(
+            enabled_tools=enabled_tools,
+            disabled_tools=disabled_tools,
+        )
+
+        mcp_servers_enabled = prompt_cfg.mcp_servers_enabled if prompt_cfg else None
+        mcp_servers_disabled = prompt_cfg.mcp_servers_disabled if prompt_cfg else None
+
+        def _is_server_allowed(name: str) -> bool:
+            if mcp_servers_enabled is not None:
+                return name in mcp_servers_enabled
+            if mcp_servers_disabled is not None:
+                return name not in mcp_servers_disabled
+            return True
+
+        if _is_server_allowed("wiki"):
+            mcp_manager.register_server("wiki", WikiMCPServer(wiki_store, chat_id))
+        if _is_server_allowed("messages"):
+            mcp_manager.register_server("messages", MessagesMCPServer(message_store, chat_id))
         tools = await mcp_manager.list_all_tools()
 
     print("--- Prompt Preview ---")
@@ -337,27 +441,55 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
 
         message_store = MessageStore(session)
         imported = await save_imported_messages(chat_id, messages_data, message_store)
+        if imported == 0:
+            raise SystemExit("Error: no messages could be imported from the JSON file.")
 
-        if imported > 0:
-            chat.send_datetime = False
-            await session.commit()
+        chat.send_datetime = False
+        await session.commit()
 
     return imported
+
+
+def _needs_live_llm(args: argparse.Namespace) -> bool:
+    is_custom_prompt_setup = (
+        bool(args.start)
+        and bool(args.message)
+        and (
+            args.prompt == "__custom__"
+            or any(cb_data == "prompt:__custom__" for cb_data in (args.callbacks or []))
+        )
+    )
+    if is_custom_prompt_setup:
+        return False
+    if bool(args.message):
+        return True
+    if args.callbacks:
+        return any(cb_data == "confirm_regen" for cb_data in args.callbacks)
+    return False
 
 
 # -- Main --
 
 
-def _incoming_command(chat_id: str, user_id: str, command: str) -> IncomingMessage:
+def _incoming_command(
+    chat_id: str,
+    user_id: str,
+    command: str,
+    command_args: str | None = None,
+) -> IncomingMessage:
     now = datetime.now(timezone.utc)
+    text = f"/{command}"
+    if command_args:
+        text = f"{text} {command_args}"
     return IncomingMessage(
         platform="console",
         chat_id=chat_id,
         user_id=user_id,
         message_id=f"cmd-{int(now.timestamp())}",
         message_type=MessageType.COMMAND,
-        text=f"/{command}",
+        text=text,
         command=command,
+        command_args=command_args,
         timestamp=now,
     )
 
@@ -381,7 +513,7 @@ async def _run(args: argparse.Namespace) -> None:
     engine = await init_db(settings.database_url, echo=settings.debug)
     await run_migrations(engine)
 
-    llm_base: OpenRouterProvider | None = None
+    llm_base: OpenRouterProvider | _OfflineCLIProvider | None = None
     llm: LLMProvider | None = None
     try:
         if args.history:
@@ -398,14 +530,18 @@ async def _run(args: argparse.Namespace) -> None:
             print(f"Imported {count} messages into chat '{chat_id}'.")
             return
 
-        if not settings.openrouter_api_key:
+        needs_live_llm = _needs_live_llm(args)
+        if needs_live_llm and not settings.openrouter_api_key:
             raise SystemExit("Error: OPENROUTER_API_KEY is required.")
 
-        llm_base = OpenRouterProvider(
-            api_key=settings.openrouter_api_key,
-            default_model=settings.llm_model,
-            base_url=settings.openrouter_base_url,
-        )
+        if settings.openrouter_api_key:
+            llm_base = OpenRouterProvider(
+                api_key=settings.openrouter_api_key,
+                default_model=settings.llm_model,
+                base_url=settings.openrouter_base_url,
+            )
+        else:
+            llm_base = _OfflineCLIProvider()
         llm = llm_base
         logger_provider: LLMLoggerProvider | None = None
         if args.debug:
@@ -418,7 +554,13 @@ async def _run(args: argparse.Namespace) -> None:
 
         if args.show_prompt:
             test_mode = not args.real
-            await _print_prompt(chat_id, settings.memory_data_dir, llm, test_mode=test_mode)
+            await _print_prompt(
+                chat_id,
+                settings.memory_data_dir,
+                llm,
+                settings,
+                test_mode=test_mode,
+            )
             return
 
         messenger = ConsoleMessenger(stream_debug=args.stream_debug)
@@ -447,6 +589,11 @@ async def _run(args: argparse.Namespace) -> None:
                     user_id=user_id,
                     callback_data=f"prompt:{args.prompt}",
                 )
+        if args.command:
+            command, command_args = _parse_command_text(args.command)
+            await messenger.dispatch_message(
+                _incoming_command(chat_id, user_id, command, command_args)
+            )
         if args.callbacks:
             for cb_data in args.callbacks:
                 await messenger.dispatch_callback(
@@ -461,9 +608,10 @@ async def _run(args: argparse.Namespace) -> None:
                 text=args.message,
             )
 
-        if not (args.start or args.callbacks or args.message):
+        if not (args.start or args.command or args.callbacks or args.message):
             raise SystemExit(
-                "Error: nothing to do. Provide a message, --start, --cb, or an inspection flag."
+                "Error: nothing to do. Provide a message, --start, --command, --cb, "
+                "or an inspection flag."
             )
 
         messenger.flush_edits()
