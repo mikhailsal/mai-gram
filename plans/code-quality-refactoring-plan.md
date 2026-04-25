@@ -98,6 +98,10 @@ Validation:
 
 Add service-level unit tests around the extracted workflows and keep `mai-chat` functional scenarios passing for `/start`, ordinary conversation, `/reset`, import, and regenerate.
 
+Status:
+
+The shared conversation/regenerate pipeline now lives in `src/mai_gram/bot/conversation_executor.py` with direct unit coverage, while `BotHandler` still owns the remaining Telegram-facing setup, import, reset, resend, and callback workflows. The class is smaller and more isolated than the baseline state, but the broader decomposition remains incomplete until more command flows move behind service boundaries.
+
 ### 3. Unify ordinary conversation and regenerate into one canonical generation pipeline
 
 - [x] Replace duplicated generation logic with a single conversation execution pipeline.
@@ -128,7 +132,7 @@ Extend functional tests so a normal message and a regenerate action produce the 
 
 Status:
 
-Ordinary conversation and regenerate now share one internal assistant-turn execution path in `BotHandler`, and the regenerate tool-chain preservation path has focused regression coverage. Promoting that shared path into a dedicated application service remains follow-on work under the broader `BotHandler` decomposition task.
+Ordinary conversation and regenerate now share a dedicated `ConversationExecutor` service in `src/mai_gram/bot/conversation_executor.py`, and the regenerate tool-chain preservation path plus direct executor branch coverage are both in place. Further decomposition is still needed around the remaining `BotHandler` workflows, but the canonical generation pipeline is no longer embedded directly inside the handler class.
 
 ### 4. Create shared application services for CLI and Telegram adapters
 

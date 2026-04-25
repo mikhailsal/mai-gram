@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import zipfile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import select
 
+from mai_gram.bot.conversation_executor import AssistantTurnResult
 from mai_gram.bot.handler import BotHandler
 from mai_gram.db.models import Chat, Message
 from mai_gram.messenger.base import IncomingMessage, MessageType, OutgoingMessage, SendResult
@@ -185,7 +186,8 @@ class TestResetConfirmation:
 
             await handler._handle_reset(message)
 
-        calls = handler._messenger.send_message.call_args_list
+        send_message = cast("AsyncMock", handler._messenger.send_message)
+        calls = send_message.call_args_list
         assert len(calls) >= 1
 
         last_call = calls[-1]
@@ -212,8 +214,10 @@ class TestResetConfirmation:
 
             await handler._handle_reset(message)
 
-        calls = handler._messenger.send_message.call_args_list
+        send_message = cast("AsyncMock", handler._messenger.send_message)
+        calls = send_message.call_args_list
         assert len(calls) == 1
+        assert calls[0].args
         sent_msg = calls[0].args[0]
         assert "No chat to reset" in sent_msg.text
 
@@ -268,8 +272,8 @@ class TestRegenerate:
             patch("mai_gram.bot.handler.PromptBuilder") as mock_prompt_builder,
             patch.object(handler, "_build_mcp_manager", return_value=MagicMock()),
             patch.object(
-                handler,
-                "_execute_assistant_turn",
+                handler._conversation_executor,
+                "execute",
                 new_callable=AsyncMock,
             ) as mock_execute,
         ):
@@ -278,6 +282,7 @@ class TestRegenerate:
 
             prompt_builder = mock_prompt_builder.return_value
             prompt_builder.build_context = AsyncMock(return_value=[])
+            mock_execute.return_value = AssistantTurnResult(sent_message_ids=[])
 
             await handler._handle_regenerate(message)
 
@@ -290,11 +295,14 @@ class TestRegenerate:
         )
 
         assert [item.role for item in persisted_messages] == ["user", "assistant", "tool"]
-        assert chat.id not in handler._response_message_ids
-        assert handler._messenger.delete_message.await_count == 0
+        assert handler._response_message_ids[chat.id] == []
+        delete_message = cast("AsyncMock", handler._messenger.delete_message)
+        assert delete_message.await_count == 0
         mock_execute.assert_awaited_once()
 
-        request = mock_execute.await_args.args[0]
+        await_args = mock_execute.await_args
+        assert await_args is not None
+        request = await_args.args[0]
         assert request.chat.id == chat.id
         assert request.llm_messages == []
         assert request.failure_log_message == "Failed to regenerate response"
