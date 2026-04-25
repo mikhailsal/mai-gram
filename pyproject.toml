@@ -25,6 +25,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.6",
     "ruff>=0.5.0",
     "mypy>=1.10",
     "watchfiles>=1.0.0",
@@ -41,6 +42,7 @@ line-length = 100
 select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH"]
 
 [tool.pytest.ini_options]
+addopts = "--dist worksteal -n auto"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"

@@ -7,7 +7,8 @@
 
 .PHONY: help install install-dev run run-dev run-reload \
         chat chat-start chat-list chat-history chat-prompt chat-import \
-        test test-v test-cov test-cov-html test-unit test-fast \
+	test test-v test-cov test-cov-html test-unit test-fast \
+	test-functional test-functional-serial \
         lint lint-fix format format-check typecheck check fix \
         precommit install-hooks \
         docker-build docker-up docker-down docker-logs docker-restart docker-shell \
@@ -111,6 +112,12 @@ test-unit: ## Run unit tests only
 
 test-fast: ## Run tests excluding slow markers
 	pytest -m "not slow"
+
+test-functional: ## Run live functional tests (parallel by default)
+	pytest tests/functional --run-functional
+
+test-functional-serial: ## Run live functional tests serially
+	pytest -n 0 tests/functional --run-functional
 
 ##@ Code Quality
 

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 # In-memory SQLite URL for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+_DEFAULT_MAX_XDIST_WORKERS = 4
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -42,6 +43,22 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "functional: integration tests that may call real LLM/provider services",
     )
+
+
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int | None:
+    """Cap implicit xdist fan-out for stable live-provider test runs."""
+    override = os.getenv("PYTEST_XDIST_AUTO_WORKERS", "").strip()
+    if override:
+        try:
+            workers = int(override)
+        except ValueError as exc:  # pragma: no cover - defensive config parsing
+            raise pytest.UsageError("PYTEST_XDIST_AUTO_WORKERS must be a positive integer") from exc
+        if workers < 1:
+            raise pytest.UsageError("PYTEST_XDIST_AUTO_WORKERS must be a positive integer")
+        return workers
+
+    cpu_count = os.cpu_count() or 1
+    return min(cpu_count, _DEFAULT_MAX_XDIST_WORKERS)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
