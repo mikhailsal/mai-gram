@@ -2,10 +2,11 @@
 # Pre-commit hook: enforces code quality before every commit.
 #
 # Checks (in order, exits on first failure):
-#   1. ruff lint         — no lint errors
-#   2. ruff format       — all files formatted
-#   3. mypy              — no type errors
-#   4. pytest + coverage — all tests pass, coverage >= 90%
+#   1. ruff lint               — no lint errors
+#   2. ruff format             — all files formatted
+#   3. mypy                    — no type errors
+#   4. pytest + coverage       — all tests pass, coverage >= 90%
+#   5. live functional pytest  — real OpenRouter-backed integration suite passes
 #
 # Install with:  make install-hooks
 # Skip once with: git commit --no-verify
@@ -51,6 +52,14 @@ if pytest --cov=mai_gram --cov-config=pyproject.toml --cov-fail-under=90 -q 2>&1
     pass "All tests passed with coverage ≥ 90%"
 else
     fail "Tests failed or coverage below 90%"
+fi
+
+# ── 5. Live functional tests ────────────────────────────────────
+step "Running live functional tests"
+if make test-functional-live; then
+    pass "Live functional tests passed"
+else
+    fail "Live functional tests failed"
 fi
 
 printf "\n${GREEN}All pre-commit checks passed!${NC}\n"

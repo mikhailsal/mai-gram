@@ -217,7 +217,7 @@ The project enforces strict quality standards:
 - **Ruff** for linting and formatting
 - **mypy** in strict mode for type checking
 - **90%+ coverage** enforced on every commit
-- **Pre-commit hooks** run the full quality gate automatically
+- **Pre-commit hooks** run the full quality gate automatically, including live functional tests when `OPENROUTER_API_KEY` is available via the environment or `.env`
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup, project structure, and testing.
 

@@ -8,7 +8,7 @@
 .PHONY: help install install-dev run run-dev run-reload \
         chat chat-start chat-list chat-history chat-prompt chat-import \
 	test test-v test-cov test-cov-html test-unit test-fast \
-	test-functional test-functional-serial \
+	test-functional test-functional-serial test-functional-live \
         lint lint-fix format format-check typecheck check fix \
         precommit install-hooks \
         docker-build docker-up docker-down docker-logs docker-restart docker-shell \
@@ -119,6 +119,17 @@ test-functional: ## Run live functional tests (parallel by default)
 test-functional-serial: ## Run live functional tests serially
 	pytest -n 0 tests/functional --run-functional
 
+test-functional-live: ## Run live functional tests with OPENROUTER_API_KEY loaded from env or .env
+	@set -e; \
+	set -a; \
+	if [ -f .env ]; then . ./.env; fi; \
+	set +a; \
+	if [ -z "$$OPENROUTER_API_KEY" ]; then \
+		echo "OPENROUTER_API_KEY is required for live functional tests"; \
+		exit 1; \
+	fi; \
+	pytest tests/functional --run-functional
+
 ##@ Code Quality
 
 lint: ## Check code with ruff linter
@@ -142,12 +153,12 @@ fix: lint-fix format ## Auto-fix linting issues and format code
 
 ##@ Pre-commit
 
-precommit: check test-cov ## Run all pre-commit checks (lint, format, typecheck, tests + 90% coverage)
+precommit: check test-cov test-functional-live ## Run all pre-commit checks, including live functional tests
 
 install-hooks: ## Install git pre-commit hook (enforces quality on every commit)
 	@cp scripts/pre-commit .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "Pre-commit hook installed. It will run lint, format, typecheck, and tests before each commit."
+	@echo "Pre-commit hook installed. It will run lint, format, typecheck, coverage, and live functional tests before each commit."
 	@echo "Skip once with: git commit --no-verify"
 
 ##@ Docker

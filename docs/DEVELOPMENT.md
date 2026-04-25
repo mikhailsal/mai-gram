@@ -194,6 +194,9 @@ A git pre-commit hook enforces quality gates before every commit:
 2. **Format** — `ruff format --check` confirms consistent formatting
 3. **Type check** — `mypy` passes with zero errors (strict mode)
 4. **Tests + coverage** — all tests pass with ≥ 90% code coverage
+5. **Live functional tests** — the real `mai-chat` integration suite passes with a valid `OPENROUTER_API_KEY`
+
+If `OPENROUTER_API_KEY` is not already exported, the hook and `make precommit` will try to load it from `.env`. If no key is available, the live functional step fails instead of silently skipping the real-provider coverage.
 
 The hook is installed automatically by `make install-dev`. To install manually:
 
