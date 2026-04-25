@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from mai_gram.bot.conversation_executor import AssistantTurnRequest, ConversationExecutor
 from mai_gram.bot.import_workflow import ImportWorkflow
 from mai_gram.bot.middleware import MessageLogger, RateLimitConfig, RateLimiter
+from mai_gram.bot.resend_service import ResendService
 from mai_gram.config import get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db.database import get_session
@@ -129,6 +130,11 @@ class BotHandler:
             messenger,
             settings,
             get_allowed_models=self._get_allowed_models_for_bot,
+            resolve_chat_id=self._chat_id_for,
+        )
+        self._resend_service = ResendService(
+            messenger,
+            renderer=self,
             resolve_chat_id=self._chat_id_for,
         )
         self._bot_config = bot_config
@@ -454,71 +460,12 @@ class BotHandler:
         if not await self._check_access(message):
             return
 
-        chat_id = self._chat_id_for(message)
-        tg_chat_id = message.chat_id
-
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="No chat configured. Use /start first.",
-                        chat_id=tg_chat_id,
-                    )
-                )
-                return
-
-            result = await session.execute(
-                select(Message)
-                .where(
-                    Message.chat_id == chat_id,
-                    Message.role == "assistant",
-                    Message.content.isnot(None),
-                    Message.content != "",
-                )
-                .order_by(Message.id.desc())
-                .limit(1)
-            )
-            last_msg = result.scalar_one_or_none()
-
-            if not last_msg:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="No assistant message found to resend.",
-                        chat_id=tg_chat_id,
-                    )
-                )
-                return
-
-        old_tg_ids = self._response_message_ids.pop(tg_chat_id, [])
-        for old_id in old_tg_ids:
-            await self._messenger.delete_message(tg_chat_id, old_id)
-
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        kb_buttons = [[("🔄 Regenerate", "regen")]]
-        kb_buttons[0].append(("✂ Cut this & above", f"cut:{last_msg.id}"))
-        action_kb = build_inline_keyboard(kb_buttons)
-
-        show_reasoning = chat.show_reasoning
-        reasoning = last_msg.reasoning if last_msg.reasoning else None
-
-        sent_ids = await self._send_response(
-            tg_chat_id,
-            response_text=last_msg.content,
-            response_reasoning=reasoning,
-            show_reasoning=show_reasoning,
-            keyboard=action_kb,
+        result = await self._resend_service.handle_resend(
+            message,
+            previous_response_ids=self._response_message_ids.get(message.chat_id, []),
         )
-        self._response_message_ids[tg_chat_id] = sent_ids
-
-        if sent_ids:
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text=f"✅ Resent last AI message ({len(sent_ids)} part(s)).",
-                    chat_id=tg_chat_id,
-                )
-            )
+        if result.replaced_previous:
+            self._response_message_ids[message.chat_id] = result.sent_message_ids
 
     # -- Import command --
 
