@@ -198,7 +198,7 @@ Run `make help` to see all available commands. Key highlights:
 | | `make chat-import FILE=conv.json` | Import dialogue from JSON |
 | **Quality** | `make test` | Run all tests |
 | | `make test-cov` | Tests + 90% coverage enforcement |
-| | `make check` | Lint + format + typecheck |
+| | `make check` | Lint + format + typecheck + size audit |
 | | `make precommit` | Full quality gate |
 | **Docker** | `make docker-up` | Start in Docker |
 | | `make docker-logs` | View container logs |
@@ -208,7 +208,7 @@ Run `make help` to see all available commands. Key highlights:
 ```bash
 make install-dev    # Install with dev dependencies + git hooks
 make test           # Run 274 tests
-make check          # Lint + format + typecheck
+make check          # Lint + format + typecheck + size audit
 make precommit      # Full pre-commit quality gate
 ```
 
@@ -216,6 +216,7 @@ The project enforces strict quality standards:
 
 - **Ruff** for linting and formatting
 - **mypy** in strict mode for type checking
+- **Code-size audit** reports files above 500 lines and functions above 60 lines until the first decomposition pass makes enforcement practical
 - **90%+ coverage** enforced on every commit
 - **Pre-commit hooks** run the full quality gate automatically, including live functional tests when `OPENROUTER_API_KEY` is available via the environment or `.env`
 

@@ -182,7 +182,8 @@ make test-cov              # Coverage with 90% enforcement
 ruff check .               # Lint
 ruff format .              # Format
 mypy src/mai_gram          # Type check
-make check                 # All three at once
+python scripts/check_code_limits.py  # Report-only size audit
+make check                 # All four at once
 make fix                   # Auto-fix lint + reformat
 ```
 
@@ -193,8 +194,9 @@ A git pre-commit hook enforces quality gates before every commit:
 1. **Lint** — `ruff check` passes with zero errors
 2. **Format** — `ruff format --check` confirms consistent formatting
 3. **Type check** — `mypy` passes with zero errors (strict mode)
-4. **Tests + coverage** — all tests pass with ≥ 90% code coverage
-5. **Live functional tests** — the real `mai-chat` integration suite passes with a valid `OPENROUTER_API_KEY`
+4. **Code size audit** — oversized Python files and functions are reported to keep refactoring pressure visible while the current hotspots are being decomposed
+5. **Tests + coverage** — all tests pass with ≥ 90% code coverage
+6. **Live functional tests** — the real `mai-chat` integration suite passes with a valid `OPENROUTER_API_KEY`
 
 If `OPENROUTER_API_KEY` is not already exported, the hook and `make precommit` will try to load it from `.env`. If no key is available, the live functional step fails instead of silently skipping the real-provider coverage.
 

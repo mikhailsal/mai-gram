@@ -5,8 +5,9 @@
 #   1. ruff lint               — no lint errors
 #   2. ruff format             — all files formatted
 #   3. mypy                    — no type errors
-#   4. pytest + coverage       — all tests pass, coverage >= 90%
-#   5. live functional pytest  — real OpenRouter-backed integration suite passes
+#   4. code size audit         — report oversized files/functions for refactoring
+#   5. pytest + coverage       — all tests pass, coverage >= 90%
+#   6. live functional pytest  — real OpenRouter-backed integration suite passes
 #
 # Install with:  make install-hooks
 # Skip once with: git commit --no-verify
@@ -46,7 +47,15 @@ else
     fail "Type errors found — run 'mypy src/mai_gram' for details"
 fi
 
-# ── 4. Tests + coverage ─────────────────────────────────────────
+# ── 4. Code size audit ──────────────────────────────────────────
+step "Auditing code size limits"
+if python3 scripts/check_code_limits.py; then
+    pass "Code size audit completed (report-only)"
+else
+    fail "Code size audit failed"
+fi
+
+# ── 5. Tests + coverage ─────────────────────────────────────────
 step "Running tests with coverage"
 if pytest --cov=mai_gram --cov-config=pyproject.toml --cov-fail-under=90 -q 2>&1; then
     pass "All tests passed with coverage ≥ 90%"
@@ -54,7 +63,7 @@ else
     fail "Tests failed or coverage below 90%"
 fi
 
-# ── 5. Live functional tests ────────────────────────────────────
+# ── 6. Live functional tests ────────────────────────────────────
 step "Running live functional tests"
 if make test-functional-live; then
     pass "Live functional tests passed"

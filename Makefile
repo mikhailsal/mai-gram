@@ -9,7 +9,7 @@
         chat chat-start chat-list chat-history chat-prompt chat-import \
 	test test-v test-cov test-cov-html test-unit test-fast \
 	test-functional test-functional-serial test-functional-live \
-        lint lint-fix format format-check typecheck check fix \
+	lint lint-fix format format-check typecheck size-check check fix \
         precommit install-hooks \
         docker-build docker-up docker-down docker-logs docker-restart docker-shell \
         clean clean-pyc clean-test clean-all
@@ -147,7 +147,10 @@ format-check: ## Check code formatting (without changes)
 typecheck: ## Run mypy type checker
 	mypy src/mai_gram
 
-check: lint format-check typecheck ## Run all code quality checks (lint + format + typecheck)
+size-check: ## Audit Python file/function sizes (report-only until hotspots are decomposed)
+	$(PYTHON) scripts/check_code_limits.py
+
+check: lint format-check typecheck size-check ## Run all code quality checks (lint + format + typecheck + size audit)
 
 fix: lint-fix format ## Auto-fix linting issues and format code
 
@@ -158,7 +161,7 @@ precommit: check test-cov test-functional-live ## Run all pre-commit checks, inc
 install-hooks: ## Install git pre-commit hook (enforces quality on every commit)
 	@cp scripts/pre-commit .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "Pre-commit hook installed. It will run lint, format, typecheck, coverage, and live functional tests before each commit."
+	@echo "Pre-commit hook installed. It will run lint, format, typecheck, a size audit, coverage, and live functional tests before each commit."
 	@echo "Skip once with: git commit --no-verify"
 
 ##@ Docker
