@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from mai_gram.bot.callback_router import CallbackRouter
 from mai_gram.bot.conversation_executor import AssistantTurnRequest, ConversationExecutor
 from mai_gram.bot.history_actions import HistoryActions
 from mai_gram.bot.import_workflow import ImportWorkflow
@@ -147,6 +148,18 @@ class BotHandler:
             settings,
             bot_config=bot_config,
             resolve_chat_id=self._chat_id_for,
+        )
+        self._callback_router = CallbackRouter(
+            messenger,
+            import_workflow=self._import_workflow,
+            setup_workflow=self._setup_workflow,
+            reset_workflow=self._reset_workflow,
+            history_actions=self._history_actions,
+            regenerate_service=self._regenerate_service,
+            show_confirmation=self._show_confirmation,
+            delete_callback_message=self._delete_callback_message,
+            cut_original_html=self._cut_original_html,
+            response_message_ids=self._response_message_ids,
         )
         self._bot_config = bot_config
         self._external_mcp_pool = external_mcp_pool
@@ -464,93 +477,7 @@ class BotHandler:
         self._message_logger.log_incoming(message)
         if not await self._check_access(message):
             return
-
-        if self._import_workflow.is_in_import(message.user_id):
-            await self._import_workflow.handle_import_callback(message)
-            return
-
-        if self.is_in_setup(message.user_id):
-            await self._setup_workflow.handle_setup_callback(message)
-            return
-
-        data = message.callback_data or ""
-
-        if data.startswith("model:") or data.startswith("prompt:"):
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text=(
-                        f"Setup callback '{data}' ignored — no setup session active.\n"
-                        "Hint: use --start --model MODEL --prompt PROMPT in a single command."
-                    ),
-                    chat_id=message.chat_id,
-                )
-            )
-            return
-
-        if data == "regen":
-            await self._show_confirmation(
-                message,
-                "Regenerate this response?",
-                confirm_data="confirm_regen",
-                cancel_data="cancel_action",
-            )
-            return
-
-        if data.startswith("cut:"):
-            cut_msg_id = data.split(":", 1)[1]
-            preview = await self._get_message_preview(int(cut_msg_id))
-            confirm_text = (
-                "Cut this message and all above?\nThey won't be sent to AI but remain searchable."
-            )
-            if preview:
-                confirm_text += f'\n\nMessage: "{preview}"'
-            tg_msg_id = ""
-            if message.raw and hasattr(message.raw, "callback_query"):
-                cb_msg = message.raw.callback_query.message
-                if cb_msg:
-                    tg_msg_id = str(cb_msg.message_id)
-                    original_html = getattr(cb_msg, "text_html", None)
-                    original_parse = None
-                    if original_html:
-                        original_parse = "html"
-                    else:
-                        original_html = cb_msg.text or ""
-                    cache_key = f"{message.chat_id}:{tg_msg_id}"
-                    self._cut_original_html[cache_key] = (original_html, original_parse)
-            await self._show_confirmation(
-                message,
-                confirm_text,
-                confirm_data=f"confirm_cut:{cut_msg_id}:{tg_msg_id}",
-                cancel_data="cancel_action",
-            )
-            return
-
-        if data == "confirm_regen":
-            await self._delete_callback_message(message)
-            await self._handle_regenerate(message)
-            return
-
-        if data.startswith("confirm_cut:"):
-            parts = data.split(":", 2)
-            cut_msg_id_str = parts[1]
-            original_tg_msg_id = parts[2] if len(parts) > 2 else ""
-            await self._delete_callback_message(message)
-            await self._handle_cut_above(
-                message, int(cut_msg_id_str), original_tg_msg_id=original_tg_msg_id
-            )
-            return
-
-        if data.startswith("confirm_reset:"):
-            chat_id = data.split(":", 1)[1]
-            await self._delete_callback_message(message)
-            await self._reset_workflow.execute_reset(message, chat_id)
-            return
-
-        if data == "cancel_action":
-            await self._delete_callback_message(message)
-            return
-
-        logger.debug("Unhandled callback: %s", data)
+        await self._callback_router.handle_callback(message)
 
     def _get_allowed_models_for_bot(self) -> list[str]:
         """Return the model list for this bot, respecting per-bot restrictions."""
