@@ -100,7 +100,7 @@ Add service-level unit tests around the extracted workflows and keep `mai-chat` 
 
 Status:
 
-The shared conversation/regenerate pipeline now lives in `src/mai_gram/bot/conversation_executor.py` with direct unit coverage, the import/document state machine now lives in `src/mai_gram/bot/import_workflow.py` with focused workflow tests, and resend-last now lives in `src/mai_gram/bot/resend_service.py` with direct service coverage. `BotHandler` is materially smaller than the baseline state, but it still owns the remaining Telegram-facing setup, reset, and callback workflows, so the broader decomposition remains incomplete.
+The shared conversation/regenerate pipeline now lives in `src/mai_gram/bot/conversation_executor.py` with direct unit coverage, the import/document state machine now lives in `src/mai_gram/bot/import_workflow.py` with focused workflow tests, resend-last now lives in `src/mai_gram/bot/resend_service.py` with direct service coverage, and setup/onboarding now lives in `src/mai_gram/bot/setup_workflow.py` with direct workflow tests plus CLI onboarding coverage. `BotHandler` is materially smaller than the baseline state, but it still owns the remaining Telegram-facing reset and general callback workflows, so the broader decomposition remains incomplete.
 
 ### 3. Unify ordinary conversation and regenerate into one canonical generation pipeline
 

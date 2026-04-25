@@ -13,9 +13,7 @@ Handles:
 from __future__ import annotations
 
 import asyncio
-import enum
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +24,7 @@ from mai_gram.bot.conversation_executor import AssistantTurnRequest, Conversatio
 from mai_gram.bot.import_workflow import ImportWorkflow
 from mai_gram.bot.middleware import MessageLogger, RateLimitConfig, RateLimiter
 from mai_gram.bot.resend_service import ResendService
+from mai_gram.bot.setup_workflow import SetupSession, SetupWorkflow
 from mai_gram.config import get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db.database import get_session
@@ -64,24 +63,6 @@ def make_chat_id(user_id: str, bot_id: str) -> str:
     return f"{user_id}@{bot_id}"
 
 
-class SetupState(str, enum.Enum):
-    """States in the setup flow."""
-
-    CHOOSING_MODEL = "choosing_model"
-    CHOOSING_PROMPT = "choosing_prompt"
-    AWAITING_CUSTOM_PROMPT = "awaiting_custom_prompt"
-
-
-@dataclass
-class SetupSession:
-    """Tracks the state of an ongoing setup session."""
-
-    user_id: str
-    chat_id: str
-    state: SetupState = SetupState.CHOOSING_MODEL
-    selected_model: str = ""
-
-
 class BotHandler:
     """Main handler for bot messages and commands.
 
@@ -110,7 +91,6 @@ class BotHandler:
         )
         self._message_logger = MessageLogger(log_content=False)
         self._test_mode = test_mode
-        self._setup_sessions: dict[str, SetupSession] = {}
         self._response_message_ids: dict[str, list[str]] = {}
         self._cut_original_html: dict[str, tuple[str, str | None]] = {}
 
@@ -135,6 +115,12 @@ class BotHandler:
         self._resend_service = ResendService(
             messenger,
             renderer=self,
+            resolve_chat_id=self._chat_id_for,
+        )
+        self._setup_workflow = SetupWorkflow(
+            messenger,
+            settings,
+            bot_config=bot_config,
             resolve_chat_id=self._chat_id_for,
         )
         self._bot_config = bot_config
@@ -209,13 +195,13 @@ class BotHandler:
     # -- Setup session helpers --
 
     def is_in_setup(self, user_id: str) -> bool:
-        return user_id in self._setup_sessions
+        return self._setup_workflow.is_in_setup(user_id)
 
     def get_setup_session(self, user_id: str) -> SetupSession | None:
-        return self._setup_sessions.get(user_id)
+        return self._setup_workflow.get_setup_session(user_id)
 
     def clear_setup_session(self, user_id: str) -> None:
-        self._setup_sessions.pop(user_id, None)
+        self._setup_workflow.clear_setup_session(user_id)
 
     # -- Access control --
 
@@ -252,25 +238,7 @@ class BotHandler:
         self._message_logger.log_incoming(message)
         if not await self._check_access(message):
             return
-
-        chat_id = self._chat_id_for(message)
-
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-
-        if chat:
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text=(
-                        f"Chat already configured (model: {chat.llm_model}).\n"
-                        "Use /reset to start over."
-                    ),
-                    chat_id=message.chat_id,
-                )
-            )
-            return
-
-        await self._start_setup(message.user_id, message.chat_id)
+        await self._setup_workflow.handle_start(message)
 
     async def _handle_reset(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
@@ -496,7 +464,7 @@ class BotHandler:
             return
 
         if self.is_in_setup(message.user_id):
-            await self._handle_setup_text(message)
+            await self._setup_workflow.handle_setup_text(message)
             return
 
         await self._handle_conversation(message)
@@ -511,7 +479,7 @@ class BotHandler:
             return
 
         if self.is_in_setup(message.user_id):
-            await self._handle_setup_callback(message)
+            await self._setup_workflow.handle_setup_callback(message)
             return
 
         data = message.callback_data or ""
@@ -593,13 +561,6 @@ class BotHandler:
 
         logger.debug("Unhandled callback: %s", data)
 
-    # -- Setup flow --
-
-    async def _start_setup(self, user_id: str, chat_id: str) -> None:
-        session = SetupSession(user_id=user_id, chat_id=chat_id)
-        self._setup_sessions[user_id] = session
-        await self._show_model_selection(session)
-
     def _get_allowed_models_for_bot(self) -> list[str]:
         """Return the model list for this bot, respecting per-bot restrictions."""
         global_models = self._settings.get_allowed_models()
@@ -607,183 +568,6 @@ class BotHandler:
             bot_set = set(self._bot_config.allowed_models)
             return [m for m in global_models if m in bot_set]
         return global_models
-
-    def _get_available_prompts_for_bot(self) -> dict[str, str]:
-        """Return prompt templates available for this bot, respecting per-bot restrictions."""
-        all_prompts = self._settings.get_available_prompts()
-        if self._bot_config and self._bot_config.allowed_prompts:
-            bot_set = set(self._bot_config.allowed_prompts)
-            return {k: v for k, v in all_prompts.items() if k in bot_set}
-        return all_prompts
-
-    async def _show_model_selection(self, session: SetupSession) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        session.state = SetupState.CHOOSING_MODEL
-        keyboard_rows = []
-        allowed_models = self._get_allowed_models_for_bot()
-        default_model = self._settings.get_default_model()
-        for model in allowed_models:
-            short_name = model.split("/")[-1] if "/" in model else model
-            label = f"{short_name} [default]" if model == default_model else short_name
-            keyboard_rows.append([(label, f"model:{model}")])
-
-        kb = build_inline_keyboard(keyboard_rows)
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text="Choose an LLM model:",
-                chat_id=session.chat_id,
-                keyboard=kb,
-            )
-        )
-
-    async def _show_prompt_selection(self, session: SetupSession) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        session.state = SetupState.CHOOSING_PROMPT
-        keyboard_rows = []
-        available_prompts = self._get_available_prompts_for_bot()
-        for name in available_prompts:
-            keyboard_rows.append([(name.replace("_", " ").title(), f"prompt:{name}")])
-
-        # Only show "Custom" if no per-bot prompt restriction is active
-        if not (self._bot_config and self._bot_config.allowed_prompts):
-            keyboard_rows.append([("Custom (type your own)", "prompt:__custom__")])
-
-        kb = build_inline_keyboard(keyboard_rows)
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=f"Model: {session.selected_model}\n\nNow choose a system prompt:",
-                chat_id=session.chat_id,
-                keyboard=kb,
-            )
-        )
-
-    async def _handle_setup_callback(self, message: IncomingMessage) -> None:
-        session = self._setup_sessions.get(message.user_id)
-        if not session or not message.callback_data:
-            return
-
-        parts = message.callback_data.split(":", 1)
-        if len(parts) != 2:
-            return
-
-        category, value = parts
-
-        if category == "model" and session.state == SetupState.CHOOSING_MODEL:
-            allowed = self._get_allowed_models_for_bot()
-            if allowed and value not in allowed:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="This model is not available for this bot. Please choose another.",
-                        chat_id=session.chat_id,
-                    )
-                )
-                return
-            session.selected_model = value
-            await self._show_prompt_selection(session)
-
-        elif category == "prompt" and session.state == SetupState.CHOOSING_PROMPT:
-            if value == "__custom__":
-                if self._bot_config and self._bot_config.allowed_prompts:
-                    await self._messenger.send_message(
-                        OutgoingMessage(
-                            text="Custom prompts are not available for this bot.",
-                            chat_id=session.chat_id,
-                        )
-                    )
-                    return
-                session.state = SetupState.AWAITING_CUSTOM_PROMPT
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="Type your custom system prompt:",
-                        chat_id=session.chat_id,
-                    )
-                )
-            else:
-                available = self._get_available_prompts_for_bot()
-                prompt_text = available.get(value, "")
-                if prompt_text:
-                    await self._finish_setup(message, session, prompt_text, prompt_name=value)
-                else:
-                    await self._messenger.send_message(
-                        OutgoingMessage(
-                            text=f"Prompt '{value}' not found. Try again.",
-                            chat_id=session.chat_id,
-                        )
-                    )
-
-    async def _handle_setup_text(self, message: IncomingMessage) -> None:
-        session = self._setup_sessions.get(message.user_id)
-        if not session:
-            return
-
-        if session.state == SetupState.AWAITING_CUSTOM_PROMPT:
-            await self._finish_setup(message, session, message.text.strip())
-
-    async def _finish_setup(
-        self,
-        message: IncomingMessage,
-        session: SetupSession,
-        system_prompt: str,
-        *,
-        prompt_name: str | None = None,
-    ) -> None:
-        chat_id = self._chat_id_for(message)
-        user_id = message.user_id
-        bot_id = message.bot_id or ""
-
-        prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
-
-        async with get_session() as db:
-            send_dt = True
-            if prompt_cfg is not None and prompt_cfg.send_datetime is not None:
-                send_dt = prompt_cfg.send_datetime
-
-            chat = Chat(
-                id=chat_id,
-                user_id=user_id,
-                bot_id=bot_id,
-                llm_model=session.selected_model,
-                system_prompt=system_prompt,
-                prompt_name=prompt_name,
-                timezone=self._settings.default_timezone,
-                show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
-                show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
-                send_datetime=send_dt,
-            )
-            db.add(chat)
-            await db.commit()
-
-        self.clear_setup_session(message.user_id)
-
-        reasoning_status = "ON" if chat.show_reasoning else "OFF"
-        toolcalls_status = "ON" if chat.show_tool_calls else "OFF"
-        datetime_status = "ON" if chat.send_datetime else "OFF"
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=(
-                    f"Chat created!\n"
-                    f"Model: {session.selected_model}\n"
-                    f"Prompt: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}\n"
-                    f"Reasoning: {reasoning_status} | Tool calls: {toolcalls_status} "
-                    f"| Datetime: {datetime_status}\n\n"
-                    "Send a message to start chatting.\n"
-                    "Toggle display with /reasoning, /toolcalls, and /datetime."
-                ),
-                chat_id=message.chat_id,
-            )
-        )
-        logger.info(
-            "Created chat: id=%s model=%s prompt_len=%d reasoning=%s toolcalls=%s",
-            chat_id,
-            session.selected_model,
-            len(system_prompt),
-            chat.show_reasoning,
-            chat.show_tool_calls,
-        )
 
     # -- MCP manager builder --
 
