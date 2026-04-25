@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from tests.functional.helpers.artifacts import fetch_chat
+from tests.functional.helpers.artifacts import fetch_chat, fetch_knowledge_entries, fetch_messages
 
 pytestmark = pytest.mark.functional
 
@@ -113,3 +113,63 @@ def test_access_control_and_isolated_state(functional_cli, functional_cli_factor
 
     assert result.returncode != 0
     assert "Error: no chat ID available." in result.output
+
+
+def test_different_chat_ids_keep_history_and_wiki_state_separate(functional_cli) -> None:
+    first_chat_id = "func-separate-a"
+    second_chat_id = "func-separate-b"
+
+    first_payload = json.dumps(
+        [
+            {"role": "user", "content": "History only for alpha"},
+            {"role": "assistant", "content": "Reply only for alpha"},
+        ]
+    )
+    second_payload = json.dumps(
+        [
+            {"role": "user", "content": "History only for beta"},
+            {"role": "assistant", "content": "Reply only for beta"},
+        ]
+    )
+
+    functional_cli.start_chat(first_chat_id).require_ok()
+    functional_cli.start_chat(second_chat_id).require_ok()
+    functional_cli.import_json(
+        first_chat_id,
+        functional_cli.write_json_fixture("separate-a.json", first_payload),
+    ).require_ok()
+    functional_cli.import_json(
+        second_chat_id,
+        functional_cli.write_json_fixture("separate-b.json", second_payload),
+    ).require_ok()
+
+    first_wiki_dir = functional_cli.chat_wiki_dir(first_chat_id)
+    second_wiki_dir = functional_cli.chat_wiki_dir(second_chat_id)
+    first_wiki_dir.mkdir(parents=True, exist_ok=True)
+    second_wiki_dir.mkdir(parents=True, exist_ok=True)
+    (first_wiki_dir / "1001_profile.md").write_text("Favorite tea: oolong.", encoding="utf-8")
+    (second_wiki_dir / "1002_profile.md").write_text("Favorite tea: sencha.", encoding="utf-8")
+    functional_cli.repair_wiki(first_chat_id).require_ok()
+    functional_cli.repair_wiki(second_chat_id).require_ok()
+
+    first_history = functional_cli.read_history(first_chat_id)
+    second_history = functional_cli.read_history(second_chat_id)
+    first_wiki = functional_cli.read_wiki(first_chat_id)
+    second_wiki = functional_cli.read_wiki(second_chat_id)
+
+    assert "History only for alpha" in first_history.stdout
+    assert "History only for beta" not in first_history.stdout
+    assert "History only for beta" in second_history.stdout
+    assert "History only for alpha" not in second_history.stdout
+    assert "oolong" in first_wiki.stdout.lower()
+    assert "sencha" not in first_wiki.stdout.lower()
+    assert "sencha" in second_wiki.stdout.lower()
+    assert "oolong" not in second_wiki.stdout.lower()
+    assert len(fetch_messages(functional_cli.db_path, first_chat_id)) == 2
+    assert len(fetch_messages(functional_cli.db_path, second_chat_id)) == 2
+    assert {
+        entry["value"] for entry in fetch_knowledge_entries(functional_cli.db_path, first_chat_id)
+    } == {"Favorite tea: oolong."}
+    assert {
+        entry["value"] for entry in fetch_knowledge_entries(functional_cli.db_path, second_chat_id)
+    } == {"Favorite tea: sencha."}

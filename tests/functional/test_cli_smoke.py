@@ -60,3 +60,14 @@ def test_callback_without_setup_prints_ignore_hint(functional_cli) -> None:
     assert result.returncode == 0
     assert "ignored" in result.stdout
     assert "no setup session active" in result.stdout
+
+
+def test_missing_chat_history_and_prompt_preview_fail_cleanly(functional_cli) -> None:
+    history = functional_cli.read_history("func-missing-history")
+    prompt = functional_cli.show_prompt("func-missing-prompt")
+
+    assert history.returncode == 0
+    assert "=== History: func-missing-history ===" in history.stdout
+    assert "(no messages)" in history.stdout
+    assert prompt.returncode != 0
+    assert "Error: no chat found for 'func-missing-prompt'. Run --start first." in prompt.output
