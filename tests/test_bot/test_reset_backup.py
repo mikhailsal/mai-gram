@@ -10,8 +10,9 @@ from sqlalchemy import select
 
 from mai_gram.bot.conversation_executor import AssistantTurnResult
 from mai_gram.bot.handler import BotHandler
+from mai_gram.bot.reset_workflow import ResetWorkflow
 from mai_gram.db.models import Chat, Message
-from mai_gram.messenger.base import IncomingMessage, MessageType, OutgoingMessage, SendResult
+from mai_gram.messenger.base import IncomingMessage, MessageType, SendResult
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -51,6 +52,28 @@ def _make_handler(*, memory_data_dir: str = "./data") -> BotHandler:
     return handler
 
 
+def _make_reset_workflow(
+    *,
+    memory_data_dir: str = "./data",
+) -> tuple[ResetWorkflow, MagicMock, MagicMock]:
+    messenger = MagicMock()
+    messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+    presenter = MagicMock()
+    presenter._show_confirmation = AsyncMock()
+    clear_setup_session = MagicMock()
+
+    workflow = ResetWorkflow(
+        messenger,
+        presenter=presenter,
+        resolve_chat_id=lambda message: (
+            f"{message.user_id}@{message.bot_id}" if message.bot_id else message.chat_id
+        ),
+        clear_setup_session=clear_setup_session,
+        memory_data_dir=memory_data_dir,
+    )
+    return workflow, presenter, clear_setup_session
+
+
 def _make_message(
     *,
     user_id: str = "test-user",
@@ -86,15 +109,15 @@ class TestCreateResetBackup:
         wiki_dir.mkdir(parents=True)
         (wiki_dir / "note.md").write_text("# Test wiki entry")
 
-        handler = _make_handler(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
 
-        with patch("mai_gram.bot.handler.get_settings") as mock_settings:
+        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
             settings = MagicMock()
             settings.memory_data_dir = str(data_dir)
             settings.database_url = f"sqlite+aiosqlite:///{db_path}"
             mock_settings.return_value = settings
 
-            result = await handler._create_reset_backup(chat_id)
+            result = await workflow.create_reset_backup(chat_id)
 
         assert result is not None
         assert result.exists()
@@ -118,15 +141,15 @@ class TestCreateResetBackup:
         db_path = data_dir / "test.db"
         db_path.write_text("fake database content")
 
-        handler = _make_handler(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
 
-        with patch("mai_gram.bot.handler.get_settings") as mock_settings:
+        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
             settings = MagicMock()
             settings.memory_data_dir = str(data_dir)
             settings.database_url = f"sqlite+aiosqlite:///{db_path}"
             mock_settings.return_value = settings
 
-            result = await handler._create_reset_backup("plain-chat@bot")
+            result = await workflow.create_reset_backup("plain-chat@bot")
 
         assert result is not None
         assert result.exists()
@@ -141,15 +164,15 @@ class TestCreateResetBackup:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        handler = _make_handler(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
 
-        with patch("mai_gram.bot.handler.get_settings") as mock_settings:
+        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
             settings = MagicMock()
             settings.memory_data_dir = str(data_dir)
             settings.database_url = f"sqlite+aiosqlite:///{data_dir / 'test.db'}"
             mock_settings.return_value = settings
             with patch("shutil.make_archive", side_effect=OSError("disk full")):
-                result = await handler._create_reset_backup("test@bot")
+                result = await workflow.create_reset_backup("test@bot")
 
         assert result is None
 
@@ -173,38 +196,34 @@ class TestResetConfirmation:
         session.add(msg)
         await session.commit()
 
-        handler = _make_handler()
+        workflow, presenter, _ = _make_reset_workflow()
         message = _make_message(
             user_id="test-user",
             chat_id="test-user@test-bot",
             bot_id="test-bot",
         )
 
-        with patch("mai_gram.bot.handler.get_session") as mock_get_session:
+        with patch("mai_gram.bot.reset_workflow.get_session") as mock_get_session:
             mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
             mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            await handler._handle_reset(message)
+            await workflow.handle_reset(message)
 
-        send_message = cast("AsyncMock", handler._messenger.send_message)
-        calls = send_message.call_args_list
-        assert len(calls) >= 1
-
-        last_call = calls[-1]
-        sent_msg = last_call.args[0] if last_call.args else last_call.kwargs.get("message")
-        assert isinstance(sent_msg, OutgoingMessage)
-        assert "Reset this chat?" in sent_msg.text
-        assert sent_msg.keyboard is not None
+        show_confirmation = cast("AsyncMock", presenter._show_confirmation)
+        await_args = show_confirmation.await_args
+        assert await_args is not None
+        assert "Reset this chat?" in await_args.args[1]
+        assert await_args.kwargs["confirm_data"] == "confirm_reset:test-user@test-bot"
 
     async def test_reset_no_chat_responds_immediately(self) -> None:
         """If there is no chat, /reset should respond immediately without confirmation."""
-        handler = _make_handler()
+        workflow, presenter, _ = _make_reset_workflow()
         message = _make_message(
             user_id="test-user",
             chat_id="test-chat",
         )
 
-        with patch("mai_gram.bot.handler.get_session") as mock_get_session:
+        with patch("mai_gram.bot.reset_workflow.get_session") as mock_get_session:
             mock_session = AsyncMock()
             mock_session.execute = AsyncMock(
                 return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
@@ -212,14 +231,64 @@ class TestResetConfirmation:
             mock_get_session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            await handler._handle_reset(message)
+            await workflow.handle_reset(message)
 
-        send_message = cast("AsyncMock", handler._messenger.send_message)
+        send_message = cast("AsyncMock", workflow._messenger.send_message)
         calls = send_message.call_args_list
         assert len(calls) == 1
         assert calls[0].args
         sent_msg = calls[0].args[0]
         assert "No chat to reset" in sent_msg.text
+        assert cast("AsyncMock", presenter._show_confirmation).await_count == 0
+
+
+class TestExecuteReset:
+    async def test_execute_reset_deletes_chat_and_artifacts(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        chat_id = "test-user@test-bot"
+        chat_dir = data_dir / chat_id / "wiki"
+        chat_dir.mkdir(parents=True)
+        (chat_dir / "fact.md").write_text("fact")
+
+        chat = Chat(
+            id=chat_id,
+            user_id="test-user",
+            bot_id="test-bot",
+            llm_model="test-model",
+            system_prompt="test prompt",
+        )
+        session.add(chat)
+        await session.commit()
+
+        workflow, _, clear_setup_session = _make_reset_workflow(memory_data_dir=str(data_dir))
+        message = _make_message(user_id="test-user", chat_id="tg-chat", bot_id="test-bot")
+        backup_path = data_dir / "backups" / "reset_backup.zip"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text("backup")
+
+        with (
+            patch("mai_gram.bot.reset_workflow.get_session") as mock_get_session,
+            patch.object(workflow, "create_reset_backup", new_callable=AsyncMock) as mock_backup,
+        ):
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_backup.return_value = backup_path
+
+            await workflow.execute_reset(message, chat_id)
+
+        stored_chat = (
+            await session.execute(select(Chat).where(Chat.id == chat_id))
+        ).scalar_one_or_none()
+        assert stored_chat is None
+        assert not (data_dir / chat_id).exists()
+        clear_setup_session.assert_called_once_with("test-user")
+
+        send_message = cast("AsyncMock", workflow._messenger.send_message)
+        sent_texts = [call.args[0].text for call in send_message.await_args_list]
+        assert sent_texts[0] == "💾 Creating backup..."
+        assert any("Backup saved: reset_backup.zip" in text for text in sent_texts)
 
 
 class TestRegenerate:
