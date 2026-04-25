@@ -20,15 +20,17 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from mai_gram.bot.conversation_executor import AssistantTurnRequest, ConversationExecutor
+from mai_gram.bot.history_actions import HistoryActions
 from mai_gram.bot.import_workflow import ImportWorkflow
 from mai_gram.bot.middleware import MessageLogger, RateLimitConfig, RateLimiter
+from mai_gram.bot.regenerate_service import RegenerateService
 from mai_gram.bot.resend_service import ResendService
 from mai_gram.bot.reset_workflow import ResetWorkflow
 from mai_gram.bot.setup_workflow import SetupSession, SetupWorkflow
 from mai_gram.config import get_settings
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.db.database import get_session
-from mai_gram.db.models import Chat, Message
+from mai_gram.db.models import Chat
 from mai_gram.llm.provider import (
     LLMAuthenticationError,
     LLMContextLengthError,
@@ -111,6 +113,22 @@ class BotHandler:
             settings,
             get_allowed_models=self._get_allowed_models_for_bot,
             resolve_chat_id=self._chat_id_for,
+        )
+        self._history_actions = HistoryActions(
+            messenger,
+            resolve_chat_id=self._chat_id_for,
+        )
+        self._regenerate_service = RegenerateService(
+            messenger,
+            llm_provider,
+            self._conversation_executor,
+            settings,
+            resolve_chat_id=self._chat_id_for,
+            build_mcp_manager=self._build_mcp_manager,
+            memory_data_dir=self._memory_data_dir,
+            wiki_context_limit=self._wiki_context_limit,
+            short_term_limit=self._short_term_limit,
+            test_mode=self._test_mode,
         )
         self._resend_service = ResendService(
             messenger,
@@ -1150,15 +1168,7 @@ class BotHandler:
 
     async def _get_message_preview(self, db_message_id: int, max_len: int = 80) -> str:
         """Fetch a truncated preview of a stored message by its DB id."""
-        async with get_session() as session:
-            result = await session.execute(select(Message).where(Message.id == db_message_id))
-            msg = result.scalar_one_or_none()
-            if not msg or not msg.content:
-                return ""
-            text = msg.content.replace("\n", " ").strip()
-            if len(text) > max_len:
-                text = text[:max_len] + "..."
-            return text
+        return await self._history_actions.get_message_preview(db_message_id, max_len=max_len)
 
     async def _delete_callback_message(self, message: IncomingMessage) -> None:
         """Delete the message that contained the callback button."""
@@ -1175,171 +1185,27 @@ class BotHandler:
         original_tg_msg_id: str = "",
     ) -> None:
         """Set the cut-above point so the target message and all before it are excluded."""
-        chat_id = self._chat_id_for(message)
-
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                return
-
-            message_store = MessageStore(session)
-
-            cut_count = 0
-            all_msgs = await message_store.get_all(chat.id)
-            for m in all_msgs:
-                if m.id <= db_message_id:
-                    cut_count += 1
-
-            chat.cut_above_message_id = db_message_id
-            await session.commit()
-
+        cached_original = None
         if original_tg_msg_id:
             cache_key = f"{message.chat_id}:{original_tg_msg_id}"
-            cached = self._cut_original_html.pop(cache_key, None)
-            if cached:
-                original_html, original_parse = cached
-                badge = "\u2702\ufe0f <i>[this and above are hidden from the AI]</i>"
-                if original_parse == "html":
-                    marked_text = f"{badge}\n\n{original_html}"
-                else:
-                    import html as _html
+            cached_original = self._cut_original_html.pop(cache_key, None)
 
-                    marked_text = f"{badge}\n\n{_html.escape(original_html)}"
-                if len(marked_text) > 4000:
-                    marked_text = marked_text[:4000] + "..."
-                await self._messenger.edit_message(
-                    message.chat_id,
-                    original_tg_msg_id,
-                    marked_text,
-                    parse_mode="html",
-                )
-
-        footer_lines = ["\u2500" * 20, "\u2702\ufe0f History cut applied"]
-        if cut_count > 0:
-            footer_lines.append(f"\U0001f4e6 {cut_count} message(s) hidden from AI")
-        footer_lines.append("\u2139\ufe0f Hidden messages are still searchable via tools")
-        footer_lines.append("\u2500" * 20)
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text="\n".join(footer_lines),
-                chat_id=message.chat_id,
-            )
+        await self._history_actions.handle_cut_above(
+            message,
+            db_message_id,
+            original_tg_msg_id=original_tg_msg_id,
+            cached_original=cached_original,
         )
 
     # -- Regenerate --
 
     async def _handle_regenerate(self, message: IncomingMessage) -> None:
         """Handle the regen callback: delete last assistant message, re-generate."""
-        if not message.callback_data:
-            return
-
-        chat_id = self._chat_id_for(message)
-
-        # Determine whether trailing messages form a tool chain that should
-        # be preserved (assistant with tool_calls + tool results).  When
-        # tools already ran and only the final LLM response failed, we must
-        # keep the tool chain so the LLM can simply retry the text response
-        # without re-executing side-effecting tools (e.g. wiki_create).
-        has_tool_chain = False
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                return
-
-            message_store = MessageStore(session)
-
-            recent = await message_store.get_recent(chat.id, limit=20)
-            recent_sorted = sorted(recent, key=lambda m: m.id)
-
-            trailing: list[Message] = []
-            for msg in reversed(recent_sorted):
-                if msg.role in ("assistant", "tool"):
-                    trailing.append(msg)
-                else:
-                    break
-
-            has_tool_results = any(m.role == "tool" for m in trailing)
-            has_tool_call_assistant = any(m.role == "assistant" and m.tool_calls for m in trailing)
-            has_tool_chain = has_tool_results and has_tool_call_assistant
-
-            if not has_tool_chain:
-                for msg in trailing:
-                    await session.delete(msg)
-                await session.flush()
-
-        if has_tool_chain:
-            # Keep tool chain in DB; only delete the error/button message
-            # from Telegram, not the tool call display messages.
-            self._response_message_ids.pop(message.chat_id, None)
-        else:
-            # Normal regeneration: delete intermediate Telegram messages
-            prev_msg_ids = self._response_message_ids.pop(message.chat_id, [])
-            for mid in prev_msg_ids:
-                await self._messenger.delete_message(message.chat_id, mid)
-
-        # Delete the Telegram message with the regen button
-        if message.raw and hasattr(message.raw, "callback_query"):
-            cb_msg = message.raw.callback_query.message
-            if cb_msg:
-                await self._messenger.delete_message(message.chat_id, str(cb_msg.message_id))
-
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                return
-
-            message_store = MessageStore(session)
-            wiki_store = WikiStore(session, data_dir=self._memory_data_dir)
-
-            recent = await message_store.get_recent(chat.id, limit=1)
-            last_role = recent[0].role if recent else None
-            if last_role not in ("user", "tool"):
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="Cannot regenerate: no user message found.",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            await self._messenger.send_typing_indicator(message.chat_id)
-
-            prompt_builder = PromptBuilder(
-                self._llm,
-                message_store,
-                wiki_store,
-                wiki_context_limit=self._wiki_context_limit,
-                short_term_limit=self._short_term_limit,
-                test_mode=self._test_mode,
-            )
-
-            mcp_manager = self._build_mcp_manager(chat, message_store, wiki_store)
-
-            regen_tz = chat.timezone
-            regen_send_dt = chat.send_datetime
-            llm_messages = await prompt_builder.build_context(
-                chat,
-                current_time=datetime.now(timezone.utc),
-                send_datetime=chat.send_datetime,
-                chat_timezone=chat.timezone,
-                cut_above_message_id=chat.cut_above_message_id,
-            )
-            result = await self._conversation_executor.execute(
-                AssistantTurnRequest(
-                    chat=chat,
-                    message_store=message_store,
-                    mcp_manager=mcp_manager,
-                    llm_messages=llm_messages,
-                    telegram_chat_id=message.chat_id,
-                    timezone_name=regen_tz,
-                    show_datetime=regen_send_dt,
-                    show_reasoning=chat.show_reasoning,
-                    show_tool_calls=chat.show_tool_calls,
-                    extra_params=self._settings.get_model_params(chat.llm_model),
-                    failure_log_message="Failed to regenerate response",
-                )
-            )
-            self._response_message_ids[message.chat_id] = result.sent_message_ids
+        sent_message_ids = await self._regenerate_service.handle_regenerate(
+            message,
+            previous_response_ids=self._response_message_ids.get(message.chat_id, []),
+        )
+        self._response_message_ids[message.chat_id] = sent_message_ids
 
     # -- DB helpers --
 

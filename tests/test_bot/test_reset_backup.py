@@ -337,9 +337,13 @@ class TestRegenerate:
         )
 
         with (
-            patch("mai_gram.bot.handler.get_session") as mock_get_session,
-            patch("mai_gram.bot.handler.PromptBuilder") as mock_prompt_builder,
-            patch.object(handler, "_build_mcp_manager", return_value=MagicMock()),
+            patch("mai_gram.bot.regenerate_service.get_session") as mock_get_session,
+            patch("mai_gram.bot.regenerate_service.PromptBuilder") as mock_prompt_builder,
+            patch.object(
+                handler._regenerate_service,
+                "_build_mcp_manager",
+                return_value=MagicMock(),
+            ),
             patch.object(
                 handler._conversation_executor,
                 "execute",
