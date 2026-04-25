@@ -6,6 +6,8 @@ import zipfile
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy import select
+
 from mai_gram.bot.handler import BotHandler
 from mai_gram.db.models import Chat, Message
 from mai_gram.messenger.base import IncomingMessage, MessageType, OutgoingMessage, SendResult
@@ -26,6 +28,7 @@ def _make_handler(*, memory_data_dir: str = "./data") -> BotHandler:
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
     messenger.edit_message = AsyncMock(return_value=SendResult(success=True))
     messenger.delete_message = AsyncMock()
+    messenger.send_typing_indicator = AsyncMock()
 
     llm = MagicMock()
 
@@ -213,3 +216,85 @@ class TestResetConfirmation:
         assert len(calls) == 1
         sent_msg = calls[0].args[0]
         assert "No chat to reset" in sent_msg.text
+
+
+class TestRegenerate:
+    async def test_regenerate_preserves_trailing_tool_chain(self, session: AsyncSession) -> None:
+        """Regenerate should keep a trailing assistant+tool chain and reuse the shared executor."""
+        chat = Chat(
+            id="test-user@test-bot",
+            user_id="test-user",
+            bot_id="test-bot",
+            llm_model="test-model",
+            system_prompt="test prompt",
+        )
+        session.add(chat)
+        session.add_all(
+            [
+                Message(
+                    chat_id=chat.id,
+                    role="user",
+                    content="Remember this.",
+                ),
+                Message(
+                    chat_id=chat.id,
+                    role="assistant",
+                    content="",
+                    tool_calls='[{"id":"call_1","name":"wiki_create","arguments":"{}"}]',
+                ),
+                Message(
+                    chat_id=chat.id,
+                    role="tool",
+                    content="Stored successfully",
+                    tool_call_id="call_1",
+                ),
+            ]
+        )
+        await session.commit()
+
+        handler = _make_handler()
+        handler._response_message_ids[chat.id] = ["tool-display-1", "tool-display-2"]
+
+        message = _make_message(
+            user_id="test-user",
+            chat_id=chat.id,
+            bot_id="test-bot",
+            callback_data="confirm_regen",
+            message_type=MessageType.CALLBACK,
+        )
+
+        with (
+            patch("mai_gram.bot.handler.get_session") as mock_get_session,
+            patch("mai_gram.bot.handler.PromptBuilder") as mock_prompt_builder,
+            patch.object(handler, "_build_mcp_manager", return_value=MagicMock()),
+            patch.object(
+                handler,
+                "_execute_assistant_turn",
+                new_callable=AsyncMock,
+            ) as mock_execute,
+        ):
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            prompt_builder = mock_prompt_builder.return_value
+            prompt_builder.build_context = AsyncMock(return_value=[])
+
+            await handler._handle_regenerate(message)
+
+        persisted_messages = list(
+            (
+                await session.execute(
+                    select(Message).where(Message.chat_id == chat.id).order_by(Message.id)
+                )
+            ).scalars()
+        )
+
+        assert [item.role for item in persisted_messages] == ["user", "assistant", "tool"]
+        assert chat.id not in handler._response_message_ids
+        assert handler._messenger.delete_message.await_count == 0
+        mock_execute.assert_awaited_once()
+
+        request = mock_execute.await_args.args[0]
+        assert request.chat.id == chat.id
+        assert request.llm_messages == []
+        assert request.failure_log_message == "Failed to regenerate response"

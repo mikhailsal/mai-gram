@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from mai_gram.config import BotConfig
-    from mai_gram.llm.provider import LLMProvider
+    from mai_gram.llm.provider import ChatMessage, LLMProvider
     from mai_gram.mcp_servers.external import ExternalMCPPool
     from mai_gram.messenger.base import Messenger
 
@@ -98,6 +98,23 @@ class ImportSession:
     state: ImportState = ImportState.CHOOSING_MODEL
     selected_model: str = ""
     created_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class AssistantTurnRequest:
+    """Prepared inputs for one assistant response generation pass."""
+
+    chat: Chat
+    message_store: MessageStore
+    mcp_manager: MCPManager
+    llm_messages: list[ChatMessage]
+    telegram_chat_id: str
+    timezone_name: str
+    show_datetime: bool
+    show_reasoning: bool
+    show_tool_calls: bool
+    extra_params: dict[str, Any] | None
+    failure_log_message: str
 
 
 class BotHandler:
@@ -1219,6 +1236,320 @@ class BotHandler:
 
     # -- Conversation --
 
+    async def _execute_assistant_turn(self, request: AssistantTurnRequest) -> None:
+        chat = request.chat
+        message_store = request.message_store
+        tg_chat_id = request.telegram_chat_id
+        sent_msg_ids: list[str] = []
+        placeholder_msg_id: str | None = None
+        response_text: str | None = None
+        response_reasoning: str | None = None
+        stream_usage = None
+        stream_cost: float | None = None
+        stream_is_byok = False
+        committed_content_offset = 0
+        reasoning_committed = False
+        saved_msg_id: int | None = None
+
+        async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
+            await message_store.save_message(
+                chat.id,
+                "assistant",
+                content or "",
+                tool_calls=tool_calls_json,
+                timezone_name=request.timezone_name,
+                show_datetime=request.show_datetime,
+            )
+
+            if not request.show_tool_calls:
+                return
+            try:
+                calls = json.loads(tool_calls_json)
+            except (json.JSONDecodeError, TypeError):
+                return
+            lines = []
+            for tc in calls:
+                name = tc.get("name", "?")
+                args = tc.get("arguments", "{}")
+                try:
+                    args_dict = json.loads(args) if isinstance(args, str) else args
+                    args_str = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    args_str = str(args)
+                lines.append(f"🔧 {name}({args_str})")
+            if lines:
+                result = await self._messenger.send_message(
+                    OutgoingMessage(text="\n".join(lines), chat_id=tg_chat_id)
+                )
+                if result.success and result.message_id:
+                    sent_msg_ids.append(result.message_id)
+
+        async def _on_tool_result_display(
+            *,
+            tool_call_id: str,
+            tool_name: str,
+            arguments: str,
+            result: object,
+            content: str,
+            error: str | None,
+            server_name: str | None,
+        ) -> None:
+            del arguments, server_name
+            await message_store.save_message(
+                chat.id,
+                "tool",
+                content,
+                tool_call_id=tool_call_id,
+                timezone_name=request.timezone_name,
+                show_datetime=request.show_datetime,
+            )
+
+            if not request.show_tool_calls:
+                return
+            if error:
+                text = f"❌ {tool_name}: {error}"
+            else:
+                result_str = str(result) if result is not None else ""
+                if len(result_str) > 200:
+                    result_str = result_str[:200] + "…"
+                text = f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
+            tool_result = await self._messenger.send_message(
+                OutgoingMessage(text=text, chat_id=tg_chat_id)
+            )
+            if tool_result.success and tool_result.message_id:
+                sent_msg_ids.append(tool_result.message_id)
+
+        try:
+            content_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            last_edit_time = 0.0
+            last_display_len = 0
+            edit_interval = 1.0
+            edit_min_chars = 60
+
+            async for chunk in run_with_tools_stream(
+                self._llm,
+                request.mcp_manager,
+                request.llm_messages,
+                model=chat.llm_model,
+                max_iterations=self._tool_max_iterations,
+                extra_params=request.extra_params or None,
+                on_assistant_tool_call=_on_tool_call_display,
+                on_tool_result=_on_tool_result_display,
+            ):
+                if chunk.usage is not None:
+                    stream_usage = chunk.usage
+                    stream_cost = chunk.cost
+                    stream_is_byok = chunk.is_byok
+
+                if chunk.turn_complete:
+                    if placeholder_msg_id:
+                        turn_text = self._build_intermediate_display(
+                            "".join(content_parts),
+                            "".join(reasoning_parts),
+                            request.show_reasoning,
+                        )
+                        if turn_text.strip():
+                            await self._messenger.edit_message(
+                                tg_chat_id,
+                                placeholder_msg_id,
+                                turn_text,
+                            )
+                        sent_msg_ids.append(placeholder_msg_id)
+                    content_parts.clear()
+                    reasoning_parts.clear()
+                    placeholder_msg_id = None
+                    last_edit_time = 0.0
+                    last_display_len = 0
+                    committed_content_offset = 0
+                    reasoning_committed = False
+                    continue
+
+                if chunk.reasoning:
+                    reasoning_parts.append(chunk.reasoning)
+                if chunk.content:
+                    content_parts.append(chunk.content)
+
+                current_reasoning = "".join(reasoning_parts)
+                current_content = "".join(content_parts)
+
+                display_len = len(current_reasoning) + len(current_content)
+                now_mono = time.monotonic()
+                chars_since_edit = display_len - last_display_len
+                time_since_edit = now_mono - last_edit_time
+
+                should_edit = (
+                    (current_content.strip() or current_reasoning.strip())
+                    and (time_since_edit >= edit_interval or chars_since_edit >= edit_min_chars)
+                    and chars_since_edit > 0
+                )
+
+                if not should_edit:
+                    continue
+
+                from mai_gram.core.md_to_telegram import markdown_to_html
+                from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+
+                remaining_content = current_content[committed_content_offset:]
+
+                from mai_gram.core.md_to_telegram import format_reasoning_html
+
+                header_html = ""
+                if request.show_reasoning and current_reasoning.strip() and not reasoning_committed:
+                    header_html = format_reasoning_html(current_reasoning)
+
+                content_html = (
+                    markdown_to_html(remaining_content) if remaining_content.strip() else ""
+                )
+
+                if header_html and content_html:
+                    live_text = header_html + "\n\n" + content_html + " ▍"
+                elif header_html:
+                    live_text = header_html + " ▍"
+                elif content_html:
+                    live_text = content_html + " ▍"
+                else:
+                    continue
+
+                live_parse_mode: str | None = "html"
+
+                if len(live_text) > SAFE_MAX_LENGTH:
+                    await self._commit_overflow(
+                        tg_chat_id=tg_chat_id,
+                        header_html=header_html,
+                        reasoning_committed=reasoning_committed,
+                        placeholder_msg_id=placeholder_msg_id,
+                        sent_msg_ids=sent_msg_ids,
+                        remaining_content=remaining_content,
+                        current_content=current_content,
+                        committed_content_offset=committed_content_offset,
+                    )
+                    if header_html and not reasoning_committed:
+                        reasoning_committed = True
+                    committed_content_offset = self._last_commit_offset
+                    placeholder_msg_id = self._last_commit_placeholder
+                else:
+                    raw_fallback = remaining_content or current_reasoning
+                    fallback = raw_fallback[:SAFE_MAX_LENGTH] + " ▍"
+                    if placeholder_msg_id is None:
+                        result = await self._messenger.send_message(
+                            OutgoingMessage(
+                                text=live_text,
+                                chat_id=tg_chat_id,
+                                parse_mode=live_parse_mode,
+                            )
+                        )
+                        if not result.success and live_parse_mode:
+                            result = await self._messenger.send_message(
+                                OutgoingMessage(
+                                    text=fallback,
+                                    chat_id=tg_chat_id,
+                                )
+                            )
+                        if result.success:
+                            placeholder_msg_id = result.message_id
+                    else:
+                        edit_result = await self._messenger.edit_message(
+                            tg_chat_id,
+                            placeholder_msg_id,
+                            live_text,
+                            parse_mode=live_parse_mode,
+                        )
+                        if not edit_result.success and live_parse_mode:
+                            await self._messenger.edit_message(
+                                tg_chat_id,
+                                placeholder_msg_id,
+                                fallback,
+                            )
+
+                last_edit_time = now_mono
+                last_display_len = display_len
+
+            response_text = "".join(content_parts)
+            response_reasoning = "".join(reasoning_parts) or None
+
+            if not response_text or not response_text.strip():
+                raise LLMProviderError("The model returned an empty response")
+
+            saved_msg = await message_store.save_message(
+                chat.id,
+                "assistant",
+                response_text,
+                timestamp=datetime.now(timezone.utc),
+                reasoning=response_reasoning,
+                timezone_name=request.timezone_name,
+                show_datetime=request.show_datetime,
+            )
+            saved_msg_id = saved_msg.id
+        except Exception as exc:
+            logger.exception(request.failure_log_message)
+            error_text = self._user_friendly_error(exc)
+
+            from mai_gram.messenger.telegram import build_inline_keyboard
+
+            error_keyboard = build_inline_keyboard([[("🔄 Regenerate", "regen")]])
+            await self._deliver_error(
+                tg_chat_id,
+                error_text,
+                placeholder_msg_id=placeholder_msg_id,
+                keyboard=error_keyboard,
+                sent_msg_ids=sent_msg_ids,
+            )
+
+            self._response_message_ids[tg_chat_id] = sent_msg_ids
+            return
+
+        self._response_message_ids[tg_chat_id] = sent_msg_ids
+
+        from mai_gram.messenger.telegram import build_inline_keyboard
+
+        keyboard_buttons = [[("🔄 Regenerate", "regen")]]
+        if saved_msg_id is not None:
+            keyboard_buttons[0].append(("✂ Cut this & above", f"cut:{saved_msg_id}"))
+        action_keyboard = build_inline_keyboard(keyboard_buttons)
+
+        usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
+
+        if placeholder_msg_id and response_text and response_text.strip():
+            remaining_raw = response_text[committed_content_offset:]
+            if usage_footer:
+                remaining_raw += f"\n\n{usage_footer}"
+
+            header_html = ""
+            if (
+                request.show_reasoning
+                and response_reasoning
+                and response_reasoning.strip()
+                and not reasoning_committed
+            ):
+                from mai_gram.core.md_to_telegram import format_reasoning_html
+
+                header_html = format_reasoning_html(response_reasoning, expandable=True)
+
+            extra_ids = await self._finalize_placeholder(
+                tg_chat_id,
+                placeholder_msg_id,
+                remaining_raw,
+                header_html=header_html,
+                keyboard=action_keyboard,
+            )
+            sent_msg_ids.extend(extra_ids)
+            sent_msg_ids.append(placeholder_msg_id)
+            return
+
+        if response_text and response_text.strip():
+            text_with_footer = response_text
+            if usage_footer:
+                text_with_footer += f"\n\n{usage_footer}"
+            final_msg_ids = await self._send_response(
+                tg_chat_id,
+                response_text=text_with_footer,
+                response_reasoning=response_reasoning,
+                show_reasoning=request.show_reasoning,
+                keyboard=action_keyboard,
+            )
+            sent_msg_ids.extend(final_msg_ids)
+
     async def _handle_conversation(self, message: IncomingMessage) -> None:
         chat_id = self._chat_id_for(message)
 
@@ -1269,330 +1600,30 @@ class BotHandler:
                 cut_above_message_id=chat.cut_above_message_id,
             )
 
-            extra_params = self._settings.get_model_params(chat.llm_model)
-            show_tool_calls = chat.show_tool_calls
-            show_reasoning = chat.show_reasoning
-            tg_chat_id = message.chat_id
-            sent_msg_ids: list[str] = []
-
-            async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
-                await message_store.save_message(
-                    chat.id,
-                    "assistant",
-                    content or "",
-                    tool_calls=tool_calls_json,
+            await self._execute_assistant_turn(
+                AssistantTurnRequest(
+                    chat=chat,
+                    message_store=message_store,
+                    mcp_manager=mcp_manager,
+                    llm_messages=llm_messages,
+                    telegram_chat_id=message.chat_id,
                     timezone_name=chat_tz,
                     show_datetime=chat_send_dt,
+                    show_reasoning=chat.show_reasoning,
+                    show_tool_calls=chat.show_tool_calls,
+                    extra_params=self._settings.get_model_params(chat.llm_model),
+                    failure_log_message="Failed to generate response",
                 )
-
-                if not show_tool_calls:
-                    return
-                try:
-                    calls = json.loads(tool_calls_json)
-                except (json.JSONDecodeError, TypeError):
-                    return
-                lines = []
-                for tc in calls:
-                    name = tc.get("name", "?")
-                    args = tc.get("arguments", "{}")
-                    try:
-                        args_dict = json.loads(args) if isinstance(args, str) else args
-                        args_str = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
-                    except (json.JSONDecodeError, TypeError, AttributeError):
-                        args_str = str(args)
-                    lines.append(f"🔧 {name}({args_str})")
-                if lines:
-                    r = await self._messenger.send_message(
-                        OutgoingMessage(text="\n".join(lines), chat_id=tg_chat_id)
-                    )
-                    if r.success and r.message_id:
-                        sent_msg_ids.append(r.message_id)
-
-            async def _on_tool_result_display(
-                *,
-                tool_call_id: str,
-                tool_name: str,
-                arguments: str,
-                result: object,
-                content: str,
-                error: str | None,
-                server_name: str | None,
-            ) -> None:
-                await message_store.save_message(
-                    chat.id,
-                    "tool",
-                    content,
-                    tool_call_id=tool_call_id,
-                    timezone_name=chat_tz,
-                    show_datetime=chat_send_dt,
-                )
-
-                if not show_tool_calls:
-                    return
-                if error:
-                    text = f"❌ {tool_name}: {error}"
-                else:
-                    result_str = str(result) if result is not None else ""
-                    if len(result_str) > 200:
-                        result_str = result_str[:200] + "…"
-                    text = f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
-                r = await self._messenger.send_message(
-                    OutgoingMessage(text=text, chat_id=tg_chat_id)
-                )
-                if r.success and r.message_id:
-                    sent_msg_ids.append(r.message_id)
-
-            response_text: str | None = None
-            response_reasoning: str | None = None
-            stream_usage = None
-            stream_cost: float | None = None
-            stream_is_byok = False
-            try:
-                content_parts: list[str] = []
-                reasoning_parts: list[str] = []
-                placeholder_msg_id: str | None = None
-                last_edit_time = 0.0
-                last_display_len = 0
-                edit_interval = 1.0
-                edit_min_chars = 60
-                committed_content_offset = 0
-                reasoning_committed = False
-
-                async for chunk in run_with_tools_stream(
-                    self._llm,
-                    mcp_manager,
-                    llm_messages,
-                    model=chat.llm_model,
-                    max_iterations=self._tool_max_iterations,
-                    extra_params=extra_params or None,
-                    on_assistant_tool_call=_on_tool_call_display,
-                    on_tool_result=_on_tool_result_display,
-                ):
-                    if chunk.usage is not None:
-                        stream_usage = chunk.usage
-                        stream_cost = chunk.cost
-                        stream_is_byok = chunk.is_byok
-
-                    if chunk.turn_complete:
-                        if placeholder_msg_id:
-                            turn_text = self._build_intermediate_display(
-                                "".join(content_parts),
-                                "".join(reasoning_parts),
-                                show_reasoning,
-                            )
-                            if turn_text.strip():
-                                await self._messenger.edit_message(
-                                    tg_chat_id,
-                                    placeholder_msg_id,
-                                    turn_text,
-                                )
-                            sent_msg_ids.append(placeholder_msg_id)
-                        content_parts.clear()
-                        reasoning_parts.clear()
-                        placeholder_msg_id = None
-                        last_edit_time = 0.0
-                        last_display_len = 0
-                        committed_content_offset = 0
-                        reasoning_committed = False
-                        continue
-
-                    if chunk.reasoning:
-                        reasoning_parts.append(chunk.reasoning)
-                    if chunk.content:
-                        content_parts.append(chunk.content)
-
-                    current_reasoning = "".join(reasoning_parts)
-                    current_content = "".join(content_parts)
-
-                    display_len = len(current_reasoning) + len(current_content)
-                    now_mono = time.monotonic()
-                    chars_since_edit = display_len - last_display_len
-                    time_since_edit = now_mono - last_edit_time
-
-                    should_edit = (
-                        (current_content.strip() or current_reasoning.strip())
-                        and (time_since_edit >= edit_interval or chars_since_edit >= edit_min_chars)
-                        and chars_since_edit > 0
-                    )
-
-                    if not should_edit:
-                        continue
-
-                    from mai_gram.core.md_to_telegram import markdown_to_html
-                    from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
-
-                    remaining_content = current_content[committed_content_offset:]
-
-                    from mai_gram.core.md_to_telegram import format_reasoning_html
-
-                    header_html = ""
-                    if show_reasoning and current_reasoning.strip() and not reasoning_committed:
-                        header_html = format_reasoning_html(current_reasoning)
-
-                    content_html = (
-                        markdown_to_html(remaining_content) if remaining_content.strip() else ""
-                    )
-
-                    if header_html and content_html:
-                        live_text = header_html + "\n\n" + content_html + " \u258d"
-                    elif header_html:
-                        live_text = header_html + " \u258d"
-                    elif content_html:
-                        live_text = content_html + " \u258d"
-                    else:
-                        continue
-
-                    live_parse_mode: str | None = "html"
-
-                    if len(live_text) > SAFE_MAX_LENGTH:
-                        await self._commit_overflow(
-                            tg_chat_id=tg_chat_id,
-                            header_html=header_html,
-                            reasoning_committed=reasoning_committed,
-                            placeholder_msg_id=placeholder_msg_id,
-                            sent_msg_ids=sent_msg_ids,
-                            remaining_content=remaining_content,
-                            current_content=current_content,
-                            committed_content_offset=committed_content_offset,
-                        )
-                        if header_html and not reasoning_committed:
-                            reasoning_committed = True
-                        new_offset = self._last_commit_offset
-                        new_ph = self._last_commit_placeholder
-                        committed_content_offset = new_offset
-                        placeholder_msg_id = new_ph
-                    else:
-                        raw_fb = remaining_content or current_reasoning
-                        fallback = raw_fb[:SAFE_MAX_LENGTH] + " \u258d"
-                        if placeholder_msg_id is None:
-                            result = await self._messenger.send_message(
-                                OutgoingMessage(
-                                    text=live_text,
-                                    chat_id=tg_chat_id,
-                                    parse_mode=live_parse_mode,
-                                )
-                            )
-                            if not result.success and live_parse_mode:
-                                result = await self._messenger.send_message(
-                                    OutgoingMessage(
-                                        text=fallback,
-                                        chat_id=tg_chat_id,
-                                    )
-                                )
-                            if result.success:
-                                placeholder_msg_id = result.message_id
-                        else:
-                            edit_result = await self._messenger.edit_message(
-                                tg_chat_id,
-                                placeholder_msg_id,
-                                live_text,
-                                parse_mode=live_parse_mode,
-                            )
-                            if not edit_result.success and live_parse_mode:
-                                await self._messenger.edit_message(
-                                    tg_chat_id,
-                                    placeholder_msg_id,
-                                    fallback,
-                                )
-
-                    last_edit_time = now_mono
-                    last_display_len = display_len
-
-                response_text = "".join(content_parts)
-                response_reasoning = "".join(reasoning_parts) or None
-
-                if not response_text or not response_text.strip():
-                    raise LLMProviderError("The model returned an empty response")
-
-                saved_msg_id: int | None = None
-                if response_text and response_text.strip():
-                    saved_msg = await message_store.save_message(
-                        chat.id,
-                        "assistant",
-                        response_text,
-                        timestamp=datetime.now(timezone.utc),
-                        reasoning=response_reasoning,
-                        timezone_name=chat_tz,
-                        show_datetime=chat_send_dt,
-                    )
-                    saved_msg_id = saved_msg.id
-
-            except Exception as exc:
-                logger.exception("Failed to generate response")
-                error_text = self._user_friendly_error(exc)
-                saved_msg_id = None
-
-                from mai_gram.messenger.telegram import build_inline_keyboard
-
-                err_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
-                await self._deliver_error(
-                    tg_chat_id,
-                    error_text,
-                    placeholder_msg_id=placeholder_msg_id,
-                    keyboard=err_kb,
-                    sent_msg_ids=sent_msg_ids,
-                )
-
-                self._response_message_ids[tg_chat_id] = sent_msg_ids
-                return
-
-        self._response_message_ids[tg_chat_id] = sent_msg_ids
-
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        kb_buttons = [[("\U0001f504 Regenerate", "regen")]]
-        if saved_msg_id is not None:
-            kb_buttons[0].append(("\u2702 Cut this & above", f"cut:{saved_msg_id}"))
-        action_kb = build_inline_keyboard(kb_buttons)
-
-        usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
-
-        if placeholder_msg_id and response_text and response_text.strip():
-            remaining_raw = response_text[committed_content_offset:]
-            if usage_footer:
-                remaining_raw += f"\n\n{usage_footer}"
-
-            header_html = ""
-            if (
-                show_reasoning
-                and response_reasoning
-                and response_reasoning.strip()
-                and not reasoning_committed
-            ):
-                from mai_gram.core.md_to_telegram import format_reasoning_html
-
-                header_html = format_reasoning_html(response_reasoning, expandable=True)
-
-            extra_ids = await self._finalize_placeholder(
-                tg_chat_id,
-                placeholder_msg_id,
-                remaining_raw,
-                header_html=header_html,
-                keyboard=action_kb,
             )
-            sent_msg_ids.extend(extra_ids)
-            sent_msg_ids.append(placeholder_msg_id)
-        elif response_text and response_text.strip():
-            text_with_footer = response_text
-            if usage_footer:
-                text_with_footer += f"\n\n{usage_footer}"
-            final_msg_ids = await self._send_response(
-                tg_chat_id,
-                response_text=text_with_footer,
-                response_reasoning=response_reasoning,
-                show_reasoning=show_reasoning,
-                keyboard=action_kb,
-            )
-            sent_msg_ids.extend(final_msg_ids)
 
     @staticmethod
     def _build_intermediate_display(content: str, reasoning: str, show_reasoning: bool) -> str:
         """Build display text for an intermediate turn (before tool calls)."""
         display = ""
         if show_reasoning and reasoning.strip():
-            display = f"\U0001f4ad Reasoning:\n{reasoning.strip()}"
+            display = f"💭 Reasoning:\n{reasoning.strip()}"
             if content.strip():
-                display += "\n\n\u2500\u2500\u2500\n\n" + content
+                display += "\n\n───\n\n" + content
         elif content.strip():
             display = content
         return display
@@ -1600,6 +1631,7 @@ class BotHandler:
     @staticmethod
     def _format_usage_footer(usage: object, cost: float | None, is_byok: bool) -> str:
         """Build a compact token/cost footer string."""
+        del is_byok
         if usage is None:
             return ""
         prompt_t = getattr(usage, "prompt_tokens", 0)
@@ -1632,11 +1664,11 @@ class BotHandler:
                     sent_msg_ids.append(placeholder_msg_id)
                     return
             else:
-                r = await self._messenger.send_message(
+                result = await self._messenger.send_message(
                     OutgoingMessage(text=error_text, chat_id=chat_id, keyboard=keyboard)
                 )
-                if r.success and r.message_id:
-                    sent_msg_ids.append(r.message_id)
+                if result.success and result.message_id:
+                    sent_msg_ids.append(result.message_id)
                     return
             if attempt < max_attempts:
                 delay = 2.0 * attempt
@@ -1654,12 +1686,12 @@ class BotHandler:
         """Map an exception to a user-facing error message with actionable advice."""
         if isinstance(exc, LLMAuthenticationError):
             return (
-                "\u26a0\ufe0f API authentication failed.\n\n"
+                "⚠️ API authentication failed.\n\n"
                 "The bot's API key is invalid or expired. "
                 "Please contact the bot administrator."
             )
         if isinstance(exc, LLMRateLimitError):
-            msg = "\u23f3 Rate limit reached — the AI provider is temporarily overloaded."
+            msg = "⏳ Rate limit reached — the AI provider is temporarily overloaded."
             if exc.retry_after is not None:
                 msg += f"\n\nPlease wait ~{int(exc.retry_after)}s and try again."
             else:
@@ -1667,28 +1699,25 @@ class BotHandler:
             return msg
         if isinstance(exc, LLMModelNotFoundError):
             return (
-                "\u274c The selected model is no longer available.\n\n"
+                "❌ The selected model is no longer available.\n\n"
                 "Use /reset and /start to choose a different model."
             )
         if isinstance(exc, LLMContextLengthError):
             return (
-                "\u274c The conversation is too long for this model's context window.\n\n"
-                'Use "\u2702 Cut this & above" on a message to trim history, '
+                "❌ The conversation is too long for this model's context window.\n\n"
+                'Use "✂ Cut this & above" on a message to trim history, '
                 "or /reset to start fresh."
             )
         if isinstance(exc, LLMProviderError):
             status = f" (HTTP {exc.status_code})" if exc.status_code else ""
             return (
-                f"\u26a0\ufe0f AI provider error{status}.\n\n"
+                f"⚠️ AI provider error{status}.\n\n"
                 "This is usually temporary. Tap Regenerate to retry."
             )
         if isinstance(exc, LLMError):
-            return (
-                "\u26a0\ufe0f Something went wrong with the AI provider.\n\n"
-                "Tap Regenerate to retry."
-            )
+            return "⚠️ Something went wrong with the AI provider.\n\nTap Regenerate to retry."
         return (
-            "\u274c Unexpected error while generating a response.\n\n"
+            "❌ Unexpected error while generating a response.\n\n"
             "Tap Regenerate to retry, or use /reset if the problem persists."
         )
 
@@ -1815,7 +1844,7 @@ class BotHandler:
 
         new_placeholder: str | None = None
         if remaining_content.strip():
-            c_html = markdown_to_html(remaining_content) + " \u258d"
+            c_html = markdown_to_html(remaining_content) + " ▍"
             result = await self._messenger.send_message(
                 OutgoingMessage(
                     text=c_html,
@@ -1905,23 +1934,25 @@ class BotHandler:
             rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
             raw_parts = [raw_parts[0]] + rest
 
-        for i, raw_part in enumerate(raw_parts):
-            is_last = i == len(raw_parts) - 1
+        for index, raw_part in enumerate(raw_parts):
+            is_last = index == len(raw_parts) - 1
             html_part = markdown_to_html(raw_part)
 
-            if i == 0 and header_html and not header_sent:
+            if index == 0 and header_html and not header_sent:
                 combined = header_html + "\n\n" + html_part
                 if len(combined) <= SAFE_MAX_LENGTH:
                     html_part = combined
                     header_sent = True
                 else:
-                    hid = await self._send_part(chat_id, header_html)
-                    if hid:
-                        sent_ids.append(hid)
+                    header_id = await self._send_part(chat_id, header_html)
+                    if header_id:
+                        sent_ids.append(header_id)
                     header_sent = True
 
             msg_id = await self._send_part(
-                chat_id, html_part, keyboard=keyboard if is_last else None
+                chat_id,
+                html_part,
+                keyboard=keyboard if is_last else None,
             )
             if msg_id:
                 sent_ids.append(msg_id)
@@ -1982,9 +2013,9 @@ class BotHandler:
                 first_html = combined
             else:
                 await self._edit_part(chat_id, placeholder_msg_id, header_html)
-                extra_ids: list[str] = []
-                for i, raw_part in enumerate(raw_parts):
-                    is_last = i == len(raw_parts) - 1
+                initial_extra_ids: list[str] = []
+                for index, raw_part in enumerate(raw_parts):
+                    is_last = index == len(raw_parts) - 1
                     html_part = markdown_to_html(raw_part)
                     msg_id = await self._send_part(
                         chat_id,
@@ -1992,8 +2023,8 @@ class BotHandler:
                         keyboard=keyboard if is_last else None,
                     )
                     if msg_id:
-                        extra_ids.append(msg_id)
-                return extra_ids
+                        initial_extra_ids.append(msg_id)
+                return initial_extra_ids
 
         if len(raw_parts) == 1:
             await self._edit_part(chat_id, placeholder_msg_id, first_html, keyboard=keyboard)
@@ -2001,12 +2032,14 @@ class BotHandler:
 
         await self._edit_part(chat_id, placeholder_msg_id, first_html)
 
-        extra_ids = []
-        for i, raw_part in enumerate(raw_parts[1:], start=1):
-            is_last = i == len(raw_parts) - 1
+        extra_ids: list[str] = []
+        for index, raw_part in enumerate(raw_parts[1:], start=1):
+            is_last = index == len(raw_parts) - 1
             html_part = markdown_to_html(raw_part)
             msg_id = await self._send_part(
-                chat_id, html_part, keyboard=keyboard if is_last else None
+                chat_id,
+                html_part,
+                keyboard=keyboard if is_last else None,
             )
             if msg_id:
                 extra_ids.append(msg_id)
@@ -2035,7 +2068,10 @@ class BotHandler:
             header_html = format_reasoning_html(response_reasoning, expandable=True)
 
         sent_ids = await self._send_long_message(
-            chat_id, response_text, header_html=header_html, keyboard=keyboard
+            chat_id,
+            response_text,
+            header_html=header_html,
+            keyboard=keyboard,
         )
         self._message_logger.log_outgoing(
             chat_id,
@@ -2332,319 +2368,21 @@ class BotHandler:
                 chat_timezone=chat.timezone,
                 cut_above_message_id=chat.cut_above_message_id,
             )
-            extra_params = self._settings.get_model_params(chat.llm_model)
-            show_reasoning = chat.show_reasoning
-            show_tool_calls = chat.show_tool_calls
-            tg_chat_id = message.chat_id
-            sent_msg_ids: list[str] = []
-
-            async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
-                await message_store.save_message(
-                    chat.id,
-                    "assistant",
-                    content or "",
-                    tool_calls=tool_calls_json,
+            await self._execute_assistant_turn(
+                AssistantTurnRequest(
+                    chat=chat,
+                    message_store=message_store,
+                    mcp_manager=mcp_manager,
+                    llm_messages=llm_messages,
+                    telegram_chat_id=message.chat_id,
                     timezone_name=regen_tz,
                     show_datetime=regen_send_dt,
+                    show_reasoning=chat.show_reasoning,
+                    show_tool_calls=chat.show_tool_calls,
+                    extra_params=self._settings.get_model_params(chat.llm_model),
+                    failure_log_message="Failed to regenerate response",
                 )
-
-                if not show_tool_calls:
-                    return
-                try:
-                    calls = json.loads(tool_calls_json)
-                except (json.JSONDecodeError, TypeError):
-                    return
-                lines = []
-                for tc in calls:
-                    name = tc.get("name", "?")
-                    args = tc.get("arguments", "{}")
-                    try:
-                        args_dict = json.loads(args) if isinstance(args, str) else args
-                        args_str = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
-                    except (json.JSONDecodeError, TypeError, AttributeError):
-                        args_str = str(args)
-                    lines.append(f"🔧 {name}({args_str})")
-                if lines:
-                    r = await self._messenger.send_message(
-                        OutgoingMessage(text="\n".join(lines), chat_id=tg_chat_id)
-                    )
-                    if r.success and r.message_id:
-                        sent_msg_ids.append(r.message_id)
-
-            async def _on_tool_result_display(
-                *,
-                tool_call_id: str,
-                tool_name: str,
-                arguments: str,
-                result: object,
-                content: str,
-                error: str | None,
-                server_name: str | None,
-            ) -> None:
-                await message_store.save_message(
-                    chat.id,
-                    "tool",
-                    content,
-                    tool_call_id=tool_call_id,
-                    timezone_name=regen_tz,
-                    show_datetime=regen_send_dt,
-                )
-
-                if not show_tool_calls:
-                    return
-                if error:
-                    text = f"❌ {tool_name}: {error}"
-                else:
-                    result_str = str(result) if result is not None else ""
-                    if len(result_str) > 200:
-                        result_str = result_str[:200] + "…"
-                    text = f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
-                r = await self._messenger.send_message(
-                    OutgoingMessage(text=text, chat_id=tg_chat_id)
-                )
-                if r.success and r.message_id:
-                    sent_msg_ids.append(r.message_id)
-
-            response_text: str | None = None
-            response_reasoning: str | None = None
-            placeholder_msg_id: str | None = None
-            stream_usage = None
-            stream_cost: float | None = None
-            stream_is_byok = False
-            try:
-                content_parts: list[str] = []
-                reasoning_parts: list[str] = []
-                last_edit_time = 0.0
-                last_display_len = 0
-                edit_interval = 1.0
-                edit_min_chars = 60
-                committed_content_offset = 0
-                reasoning_committed = False
-
-                async for chunk in run_with_tools_stream(
-                    self._llm,
-                    mcp_manager,
-                    llm_messages,
-                    model=chat.llm_model,
-                    max_iterations=self._tool_max_iterations,
-                    extra_params=extra_params or None,
-                    on_assistant_tool_call=_on_tool_call_display,
-                    on_tool_result=_on_tool_result_display,
-                ):
-                    if chunk.usage is not None:
-                        stream_usage = chunk.usage
-                        stream_cost = chunk.cost
-                        stream_is_byok = chunk.is_byok
-
-                    if chunk.turn_complete:
-                        if placeholder_msg_id:
-                            turn_text = self._build_intermediate_display(
-                                "".join(content_parts),
-                                "".join(reasoning_parts),
-                                show_reasoning,
-                            )
-                            if turn_text.strip():
-                                await self._messenger.edit_message(
-                                    tg_chat_id,
-                                    placeholder_msg_id,
-                                    turn_text,
-                                )
-                            sent_msg_ids.append(placeholder_msg_id)
-                        content_parts.clear()
-                        reasoning_parts.clear()
-                        placeholder_msg_id = None
-                        last_edit_time = 0.0
-                        last_display_len = 0
-                        committed_content_offset = 0
-                        reasoning_committed = False
-                        continue
-
-                    if chunk.reasoning:
-                        reasoning_parts.append(chunk.reasoning)
-                    if chunk.content:
-                        content_parts.append(chunk.content)
-
-                    current_reasoning = "".join(reasoning_parts)
-                    current_content = "".join(content_parts)
-
-                    display_len = len(current_reasoning) + len(current_content)
-                    now_mono = time.monotonic()
-                    chars_since_edit = display_len - last_display_len
-                    time_since_edit = now_mono - last_edit_time
-
-                    should_edit = (
-                        (current_content.strip() or current_reasoning.strip())
-                        and (time_since_edit >= edit_interval or chars_since_edit >= edit_min_chars)
-                        and chars_since_edit > 0
-                    )
-
-                    if not should_edit:
-                        continue
-
-                    from mai_gram.core.md_to_telegram import markdown_to_html
-                    from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
-
-                    remaining_content = current_content[committed_content_offset:]
-
-                    from mai_gram.core.md_to_telegram import format_reasoning_html
-
-                    header_html = ""
-                    if show_reasoning and current_reasoning.strip() and not reasoning_committed:
-                        header_html = format_reasoning_html(current_reasoning)
-
-                    content_html = (
-                        markdown_to_html(remaining_content) if remaining_content.strip() else ""
-                    )
-
-                    if header_html and content_html:
-                        live_text = header_html + "\n\n" + content_html + " \u258d"
-                    elif header_html:
-                        live_text = header_html + " \u258d"
-                    elif content_html:
-                        live_text = content_html + " \u258d"
-                    else:
-                        continue
-
-                    live_parse_mode: str | None = "html"
-
-                    if len(live_text) > SAFE_MAX_LENGTH:
-                        await self._commit_overflow(
-                            tg_chat_id=tg_chat_id,
-                            header_html=header_html,
-                            reasoning_committed=reasoning_committed,
-                            placeholder_msg_id=placeholder_msg_id,
-                            sent_msg_ids=sent_msg_ids,
-                            remaining_content=remaining_content,
-                            current_content=current_content,
-                            committed_content_offset=committed_content_offset,
-                        )
-                        if header_html and not reasoning_committed:
-                            reasoning_committed = True
-                        committed_content_offset = self._last_commit_offset
-                        placeholder_msg_id = self._last_commit_placeholder
-                    else:
-                        raw_fb = remaining_content or current_reasoning
-                        fallback = raw_fb[:SAFE_MAX_LENGTH] + " \u258d"
-                        if placeholder_msg_id is None:
-                            result = await self._messenger.send_message(
-                                OutgoingMessage(
-                                    text=live_text,
-                                    chat_id=tg_chat_id,
-                                    parse_mode=live_parse_mode,
-                                )
-                            )
-                            if not result.success and live_parse_mode:
-                                result = await self._messenger.send_message(
-                                    OutgoingMessage(
-                                        text=fallback,
-                                        chat_id=tg_chat_id,
-                                    )
-                                )
-                            if result.success:
-                                placeholder_msg_id = result.message_id
-                        else:
-                            edit_result = await self._messenger.edit_message(
-                                tg_chat_id,
-                                placeholder_msg_id,
-                                live_text,
-                                parse_mode=live_parse_mode,
-                            )
-                            if not edit_result.success and live_parse_mode:
-                                await self._messenger.edit_message(
-                                    tg_chat_id,
-                                    placeholder_msg_id,
-                                    fallback,
-                                )
-
-                    last_edit_time = now_mono
-                    last_display_len = display_len
-
-                response_text = "".join(content_parts)
-                response_reasoning = "".join(reasoning_parts) or None
-
-                if not response_text or not response_text.strip():
-                    raise LLMProviderError("The model returned an empty response")
-
-                saved_msg_id: int | None = None
-                if response_text and response_text.strip():
-                    saved_msg = await message_store.save_message(
-                        chat.id,
-                        "assistant",
-                        response_text,
-                        timestamp=datetime.now(timezone.utc),
-                        reasoning=response_reasoning,
-                        timezone_name=regen_tz,
-                        show_datetime=regen_send_dt,
-                    )
-                    saved_msg_id = saved_msg.id
-
-            except Exception as exc:
-                logger.exception("Failed to regenerate response")
-                error_text = self._user_friendly_error(exc)
-                saved_msg_id = None
-
-                from mai_gram.messenger.telegram import build_inline_keyboard
-
-                err_kb = build_inline_keyboard([[("\U0001f504 Regenerate", "regen")]])
-                await self._deliver_error(
-                    tg_chat_id,
-                    error_text,
-                    placeholder_msg_id=placeholder_msg_id,
-                    keyboard=err_kb,
-                    sent_msg_ids=sent_msg_ids,
-                )
-
-                self._response_message_ids[tg_chat_id] = sent_msg_ids
-                return
-
-        self._response_message_ids[tg_chat_id] = sent_msg_ids
-
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        kb_buttons = [[("\U0001f504 Regenerate", "regen")]]
-        if saved_msg_id is not None:
-            kb_buttons[0].append(("\u2702 Cut this & above", f"cut:{saved_msg_id}"))
-        action_kb = build_inline_keyboard(kb_buttons)
-
-        usage_footer = self._format_usage_footer(stream_usage, stream_cost, stream_is_byok)
-
-        if placeholder_msg_id and response_text and response_text.strip():
-            remaining_raw = response_text[committed_content_offset:]
-            if usage_footer:
-                remaining_raw += f"\n\n{usage_footer}"
-
-            header_html = ""
-            if (
-                show_reasoning
-                and response_reasoning
-                and response_reasoning.strip()
-                and not reasoning_committed
-            ):
-                from mai_gram.core.md_to_telegram import format_reasoning_html
-
-                header_html = format_reasoning_html(response_reasoning, expandable=True)
-
-            extra_ids = await self._finalize_placeholder(
-                tg_chat_id,
-                placeholder_msg_id,
-                remaining_raw,
-                header_html=header_html,
-                keyboard=action_kb,
             )
-            sent_msg_ids.extend(extra_ids)
-            sent_msg_ids.append(placeholder_msg_id)
-        elif response_text and response_text.strip():
-            text_with_footer = response_text
-            if usage_footer:
-                text_with_footer += f"\n\n{usage_footer}"
-            final_msg_ids = await self._send_response(
-                tg_chat_id,
-                response_text=text_with_footer,
-                response_reasoning=response_reasoning,
-                show_reasoning=show_reasoning,
-                keyboard=action_kb,
-            )
-            sent_msg_ids.extend(final_msg_ids)
 
     # -- DB helpers --
 

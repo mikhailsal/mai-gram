@@ -21,13 +21,13 @@ The current codebase already has useful guardrails: Ruff, strict mypy, a pre-com
 
 ## AI Proxy2 Standards To Import
 
-- [ ] Import `ai-proxy2` code-size limits into local quality gates.
+- [x] Import `ai-proxy2` code-size limits into local quality gates.
   Apply a `500` line file limit and `60` line Python function limit, with explicit exclusions only for migrations or similarly generated code. Start in report-only mode if necessary, then make the check blocking once the first decomposition pass lands.
 
 - [ ] Expand Ruff to match the `ai-proxy2` backend rule categories.
   Add `C4`, `DTZ`, `T20`, `RUF`, `S`, and `PTH` to the existing selection set. Fix violations in production code first, then add narrow per-file ignores only when a rule is genuinely incompatible with the project.
 
-- [ ] Make mypy strictness explicit instead of relying only on `strict = true`.
+- [x] Make mypy strictness explicit instead of relying only on `strict = true`.
   Add `warn_return_any`, `warn_unused_configs`, `disallow_untyped_defs`, `disallow_incomplete_defs`, `check_untyped_defs`, and `no_implicit_optional` as explicit policy, mirroring `ai-proxy2` so the intended bar remains visible even if mypy changes the meaning of `strict` later.
 
 - [ ] Move toward the `ai-proxy2` coverage posture.
@@ -66,6 +66,10 @@ Validation:
 
 Run `make check`, `make precommit`, and verify the new size checker reports current hotspots clearly enough to drive the follow-on tasks.
 
+Status:
+
+The repository now has an explicit mypy policy and a tracked code-size audit wired into `make check` and the local pre-commit hook in report-only mode. Ruff rule expansion and coverage tightening remain follow-on work because they still require violation cleanup rather than a safe configuration-only change.
+
 ### 2. Decompose `BotHandler` into transport-facing dispatch plus application services
 
 - [ ] Split `BotHandler` into focused services and reduce the class below the size-limit threshold.
@@ -96,7 +100,7 @@ Add service-level unit tests around the extracted workflows and keep `mai-chat` 
 
 ### 3. Unify ordinary conversation and regenerate into one canonical generation pipeline
 
-- [ ] Replace duplicated generation logic with a single conversation execution pipeline.
+- [x] Replace duplicated generation logic with a single conversation execution pipeline.
 
 Issue:
 
@@ -121,6 +125,10 @@ This task applies the same maintainability principle as the `ai-proxy2` file/fun
 Validation:
 
 Extend functional tests so a normal message and a regenerate action produce the same persistence and tool-call behavior for the same chat state, except for the intentional “replace last answer” semantics.
+
+Status:
+
+Ordinary conversation and regenerate now share one internal assistant-turn execution path in `BotHandler`, and the regenerate tool-chain preservation path has focused regression coverage. Promoting that shared path into a dedicated application service remains follow-on work under the broader `BotHandler` decomposition task.
 
 ### 4. Create shared application services for CLI and Telegram adapters
 
@@ -359,7 +367,7 @@ Track omit-list reduction and coverage-threshold increases in the same change se
 - [ ] No production Python function exceeds the adopted function-length limit unless there is a documented exception.
 - [ ] Ruff and mypy settings are at least as explicit as the `ai-proxy2` backend baseline.
 - [ ] Coverage omissions no longer include the main orchestration paths without a documented architectural reason.
-- [ ] Ordinary conversation and regenerate share one canonical execution pipeline.
+- [x] Ordinary conversation and regenerate share one canonical execution pipeline.
 - [ ] CLI and Telegram adapters call the same core services for shared behavior.
 - [ ] Core workflows no longer depend on raw Telegram objects or `dict[str, Any]` payloads when a typed domain model is available.
 - [ ] Wiki synchronization and summarization behavior are explicit, owned, and testable.
