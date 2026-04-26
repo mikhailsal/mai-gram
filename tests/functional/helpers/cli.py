@@ -23,6 +23,12 @@ _LIVE_OUTPUT_TRANSIENT_RE = re.compile(
     r"(?:the model returned an empty response|stream completed without any data|without any data)",
     re.IGNORECASE,
 )
+_LIVE_OUTPUT_MALFORMED_TOOLCALL_RE = re.compile(r"toolcall[>\]]", re.IGNORECASE)
+_LIVE_OUTPUT_NO_TOOLS_RE = re.compile(r"tools used:\s*none", re.IGNORECASE)
+_LIVE_OUTPUT_PROVIDER_ERROR_RE = re.compile(
+    r"(?:ai provider error|something went wrong with the ai provider|tap regenerate to retry)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +194,30 @@ class CliHarness:
         assert result is not None
         return result
 
+    def send_callback_with_live_retry(
+        self,
+        chat_id: str,
+        callback_data: str,
+        *,
+        user_id: str | None = None,
+        env_overrides: dict[str, str | None] | None = None,
+        max_attempts: int = 3,
+    ) -> CompletedCliRun:
+        result: CompletedCliRun | None = None
+        for attempt in range(1, max_attempts + 1):
+            result = self.send_callback(
+                chat_id,
+                callback_data,
+                user_id=user_id,
+                env_overrides=env_overrides,
+            )
+            if not _should_retry_live_output(result) or attempt == max_attempts:
+                return result
+            time.sleep(min(2.0 * attempt, 5.0))
+
+        assert result is not None
+        return result
+
     def send_callback(
         self,
         chat_id: str,
@@ -261,4 +291,13 @@ def _retry_delay(output: str, transient_retries: int, deadline: float) -> float 
 
 
 def _should_retry_live_output(result: CompletedCliRun) -> bool:
-    return result.returncode == 0 and _LIVE_OUTPUT_TRANSIENT_RE.search(result.output) is not None
+    if result.returncode != 0:
+        return False
+    if _LIVE_OUTPUT_TRANSIENT_RE.search(result.output) is not None:
+        return True
+    if (
+        _LIVE_OUTPUT_MALFORMED_TOOLCALL_RE.search(result.output) is not None
+        and _LIVE_OUTPUT_NO_TOOLS_RE.search(result.output) is not None
+    ):
+        return True
+    return _LIVE_OUTPUT_PROVIDER_ERROR_RE.search(result.output) is not None

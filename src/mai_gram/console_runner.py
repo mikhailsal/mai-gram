@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import logging
@@ -15,7 +14,15 @@ from sqlalchemy import select
 
 from mai_gram.bot.handler import BotHandler
 from mai_gram.config import Settings, get_settings
-from mai_gram.core.prompt_builder import PromptBuilder
+from mai_gram.console_cli import (
+    ConsoleStateStore,
+    build_parser,
+    needs_live_llm,
+    resolve_chat_id,
+    resolve_user_id,
+)
+from mai_gram.console_output import print_debug_session_stats
+from mai_gram.core.prompt_preview_service import PromptPreviewService
 from mai_gram.db import close_db, get_session, init_db, run_migrations
 from mai_gram.db.models import Chat, Message
 from mai_gram.debug import LLMLoggerProvider
@@ -83,77 +90,6 @@ class _OfflineCLIProvider(LLMProvider):
         return None
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="mai-chat",
-        description="Console interface for mai-gram.",
-    )
-    parser.add_argument("message", nargs="?", help="Message text to send.")
-    parser.add_argument("-c", "--chat-id", help="Chat ID (persisted for future runs).")
-    parser.add_argument("--user-id", help="User ID for synthetic events.")
-    parser.add_argument(
-        "--cb",
-        action="append",
-        dest="callbacks",
-        metavar="DATA",
-        help="Dispatch a callback payload (button press). Can be repeated.",
-    )
-    parser.add_argument("--start", action="store_true", help="Dispatch /start command.")
-    parser.add_argument(
-        "--command",
-        metavar="COMMAND",
-        help=(
-            "Dispatch an arbitrary slash command. Accepts 'name' or "
-            "'name args...'; for example: --command 'timezone Europe/Moscow'."
-        ),
-    )
-    parser.add_argument("--history", action="store_true", help="Show conversation history.")
-    parser.add_argument("--wiki", action="store_true", help="Show wiki entries.")
-    parser.add_argument("--show-prompt", action="store_true", help="Print assembled LLM prompt.")
-    parser.add_argument("--debug", action="store_true", help="Enable LLM debug logging.")
-    parser.add_argument("--list", action="store_true", help="List all chats with message counts.")
-    parser.add_argument(
-        "--import-json",
-        dest="import_json",
-        metavar="PATH",
-        help=(
-            "Import a dialogue from a JSON file. "
-            "Expected format: [{role, content, tool_calls?, reasoning?, timestamp?}, ...]"
-        ),
-    )
-    parser.add_argument(
-        "--real",
-        action="store_true",
-        help="Real conversation mode (disables test mode transparency notice).",
-    )
-    parser.add_argument(
-        "--stream-debug",
-        action="store_true",
-        dest="stream_debug",
-        help="Print every streaming edit (by default only the final response is shown).",
-    )
-    parser.add_argument(
-        "--model",
-        metavar="MODEL_ID",
-        help="Model ID for --start setup (skips model selection step).",
-    )
-    parser.add_argument(
-        "--prompt",
-        metavar="PROMPT_NAME",
-        help=(
-            "Prompt name for --start setup (skips prompt selection step). "
-            "Use a name from the prompts/ directory, or '__custom__' with a message."
-        ),
-    )
-    parser.add_argument(
-        "--repair-wiki",
-        action="store_true",
-        dest="repair_wiki",
-        help="Sync wiki DB from disk files (disk is source of truth).",
-    )
-    return parser
-
-
 def _format_timestamp(value: datetime | None) -> str:
     if value is None:
         return "---- -- --:--:--"
@@ -162,53 +98,6 @@ def _format_timestamp(value: datetime | None) -> str:
     else:
         dt = value.astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
-
-
-class _ConsoleStateStore:
-    """Persists console state (last chat ID) to a JSON file."""
-
-    _STATE_FILE = Path("./data/.console_state.json")
-
-    def load(self) -> dict[str, Any]:
-        if self._STATE_FILE.exists():
-            result: dict[str, Any] = json.loads(self._STATE_FILE.read_text(encoding="utf-8"))
-            return result
-        return {}
-
-    def save(self, state: dict[str, Any]) -> None:
-        self._STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        self._STATE_FILE.write_text(
-            json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def get_last_chat_id(self) -> str | None:
-        return self.load().get("last_chat_id")
-
-    def set_last_chat_id(self, chat_id: str) -> None:
-        state = self.load()
-        state["last_chat_id"] = chat_id
-        self.save(state)
-
-
-def _resolve_chat_id(args: argparse.Namespace, state_store: _ConsoleStateStore) -> str:
-    chat_id = args.chat_id or state_store.get_last_chat_id()
-    if not chat_id:
-        raise SystemExit(
-            "Error: no chat ID available. Use -c/--chat-id once, then it will be remembered."
-        )
-    state_store.set_last_chat_id(chat_id)
-    return chat_id
-
-
-def _resolve_user_id(args: argparse.Namespace, settings: object) -> str:
-    if args.user_id:
-        return str(args.user_id)
-    get_fn = getattr(settings, "get_allowed_user_ids", None)
-    if get_fn is not None:
-        allowed = get_fn()
-        if allowed:
-            return str(sorted(allowed)[0])
-    return "console-user"
 
 
 def _parse_command_text(raw_command: str) -> tuple[str, str | None]:
@@ -327,73 +216,27 @@ async def _print_prompt(
     *,
     test_mode: bool = True,
 ) -> None:
-    from mai_gram.mcp_servers.manager import MCPManager
-    from mai_gram.mcp_servers.messages_server import MessagesMCPServer
-    from mai_gram.mcp_servers.wiki_server import WikiMCPServer
-
     async with get_session() as session:
-        result = await session.execute(select(Chat).where(Chat.id == chat_id))
-        chat = result.scalar_one_or_none()
-        if chat is None:
-            raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.")
-
-        message_store = MessageStore(session)
-        wiki_store = WikiStore(session, data_dir=data_dir)
-
-        prompt_builder = PromptBuilder(
+        preview_service = PromptPreviewService(
             llm,
-            message_store,
-            wiki_store,
+            settings,
+            memory_data_dir=data_dir,
             test_mode=test_mode,
         )
-        context = await prompt_builder.build_context(
-            chat,
-            send_datetime=chat.send_datetime,
-            chat_timezone=chat.timezone,
-            cut_above_message_id=chat.cut_above_message_id,
-        )
-
-        global_enabled, global_disabled = settings.get_tool_filter()
-        prompt_cfg = settings.get_prompt_config(chat.prompt_name) if chat.prompt_name else None
-
-        enabled_tools = global_enabled
-        disabled_tools = global_disabled
-        if prompt_cfg is not None and (
-            prompt_cfg.tools_enabled is not None or prompt_cfg.tools_disabled is not None
-        ):
-            enabled_tools = prompt_cfg.tools_enabled
-            disabled_tools = prompt_cfg.tools_disabled
-
-        mcp_manager = MCPManager(
-            enabled_tools=enabled_tools,
-            disabled_tools=disabled_tools,
-        )
-
-        mcp_servers_enabled = prompt_cfg.mcp_servers_enabled if prompt_cfg else None
-        mcp_servers_disabled = prompt_cfg.mcp_servers_disabled if prompt_cfg else None
-
-        def _is_server_allowed(name: str) -> bool:
-            if mcp_servers_enabled is not None:
-                return name in mcp_servers_enabled
-            if mcp_servers_disabled is not None:
-                return name not in mcp_servers_disabled
-            return True
-
-        if _is_server_allowed("wiki"):
-            mcp_manager.register_server("wiki", WikiMCPServer(wiki_store, chat_id))
-        if _is_server_allowed("messages"):
-            mcp_manager.register_server("messages", MessagesMCPServer(message_store, chat_id))
-        tools = await mcp_manager.list_all_tools()
+        try:
+            preview = await preview_service.build_preview(session, chat_id=chat_id)
+        except LookupError as exc:
+            raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.") from exc
 
     print("--- Prompt Preview ---")
-    print(context[0].content)
+    print(preview.context[0].content)
     print("")
     print("--- Available Tools ---")
-    for tool in tools:
+    for tool in preview.tools:
         print(f"- {tool.name}: {tool.description}")
     print("")
     print("--- Message Context ---")
-    for msg in context[1:]:
+    for msg in preview.context[1:]:
         if msg.role.value == "tool":
             print(f"[tool result:{msg.tool_call_id}] {msg.content}")
         else:
@@ -406,9 +249,8 @@ async def _print_prompt(
                 except (json.JSONDecodeError, TypeError):
                     args_text = tc.arguments
                 print(f"[tool call:{tc.id}] {tc.name}({args_text})")
-    token_count = await llm.count_tokens(context)
     print("")
-    print(f"Approx tokens: {token_count}")
+    print(f"Approx tokens: {preview.token_count}")
 
 
 # -- Import command --
@@ -450,24 +292,6 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
     return imported
 
 
-def _needs_live_llm(args: argparse.Namespace) -> bool:
-    is_custom_prompt_setup = (
-        bool(args.start)
-        and bool(args.message)
-        and (
-            args.prompt == "__custom__"
-            or any(cb_data == "prompt:__custom__" for cb_data in (args.callbacks or []))
-        )
-    )
-    if is_custom_prompt_setup:
-        return False
-    if bool(args.message):
-        return True
-    if args.callbacks:
-        return any(cb_data == "confirm_regen" for cb_data in args.callbacks)
-    return False
-
-
 # -- Main --
 
 
@@ -494,9 +318,9 @@ def _incoming_command(
     )
 
 
-async def _run(args: argparse.Namespace) -> None:
+async def _run(args: Any) -> None:
     settings = get_settings()
-    state_store = _ConsoleStateStore()
+    state_store = ConsoleStateStore()
 
     if args.list:
         engine = await init_db(settings.database_url, echo=settings.debug)
@@ -507,50 +331,18 @@ async def _run(args: argparse.Namespace) -> None:
             await close_db()
         return
 
-    user_id = _resolve_user_id(args, settings)
-    chat_id = _resolve_chat_id(args, state_store)
+    user_id = resolve_user_id(args, settings)
+    chat_id = resolve_chat_id(args, state_store)
 
     engine = await init_db(settings.database_url, echo=settings.debug)
     await run_migrations(engine)
 
-    llm_base: OpenRouterProvider | _OfflineCLIProvider | None = None
     llm: LLMProvider | None = None
     try:
-        if args.history:
-            await _print_history(chat_id)
-            return
-        if args.repair_wiki:
-            await _repair_wiki(chat_id, settings.memory_data_dir)
-            return
-        if args.wiki:
-            await _print_wiki(chat_id, settings.memory_data_dir)
-            return
-        if args.import_json:
-            count = await _import_json_dialogue(chat_id, args.import_json)
-            print(f"Imported {count} messages into chat '{chat_id}'.")
+        if await _handle_console_inspection(args, chat_id, settings):
             return
 
-        needs_live_llm = _needs_live_llm(args)
-        if needs_live_llm and not settings.openrouter_api_key:
-            raise SystemExit("Error: OPENROUTER_API_KEY is required.")
-
-        if settings.openrouter_api_key:
-            llm_base = OpenRouterProvider(
-                api_key=settings.openrouter_api_key,
-                default_model=settings.llm_model,
-                base_url=settings.openrouter_base_url,
-            )
-        else:
-            llm_base = _OfflineCLIProvider()
-        llm = llm_base
-        logger_provider: LLMLoggerProvider | None = None
-        if args.debug:
-            logger_provider = LLMLoggerProvider(
-                llm_base,
-                chat_id=chat_id,
-                base_dir=Path(settings.memory_data_dir) / "debug_logs",
-            )
-            llm = logger_provider
+        llm, logger_provider = _build_cli_llm(args, chat_id, settings)
 
         if args.show_prompt:
             test_mode = not args.real
@@ -563,94 +355,133 @@ async def _run(args: argparse.Namespace) -> None:
             )
             return
 
-        messenger = ConsoleMessenger(stream_debug=args.stream_debug)
-        test_mode = not args.real
-        _handler = BotHandler(
-            messenger,
-            llm,
-            memory_data_dir=settings.memory_data_dir,
-            wiki_context_limit=settings.wiki_context_limit,
-            short_term_limit=settings.short_term_limit,
-            tool_max_iterations=settings.tool_max_iterations,
-            test_mode=test_mode,
+        await _dispatch_console_runtime(
+            args,
+            chat_id=chat_id,
+            user_id=user_id,
+            llm=llm,
+            settings=settings,
         )
 
-        if args.start:
-            await messenger.dispatch_message(_incoming_command(chat_id, user_id, "start"))
-            if args.model:
-                await messenger.dispatch_callback(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    callback_data=f"model:{args.model}",
-                )
-            if args.prompt:
-                await messenger.dispatch_callback(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    callback_data=f"prompt:{args.prompt}",
-                )
-        if args.command:
-            command, command_args = _parse_command_text(args.command)
-            await messenger.dispatch_message(
-                _incoming_command(chat_id, user_id, command, command_args)
-            )
-        if args.callbacks:
-            for cb_data in args.callbacks:
-                await messenger.dispatch_callback(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    callback_data=cb_data,
-                )
-        if args.message:
-            await messenger.dispatch_text(
-                chat_id=chat_id,
-                user_id=user_id,
-                text=args.message,
-            )
-
-        if not (args.start or args.command or args.callbacks or args.message):
-            raise SystemExit(
-                "Error: nothing to do. Provide a message, --start, --command, --cb, "
-                "or an inspection flag."
-            )
-
-        messenger.flush_edits()
-
         if logger_provider is not None:
-            stats = logger_provider.get_session_stats()
-            print("")
-            print("--- Debug Info ---")
-            print(
-                f"LLM calls: {stats['llm_calls']} "
-                f"({stats['calls_with_tool_calls']} with tool calls)"
-            )
-            tools_used = ", ".join(stats["tools_used"]) if stats["tools_used"] else "none"
-            print(f"Tools used: {tools_used}")
-            print(
-                f"Tokens: {stats['prompt_tokens']:,} prompt + "
-                f"{stats['completion_tokens']:,} completion = "
-                f"{stats['total_tokens']:,} total"
-            )
-            print("")
-            print("--- Session Cost ---")
-            print(
-                f"This call: {stats['last_call_total_tokens']:,} tokens "
-                f"(${stats['last_call_cost_usd']:.3f})"
-            )
-            print(
-                f"Session total: {stats['total_tokens']:,} tokens "
-                f"(${stats['session_cost_usd']:.3f})"
-            )
-            if stats["log_path"]:
-                print(f"Full log: {stats['log_path']}")
+            print_debug_session_stats(logger_provider.get_session_stats())
     finally:
         if llm is not None:
             await llm.close()
         await close_db()
 
 
+async def _handle_console_inspection(
+    args: Any,
+    chat_id: str,
+    settings: Settings,
+) -> bool:
+    if args.history:
+        await _print_history(chat_id)
+        return True
+    if args.repair_wiki:
+        await _repair_wiki(chat_id, settings.memory_data_dir)
+        return True
+    if args.wiki:
+        await _print_wiki(chat_id, settings.memory_data_dir)
+        return True
+    if args.import_json:
+        count = await _import_json_dialogue(chat_id, args.import_json)
+        print(f"Imported {count} messages into chat '{chat_id}'.")
+        return True
+    return False
+
+
+def _build_cli_llm(
+    args: Any,
+    chat_id: str,
+    settings: Settings,
+) -> tuple[LLMProvider, LLMLoggerProvider | None]:
+    if needs_live_llm(args) and not settings.openrouter_api_key:
+        raise SystemExit("Error: OPENROUTER_API_KEY is required.")
+
+    if settings.openrouter_api_key:
+        llm_base: OpenRouterProvider | _OfflineCLIProvider = OpenRouterProvider(
+            api_key=settings.openrouter_api_key,
+            default_model=settings.llm_model,
+            base_url=settings.openrouter_base_url,
+        )
+    else:
+        llm_base = _OfflineCLIProvider()
+
+    if not args.debug:
+        return llm_base, None
+
+    logger_provider = LLMLoggerProvider(
+        llm_base,
+        chat_id=chat_id,
+        base_dir=Path(settings.memory_data_dir) / "debug_logs",
+    )
+    return logger_provider, logger_provider
+
+
+async def _dispatch_console_runtime(
+    args: Any,
+    *,
+    chat_id: str,
+    user_id: str,
+    llm: LLMProvider,
+    settings: Settings,
+) -> ConsoleMessenger:
+    messenger = ConsoleMessenger(stream_debug=args.stream_debug)
+    BotHandler(
+        messenger,
+        llm,
+        memory_data_dir=settings.memory_data_dir,
+        wiki_context_limit=settings.wiki_context_limit,
+        short_term_limit=settings.short_term_limit,
+        tool_max_iterations=settings.tool_max_iterations,
+        test_mode=not args.real,
+    )
+
+    if args.start:
+        await messenger.dispatch_message(_incoming_command(chat_id, user_id, "start"))
+        if args.model:
+            await messenger.dispatch_callback(
+                chat_id=chat_id,
+                user_id=user_id,
+                callback_data=f"model:{args.model}",
+            )
+        if args.prompt:
+            await messenger.dispatch_callback(
+                chat_id=chat_id,
+                user_id=user_id,
+                callback_data=f"prompt:{args.prompt}",
+            )
+    if args.command:
+        command, command_args = _parse_command_text(args.command)
+        await messenger.dispatch_message(_incoming_command(chat_id, user_id, command, command_args))
+    if args.callbacks:
+        for cb_data in args.callbacks:
+            await messenger.dispatch_callback(
+                chat_id=chat_id,
+                user_id=user_id,
+                callback_data=cb_data,
+            )
+    if args.message:
+        await messenger.dispatch_text(
+            chat_id=chat_id,
+            user_id=user_id,
+            text=args.message,
+        )
+
+    if not (args.start or args.command or args.callbacks or args.message):
+        raise SystemExit(
+            "Error: nothing to do. Provide a message, --start, --command, --cb, "
+            "or an inspection flag."
+        )
+
+    messenger.flush_edits()
+    return messenger
+
+
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = _build_parser()
+    parser = build_parser()
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     asyncio.run(_run(args))

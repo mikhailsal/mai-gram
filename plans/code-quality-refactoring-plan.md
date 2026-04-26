@@ -162,6 +162,10 @@ Validation:
 
 Run the CLI functional suite and targeted Telegram-facing tests after each extraction step. New shared-service tests should replace duplicated adapter-specific tests where possible.
 
+Status:
+
+The CLI prompt-preview path now uses `src/mai_gram/core/prompt_preview_service.py`, which reuses the shared MCP manager factory instead of rebuilding prompt tool filtering inline, and `src/mai_gram/console_runner.py` now delegates parser/state handling plus debug-output formatting to `src/mai_gram/console_cli.py` and `src/mai_gram/console_output.py` with direct unit coverage. `console_runner.py` is no longer a file-size violation, though broader CLI and Telegram workflow convergence is still pending.
+
 ### 5. Tighten the messenger boundary and stop leaking Telegram details into core logic
 
 - [ ] Make transport abstractions real by moving Telegram-specific behavior behind the messenger adapter.

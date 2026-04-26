@@ -62,7 +62,7 @@ def test_regenerate_matches_normal_response_contract(
     regen_prompt = functional_cli.send_callback(chat_id, "regen")
     assert "Regenerate this response?" in regen_prompt.stdout
 
-    regenerated = functional_cli.send_callback(chat_id, "confirm_regen")
+    regenerated = functional_cli.send_callback_with_live_retry(chat_id, "confirm_regen")
     assert regenerated.returncode == 0
     assert "--- AI Response" in regenerated.stdout
     assert "PARITY" in extract_last_response_body(regenerated.stdout).upper()
