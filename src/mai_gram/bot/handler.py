@@ -17,34 +17,21 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from mai_gram.bot.assistant_turn_builder import AssistantTurnBuilder
-from mai_gram.bot.callback_router import CallbackRouter
-from mai_gram.bot.conversation_executor import ConversationExecutor
-from mai_gram.bot.conversation_service import ConversationService
-from mai_gram.bot.history_actions import HistoryActions
-from mai_gram.bot.import_workflow import ImportWorkflow
+from mai_gram.bot.access_control import AccessControl
+from mai_gram.bot.handler_services import build_handler_services
 from mai_gram.bot.middleware import MessageLogger, RateLimitConfig, RateLimiter
-from mai_gram.bot.regenerate_service import RegenerateService
-from mai_gram.bot.resend_service import ResendService
-from mai_gram.bot.reset_workflow import ResetWorkflow
-from mai_gram.bot.response_renderer import ResponseRenderer
-from mai_gram.bot.setup_workflow import SetupSession, SetupWorkflow
 from mai_gram.config import get_settings
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat
-from mai_gram.mcp_servers.manager import MCPManager
-from mai_gram.mcp_servers.messages_server import MessagesMCPServer
-from mai_gram.mcp_servers.wiki_server import WikiMCPServer
 from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from mai_gram.config import BotConfig
+    from mai_gram.bot.setup_workflow import SetupSession
+    from mai_gram.config import BotConfig, Settings
     from mai_gram.llm.provider import LLMProvider
     from mai_gram.mcp_servers.external import ExternalMCPPool
-    from mai_gram.memory.knowledge_base import WikiStore
-    from mai_gram.memory.messages import MessageStore
     from mai_gram.messenger.base import Messenger
 
 logger = logging.getLogger(__name__)
@@ -79,161 +66,126 @@ class BotHandler:
         bot_config: BotConfig | None = None,
     ) -> None:
         self._messenger = messenger
-        self._llm = llm_provider
-        self._rate_limiter = RateLimiter(
-            rate_limit_config,
-            on_rate_limited=self._handle_rate_limited,
-        )
         self._message_logger = MessageLogger(log_content=False)
         self._test_mode = test_mode
         self._response_message_ids: dict[str, list[str]] = {}
         self._cut_original_html: dict[str, tuple[str, str | None]] = {}
 
         settings = get_settings()
+        self._configure_runtime_settings(
+            settings,
+            memory_data_dir=memory_data_dir,
+            wiki_context_limit=wiki_context_limit,
+            short_term_limit=short_term_limit,
+            tool_max_iterations=tool_max_iterations,
+        )
+        self._build_services(
+            llm_provider,
+            settings=settings,
+            external_mcp_pool=external_mcp_pool,
+            bot_config=bot_config,
+        )
+        self._bot_config = bot_config
+        allowed_users = self._allowed_users(settings, bot_config=bot_config)
+        self._access_control = AccessControl(self._messenger, allowed_users=allowed_users)
+        self._rate_limiter = RateLimiter(
+            rate_limit_config,
+            on_rate_limited=self._access_control.handle_rate_limited,
+        )
+        self._register_handlers()
+
+    def _configure_runtime_settings(
+        self,
+        settings: Settings,
+        *,
+        memory_data_dir: str | None,
+        wiki_context_limit: int | None,
+        short_term_limit: int | None,
+        tool_max_iterations: int | None,
+    ) -> None:
         self._memory_data_dir = memory_data_dir or settings.memory_data_dir
         self._wiki_context_limit = wiki_context_limit or settings.wiki_context_limit
         self._short_term_limit = short_term_limit or settings.short_term_limit
         self._tool_max_iterations = tool_max_iterations or settings.tool_max_iterations
         self._settings = settings
-        self._response_renderer = ResponseRenderer(
-            messenger,
+
+    def _build_services(
+        self,
+        llm_provider: LLMProvider,
+        *,
+        settings: Settings,
+        external_mcp_pool: ExternalMCPPool | None,
+        bot_config: BotConfig | None,
+    ) -> None:
+        services = build_handler_services(
+            self._messenger,
+            llm_provider,
+            settings=settings,
             message_logger=self._message_logger,
-        )
-        self._assistant_turn_builder = AssistantTurnBuilder(
-            llm_provider,
-            settings,
-            build_mcp_manager=self._build_mcp_manager,
-            memory_data_dir=self._memory_data_dir,
-            wiki_context_limit=self._wiki_context_limit,
-            short_term_limit=self._short_term_limit,
-            test_mode=self._test_mode,
-        )
-        self._conversation_executor = ConversationExecutor(
-            messenger,
-            llm_provider,
-            tool_max_iterations=self._tool_max_iterations,
-            renderer=self._response_renderer,
-        )
-        self._conversation_service = ConversationService(
-            messenger,
-            self._conversation_executor,
-            turn_builder=self._assistant_turn_builder,
-            resolve_chat_id=self._chat_id_for,
-        )
-        self._import_workflow = ImportWorkflow(
-            messenger,
-            settings,
-            get_allowed_models=self._get_allowed_models_for_bot,
-            resolve_chat_id=self._chat_id_for,
-        )
-        self._history_actions = HistoryActions(
-            messenger,
-            resolve_chat_id=self._chat_id_for,
-        )
-        self._regenerate_service = RegenerateService(
-            messenger,
-            self._conversation_executor,
-            turn_builder=self._assistant_turn_builder,
-            resolve_chat_id=self._chat_id_for,
-        )
-        self._resend_service = ResendService(
-            messenger,
-            renderer=self._response_renderer,
-            resolve_chat_id=self._chat_id_for,
-        )
-        self._reset_workflow = ResetWorkflow(
-            messenger,
             presenter=self,
             resolve_chat_id=self._chat_id_for,
             clear_setup_session=self.clear_setup_session,
-            memory_data_dir=self._memory_data_dir,
-        )
-        self._setup_workflow = SetupWorkflow(
-            messenger,
-            settings,
-            bot_config=bot_config,
-            resolve_chat_id=self._chat_id_for,
-        )
-        self._callback_router = CallbackRouter(
-            messenger,
-            import_workflow=self._import_workflow,
-            setup_workflow=self._setup_workflow,
-            reset_workflow=self._reset_workflow,
-            history_actions=self._history_actions,
-            regenerate_service=self._regenerate_service,
             show_confirmation=self._show_confirmation,
             delete_callback_message=self._delete_callback_message,
             cut_original_html=self._cut_original_html,
             response_message_ids=self._response_message_ids,
+            memory_data_dir=self._memory_data_dir,
+            wiki_context_limit=self._wiki_context_limit,
+            short_term_limit=self._short_term_limit,
+            tool_max_iterations=self._tool_max_iterations,
+            test_mode=self._test_mode,
+            bot_config=bot_config,
+            external_mcp_pool=external_mcp_pool,
         )
-        self._bot_config = bot_config
-        self._external_mcp_pool = external_mcp_pool
+        self._response_renderer = services.response_renderer
+        self._mcp_manager_factory = services.mcp_manager_factory
+        self._assistant_turn_builder = services.assistant_turn_builder
+        self._conversation_executor = services.conversation_executor
+        self._conversation_service = services.conversation_service
+        self._import_workflow = services.import_workflow
+        self._history_actions = services.history_actions
+        self._regenerate_service = services.regenerate_service
+        self._resend_service = services.resend_service
+        self._reset_workflow = services.reset_workflow
+        self._setup_workflow = services.setup_workflow
+        self._callback_router = services.callback_router
 
+    def _allowed_users(
+        self,
+        settings: Settings,
+        *,
+        bot_config: BotConfig | None,
+    ) -> set[str]:
         # Per-bot user whitelist takes precedence over the global ALLOWED_USERS
         if bot_config and bot_config.allowed_users is not None:
-            self._allowed_users = {str(uid) for uid in bot_config.allowed_users}
-        else:
-            self._allowed_users = settings.get_allowed_user_ids()
+            return {str(uid) for uid in bot_config.allowed_users}
+        return settings.get_allowed_user_ids()
 
-        if self._allowed_users:
-            logger.info(
-                "Access control enabled: %d user(s) allowed",
-                len(self._allowed_users),
+    def _register_handlers(self) -> None:
+        for name, handler, description in (
+            ("start", self._handle_start, "Set up a new chat"),
+            ("reset", self._handle_reset, "Delete chat and history"),
+            ("model", self._handle_model, "Show current model"),
+            ("help", self._handle_help, "Show available commands"),
+            ("datetime", self._handle_datetime_toggle, "Toggle date/time in messages"),
+            ("timezone", self._handle_timezone, "Set timezone (e.g. /timezone Europe/Moscow)"),
+            ("reasoning", self._handle_reasoning_toggle, "Toggle reasoning display"),
+            ("toolcalls", self._handle_toolcalls_toggle, "Toggle tool call display"),
+            ("import", self._handle_import, "Import conversation from JSON file"),
+            (
+                "resend_last",
+                self._handle_resend_last,
+                "Re-send last AI message (if truncated)",
+            ),
+        ):
+            self._messenger.register_command_handler(
+                name,
+                handler,
+                description=description,
             )
-
-        messenger.register_command_handler(
-            "start",
-            self._handle_start,
-            description="Set up a new chat",
-        )
-        messenger.register_command_handler(
-            "reset",
-            self._handle_reset,
-            description="Delete chat and history",
-        )
-        messenger.register_command_handler(
-            "model",
-            self._handle_model,
-            description="Show current model",
-        )
-        messenger.register_command_handler(
-            "help",
-            self._handle_help,
-            description="Show available commands",
-        )
-        messenger.register_command_handler(
-            "datetime",
-            self._handle_datetime_toggle,
-            description="Toggle date/time in messages",
-        )
-        messenger.register_command_handler(
-            "timezone",
-            self._handle_timezone,
-            description="Set timezone (e.g. /timezone Europe/Moscow)",
-        )
-        messenger.register_command_handler(
-            "reasoning",
-            self._handle_reasoning_toggle,
-            description="Toggle reasoning display",
-        )
-        messenger.register_command_handler(
-            "toolcalls",
-            self._handle_toolcalls_toggle,
-            description="Toggle tool call display",
-        )
-        messenger.register_command_handler(
-            "import",
-            self._handle_import,
-            description="Import conversation from JSON file",
-        )
-        messenger.register_command_handler(
-            "resend_last",
-            self._handle_resend_last,
-            description="Re-send last AI message (if truncated)",
-        )
-        messenger.register_message_handler(self._handle_message)
-        messenger.register_callback_handler(self._handle_callback)
-        messenger.register_document_handler(self._handle_document)
+        self._messenger.register_message_handler(self._handle_message)
+        self._messenger.register_callback_handler(self._handle_callback)
+        self._messenger.register_document_handler(self._handle_document)
 
     # -- Setup session helpers --
 
@@ -246,30 +198,6 @@ class BotHandler:
     def clear_setup_session(self, user_id: str) -> None:
         self._setup_workflow.clear_setup_session(user_id)
 
-    # -- Access control --
-
-    async def _handle_rate_limited(self, user_id: str, chat_id: str) -> None:
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text="Slow down! Too many messages. Wait a moment and try again.",
-                chat_id=chat_id,
-            )
-        )
-
-    async def _check_access(self, message: IncomingMessage) -> bool:
-        if not self._allowed_users:
-            return True
-        if message.user_id in self._allowed_users:
-            return True
-        logger.warning("Access denied for user_id=%s", message.user_id)
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=(f"Access denied. This is a private bot. Your user ID: {message.user_id}"),
-                chat_id=message.chat_id,
-            )
-        )
-        return False
-
     def _chat_id_for(self, message: IncomingMessage) -> str:
         if message.bot_id:
             return make_chat_id(message.user_id, message.bot_id)
@@ -279,19 +207,19 @@ class BotHandler:
 
     async def _handle_start(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
         await self._setup_workflow.handle_start(message)
 
     async def _handle_reset(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
         await self._reset_workflow.handle_reset(message)
 
     async def _handle_model(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
 
         chat_id = self._chat_id_for(message)
@@ -316,7 +244,7 @@ class BotHandler:
 
     async def _handle_help(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
 
         msg = (
@@ -340,7 +268,7 @@ class BotHandler:
     ) -> None:
         """Generic toggle for boolean chat settings."""
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
 
         chat_id = self._chat_id_for(message)
@@ -379,7 +307,7 @@ class BotHandler:
     async def _handle_timezone(self, message: IncomingMessage) -> None:
         """Handle /timezone command -- show or set the chat's timezone."""
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
 
         chat_id = self._chat_id_for(message)
@@ -434,7 +362,7 @@ class BotHandler:
     async def _handle_resend_last(self, message: IncomingMessage) -> None:
         """Re-send the last assistant message from DB (handles truncation)."""
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
 
         result = await self._resend_service.handle_resend(
@@ -449,7 +377,7 @@ class BotHandler:
     async def _handle_import(self, message: IncomingMessage) -> None:
         """Handle /import command -- start the import flow."""
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
         await self._import_workflow.handle_import(
             message,
@@ -459,7 +387,7 @@ class BotHandler:
     async def _handle_document(self, message: IncomingMessage) -> None:
         """Handle uploaded documents (JSON files for import)."""
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
         await self._import_workflow.handle_document(message)
 
@@ -467,7 +395,7 @@ class BotHandler:
 
     async def _handle_message(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
         if not await self._rate_limiter.check_rate_limit(message.user_id, message.chat_id):
             return
@@ -480,73 +408,9 @@ class BotHandler:
 
     async def _handle_callback(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
-        if not await self._check_access(message):
+        if not await self._access_control.check_access(message):
             return
         await self._callback_router.handle_callback(message)
-
-    def _get_allowed_models_for_bot(self) -> list[str]:
-        """Return the model list for this bot, respecting per-bot restrictions."""
-        global_models = self._settings.get_allowed_models()
-        if self._bot_config and self._bot_config.allowed_models:
-            bot_set = set(self._bot_config.allowed_models)
-            return [m for m in global_models if m in bot_set]
-        return global_models
-
-    # -- MCP manager builder --
-
-    def _build_mcp_manager(
-        self,
-        chat: Chat,
-        message_store: MessageStore,
-        wiki_store: WikiStore,
-    ) -> MCPManager:
-        """Build an MCPManager with tool/server filters from global and per-prompt config."""
-        from mai_gram.config import PromptConfig
-
-        global_enabled, global_disabled = self._settings.get_tool_filter()
-        prompt_cfg: PromptConfig | None = None
-        if chat.prompt_name:
-            prompt_cfg = self._settings.get_prompt_config(chat.prompt_name)
-
-        enabled_tools = global_enabled
-        disabled_tools = global_disabled
-        if prompt_cfg is not None and (
-            prompt_cfg.tools_enabled is not None or prompt_cfg.tools_disabled is not None
-        ):
-            enabled_tools = prompt_cfg.tools_enabled
-            disabled_tools = prompt_cfg.tools_disabled
-
-        mcp_manager = MCPManager(
-            enabled_tools=enabled_tools,
-            disabled_tools=disabled_tools,
-        )
-
-        mcp_servers_enabled = prompt_cfg.mcp_servers_enabled if prompt_cfg else None
-        mcp_servers_disabled = prompt_cfg.mcp_servers_disabled if prompt_cfg else None
-
-        def _is_server_allowed(name: str) -> bool:
-            if mcp_servers_enabled is not None:
-                return name in mcp_servers_enabled
-            if mcp_servers_disabled is not None:
-                return name not in mcp_servers_disabled
-            return True
-
-        if _is_server_allowed("messages"):
-            mcp_manager.register_server(
-                "messages",
-                MessagesMCPServer(message_store, chat.id),
-            )
-        if _is_server_allowed("wiki"):
-            mcp_manager.register_server(
-                "wiki",
-                WikiMCPServer(wiki_store, chat.id),
-            )
-        if self._external_mcp_pool is not None:
-            for srv_name, srv in self._external_mcp_pool.get_all_servers().items():
-                if _is_server_allowed(srv_name):
-                    mcp_manager.register_server(f"ext:{srv_name}", srv)
-
-        return mcp_manager
 
     # -- Conversation --
 
