@@ -12,6 +12,7 @@ from mai_gram.bot.conversation_executor import (
     _StreamOutcome,
     _StreamState,
 )
+from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.db.models import Chat
 from mai_gram.llm.provider import LLMProviderError
 from mai_gram.messenger.base import SendResult
@@ -145,7 +146,10 @@ class TestConversationExecutor:
         )
         sent_msg_ids: list[str] = []
 
-        tool_call_cb, tool_result_cb = executor._build_tool_callbacks(request, sent_msg_ids)
+        tool_call_cb, tool_result_cb = executor._tool_activity.build_callbacks(
+            request,
+            sent_msg_ids,
+        )
 
         await tool_call_cb(
             content="",
@@ -172,29 +176,37 @@ class TestConversationExecutor:
         visible_request = _make_request(show_tool_calls=True)
         sent_msg_ids: list[str] = []
 
-        await executor._maybe_send_tool_call_display(hidden_request, sent_msg_ids, "[]")
-        await executor._maybe_send_tool_result_display(
+        await executor._tool_activity._maybe_send_tool_call_display(
+            hidden_request,
+            sent_msg_ids,
+            "[]",
+        )
+        await executor._tool_activity._maybe_send_tool_result_display(
             hidden_request,
             sent_msg_ids,
             tool_name="wiki_create",
             result=None,
             error=None,
         )
-        await executor._maybe_send_tool_call_display(visible_request, sent_msg_ids, "[]")
+        await executor._tool_activity._maybe_send_tool_call_display(
+            visible_request,
+            sent_msg_ids,
+            "[]",
+        )
 
         assert messenger.send_message.await_count == 0
-        assert ConversationExecutor._tool_call_lines(
+        assert ToolActivityNotifier.tool_call_lines(
             '[{"name":"wiki_create","arguments":"{bad json"}]'
         ) == ["🔧 wiki_create({bad json)"]
         assert (
-            ConversationExecutor._tool_result_text(
+            ToolActivityNotifier.tool_result_text(
                 tool_name="wiki_create",
                 result=None,
                 error="boom",
             )
             == "❌ wiki_create: boom"
         )
-        assert ConversationExecutor._tool_result_text(
+        assert ToolActivityNotifier.tool_result_text(
             tool_name="wiki_create",
             result="x" * 205,
             error=None,
@@ -475,9 +487,9 @@ class TestConversationExecutor:
             )
             is None
         )
-        assert ConversationExecutor._tool_call_lines("not-json") == []
+        assert ToolActivityNotifier.tool_call_lines("not-json") == []
         assert (
-            ConversationExecutor._tool_result_text(
+            ToolActivityNotifier.tool_result_text(
                 tool_name="wiki_create",
                 result="ok",
                 error=None,

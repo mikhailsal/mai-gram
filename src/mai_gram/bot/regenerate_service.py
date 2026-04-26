@@ -49,26 +49,7 @@ class RegenerateService:
             return []
 
         chat_id = self._resolve_chat_id(message)
-        has_tool_chain = False
-
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                return []
-
-            message_store = MessageStore(session)
-            recent = await message_store.get_recent(chat.id, limit=20)
-            trailing = self._get_trailing_assistant_chain(recent)
-            has_tool_results = any(item.role == "tool" for item in trailing)
-            has_tool_call_assistant = any(
-                item.role == "assistant" and item.tool_calls for item in trailing
-            )
-            has_tool_chain = has_tool_results and has_tool_call_assistant
-
-            if not has_tool_chain:
-                for stored_message in trailing:
-                    await session.delete(stored_message)
-                await session.flush()
+        has_tool_chain = await self._preserve_or_prune_trailing_turns(chat_id)
 
         if not has_tool_chain:
             for message_id in previous_response_ids:
@@ -103,6 +84,32 @@ class RegenerateService:
 
             result = await self._conversation_executor.execute(request)
             return result.sent_message_ids
+
+    async def _preserve_or_prune_trailing_turns(self, chat_id: str) -> bool:
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                return False
+
+            message_store = MessageStore(session)
+            recent = await message_store.get_recent(chat.id, limit=20)
+            trailing = self._get_trailing_assistant_chain(recent)
+            has_tool_chain = self._has_tool_chain(trailing)
+            if has_tool_chain:
+                return True
+
+            for stored_message in trailing:
+                await session.delete(stored_message)
+            await session.flush()
+            return False
+
+    @staticmethod
+    def _has_tool_chain(trailing: list[Message]) -> bool:
+        has_tool_results = any(item.role == "tool" for item in trailing)
+        has_tool_call_assistant = any(
+            item.role == "assistant" and item.tool_calls for item in trailing
+        )
+        return has_tool_results and has_tool_call_assistant
 
     @staticmethod
     def _get_trailing_assistant_chain(recent: list[Message]) -> list[Message]:

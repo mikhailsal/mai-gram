@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.llm.provider import LLMProviderError
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.messenger.base import OutgoingMessage
@@ -143,10 +143,11 @@ class ConversationExecutor:
         self._llm = llm_provider
         self._tool_max_iterations = tool_max_iterations
         self._renderer = renderer
+        self._tool_activity = ToolActivityNotifier(messenger)
 
     async def execute(self, request: AssistantTurnRequest) -> AssistantTurnResult:
         sent_msg_ids: list[str] = []
-        tool_call_cb, tool_result_cb = self._build_tool_callbacks(request, sent_msg_ids)
+        tool_call_cb, tool_result_cb = self._tool_activity.build_callbacks(request, sent_msg_ids)
 
         try:
             outcome = await self._stream_response(
@@ -176,116 +177,6 @@ class ConversationExecutor:
             saved_msg.id,
         )
         return AssistantTurnResult(sent_message_ids=sent_msg_ids)
-
-    def _build_tool_callbacks(
-        self,
-        request: AssistantTurnRequest,
-        sent_msg_ids: list[str],
-    ) -> tuple[
-        Callable[..., Awaitable[None]],
-        Callable[..., Awaitable[None]],
-    ]:
-        async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
-            await request.message_store.save_message(
-                request.chat.id,
-                "assistant",
-                content or "",
-                tool_calls=tool_calls_json,
-                timezone_name=request.timezone_name,
-                show_datetime=request.show_datetime,
-            )
-            await self._maybe_send_tool_call_display(request, sent_msg_ids, tool_calls_json)
-
-        async def _on_tool_result_display(
-            *,
-            tool_call_id: str,
-            tool_name: str,
-            arguments: str,
-            result: object,
-            content: str,
-            error: str | None,
-            server_name: str | None,
-        ) -> None:
-            del arguments, server_name
-            await request.message_store.save_message(
-                request.chat.id,
-                "tool",
-                content,
-                tool_call_id=tool_call_id,
-                timezone_name=request.timezone_name,
-                show_datetime=request.show_datetime,
-            )
-            await self._maybe_send_tool_result_display(
-                request,
-                sent_msg_ids,
-                tool_name=tool_name,
-                result=result,
-                error=error,
-            )
-
-        return _on_tool_call_display, _on_tool_result_display
-
-    async def _maybe_send_tool_call_display(
-        self,
-        request: AssistantTurnRequest,
-        sent_msg_ids: list[str],
-        tool_calls_json: str,
-    ) -> None:
-        if not request.show_tool_calls:
-            return
-        lines = self._tool_call_lines(tool_calls_json)
-        if not lines:
-            return
-        result = await self._messenger.send_message(
-            OutgoingMessage(text="\n".join(lines), chat_id=request.telegram_chat_id)
-        )
-        if result.success and result.message_id:
-            sent_msg_ids.append(result.message_id)
-
-    @staticmethod
-    def _tool_call_lines(tool_calls_json: str) -> list[str]:
-        try:
-            calls = json.loads(tool_calls_json)
-        except (json.JSONDecodeError, TypeError):
-            return []
-        lines: list[str] = []
-        for tool_call in calls:
-            name = tool_call.get("name", "?")
-            args = tool_call.get("arguments", "{}")
-            try:
-                args_dict = json.loads(args) if isinstance(args, str) else args
-                args_str = ", ".join(f"{k}={v!r}" for k, v in args_dict.items())
-            except (json.JSONDecodeError, TypeError, AttributeError):
-                args_str = str(args)
-            lines.append(f"🔧 {name}({args_str})")
-        return lines
-
-    async def _maybe_send_tool_result_display(
-        self,
-        request: AssistantTurnRequest,
-        sent_msg_ids: list[str],
-        *,
-        tool_name: str,
-        result: object,
-        error: str | None,
-    ) -> None:
-        if not request.show_tool_calls:
-            return
-        result_text = self._tool_result_text(tool_name=tool_name, result=result, error=error)
-        tool_result = await self._messenger.send_message(
-            OutgoingMessage(text=result_text, chat_id=request.telegram_chat_id)
-        )
-        if tool_result.success and tool_result.message_id:
-            sent_msg_ids.append(tool_result.message_id)
-
-    @staticmethod
-    def _tool_result_text(*, tool_name: str, result: object, error: str | None) -> str:
-        if error:
-            return f"❌ {tool_name}: {error}"
-        result_str = str(result) if result is not None else ""
-        if len(result_str) > 200:
-            result_str = result_str[:200] + "…"
-        return f"✅ {tool_name}: {result_str}" if result_str else f"✅ {tool_name}"
 
     async def _stream_response(
         self,

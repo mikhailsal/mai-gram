@@ -63,35 +63,11 @@ class ResendService:
         tg_chat_id = message.chat_id
 
         async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="No chat configured. Use /start first.",
-                        chat_id=tg_chat_id,
-                    )
-                )
-                return ResendResult(sent_message_ids=[], replaced_previous=False)
-
-            result = await session.execute(
-                select(Message)
-                .where(
-                    Message.chat_id == chat_id,
-                    Message.role == "assistant",
-                    Message.content.isnot(None),
-                    Message.content != "",
-                )
-                .order_by(Message.id.desc())
-                .limit(1)
-            )
-            last_msg = result.scalar_one_or_none()
-
-            if not last_msg:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="No assistant message found to resend.",
-                        chat_id=tg_chat_id,
-                    )
+            chat, last_msg = await self._load_resend_target(session, chat_id)
+            if not chat or not last_msg:
+                await self._notify_missing_resend_target(
+                    tg_chat_id,
+                    has_chat=chat is not None,
                 )
                 return ResendResult(sent_message_ids=[], replaced_previous=False)
 
@@ -122,6 +98,40 @@ class ResendService:
             )
 
         return ResendResult(sent_message_ids=sent_ids, replaced_previous=True)
+
+    async def _notify_missing_resend_target(self, tg_chat_id: str, *, has_chat: bool) -> None:
+        text = (
+            "No assistant message found to resend."
+            if has_chat
+            else "No chat configured. Use /start first."
+        )
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=text,
+                chat_id=tg_chat_id,
+            )
+        )
+
+    @staticmethod
+    async def _load_resend_target(
+        session: AsyncSession,
+        chat_id: str,
+    ) -> tuple[Chat | None, Message | None]:
+        chat = await ResendService._get_chat(session, chat_id)
+        if not chat:
+            return None, None
+        result = await session.execute(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.role == "assistant",
+                Message.content.isnot(None),
+                Message.content != "",
+            )
+            .order_by(Message.id.desc())
+            .limit(1)
+        )
+        return chat, result.scalar_one_or_none()
 
     @staticmethod
     async def _get_chat(session: AsyncSession, chat_id: str) -> Chat | None:
