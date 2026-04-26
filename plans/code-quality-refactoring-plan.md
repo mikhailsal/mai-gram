@@ -222,6 +222,10 @@ Validation:
 
 Add focused tests for config reload, invalid prompt companion TOML, external MCP config parsing, and multi-bot restrictions. Manual verification through `mai-chat` should still show the same prompt and model choices.
 
+Status:
+
+`src/mai_gram/config.py` now delegates file-backed behavior to `src/mai_gram/config_loaders.py`, which owns mtime-cached loading for `models.toml`, `bots.toml`, and prompt companion TOML files. The singleton `get_settings()` API remains intact for existing runtime call sites, but `src/mai_gram/main.py` now refreshes models config through the public `refresh_models_config()` facade instead of calling a private loader method directly. Further work is still needed to replace singleton-driven runtime composition with explicit loader injection.
+
 ### 7. Replace weakly typed MCP and LLM boundaries with validated domain models
 
 - [ ] Remove `dict[str, Any]` and ad hoc JSON handling from the core tool-calling path.

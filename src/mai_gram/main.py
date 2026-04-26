@@ -160,7 +160,7 @@ async def _watch_config(settings: Any) -> None:
     """Background task that watches models.toml for changes and pre-warms the cache.
 
     Uses simple mtime polling (2s interval).  The actual cache refresh is
-    performed by ``settings._load_toml()`` which compares mtimes.
+    performed by ``settings.refresh_models_config()`` which compares mtimes.
     """
     config_path = Path(settings.models_config_path)
     last_mtime: float = 0.0
@@ -179,7 +179,7 @@ async def _watch_config(settings: Any) -> None:
             mtime = config_path.stat().st_mtime
             if mtime != last_mtime:
                 last_mtime = mtime
-                settings._load_toml()
+                settings.refresh_models_config()
                 models = settings.get_allowed_models()
                 logger.info(
                     "Config file changed -- reloaded. Models: %s",

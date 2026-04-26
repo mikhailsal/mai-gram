@@ -1,0 +1,76 @@
+"""Unit tests for the functional CLI harness."""
+
+from __future__ import annotations
+
+import subprocess
+from typing import TYPE_CHECKING
+
+from tests.functional.helpers.cli import CliHarness, CompletedCliRun
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _build_harness(root: Path) -> CliHarness:
+    return CliHarness(
+        cli_path="mai-chat",
+        root=root,
+        env={},
+        db_path=root / "mai_gram.db",
+        data_dir=root / "data",
+        prompts_dir=root / "prompts",
+        models_config_path=root / "models.toml",
+        bots_config_path=root / "bots.toml",
+    )
+
+
+def test_run_cli_decodes_timeout_output(monkeypatch, tmp_path) -> None:
+    harness = _build_harness(tmp_path)
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=("mai-chat", "hello"),
+            timeout=kwargs["timeout"],
+            output=b"partial stdout",
+            stderr=b"partial stderr",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = harness.run_cli("hello", timeout=12, allow_retry=False)
+
+    assert result.returncode == 124
+    assert result.stdout == "partial stdout"
+    assert result.stderr == "partial stderr"
+
+
+def test_send_message_with_live_retry_uses_extended_timeout(monkeypatch, tmp_path) -> None:
+    harness = _build_harness(tmp_path)
+    seen_timeouts: list[int] = []
+
+    def fake_send_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        user_id: str | None = None,
+        debug: bool = False,
+        stream_debug: bool = False,
+        env_overrides: dict[str, str | None] | None = None,
+        timeout: int = 60,
+    ) -> CompletedCliRun:
+        seen_timeouts.append(timeout)
+        return CompletedCliRun(
+            command=("mai-chat", "-c", chat_id, text),
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            root=self.root,
+        )
+
+    monkeypatch.setattr(CliHarness, "send_message", fake_send_message)
+
+    result = harness.send_message_with_live_retry("func-chat", "hello")
+
+    assert result.returncode == 0
+    assert seen_timeouts == [120]

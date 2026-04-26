@@ -1,69 +1,22 @@
-"""Configuration management using Pydantic Settings.
-
-All settings can be overridden via environment variables or a .env file.
-The TOML config (models.toml) is cached and auto-refreshed when the file
-is modified on disk -- no restart needed.
-"""
+"""Configuration facade built on environment settings plus file-backed loaders."""
 
 from __future__ import annotations
 
 import logging
-import sys
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
+from mai_gram.config_loaders import (
+    BotConfig,
+    BotsConfigLoader,
+    ModelsConfigLoader,
+    PromptConfig,
+    PromptConfigLoader,
+)
 
-
-@dataclass
-class PromptConfig:
-    """Per-prompt display and tool/MCP settings loaded from a companion TOML file.
-
-    Tool filtering uses the same whitelist/blacklist semantics as the global
-    ``[tools]`` section in models.toml:
-    - ``tools_enabled`` (whitelist) — only these tools are available.
-    - ``tools_disabled`` (blacklist) — these tools are blocked.
-    - If both are set, ``tools_enabled`` takes precedence.
-    - ``None`` means "no per-prompt override" → fall back to global config.
-
-    MCP server filtering controls which server groups are registered:
-    - ``mcp_servers_enabled`` — only register these servers (e.g. ["wiki", "exa"]).
-    - ``mcp_servers_disabled`` — skip these servers (e.g. ["messages"]).
-    - Built-in names: "messages", "wiki". External: server names from [mcp] config.
-    """
-
-    show_reasoning: bool = True
-    show_tool_calls: bool = True
-    send_datetime: bool | None = None
-    tools_enabled: list[str] | None = None
-    tools_disabled: list[str] | None = None
-    mcp_servers_enabled: list[str] | None = None
-    mcp_servers_disabled: list[str] | None = None
-
-
-@dataclass
-class BotConfig:
-    """Per-bot configuration loaded from ``config/bots.toml``.
-
-    Each Telegram bot can have its own restrictions:
-    - ``token``: the bot API token (required).
-    - ``allowed_users``: user IDs that may use this bot (empty = use global fallback).
-    - ``allowed_models``: model IDs selectable during /start (empty = use global list).
-    - ``allowed_prompts``: prompt template names selectable during /start (empty = all).
-    """
-
-    token: str
-    allowed_users: list[int] | None = None
-    allowed_models: list[str] | None = None
-    allowed_prompts: list[str] | None = None
-
+__all__ = ["BotConfig", "PromptConfig", "Settings", "get_settings"]
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +157,33 @@ class Settings(BaseSettings):
             tokens.append(self.telegram_bot_token_3.strip())
         return tokens
 
-    _bots_cache: list[BotConfig] | None = None
-    _bots_mtime: float = 0.0
+    _models_loader_instance: ModelsConfigLoader | None = None
+    _models_loader_path: str = ""
+    _bots_loader_instance: BotsConfigLoader | None = None
+    _bots_loader_path: str = ""
+    _prompt_loader_instance: PromptConfigLoader | None = None
+    _prompt_loader_path: str = ""
+
+    def _models_loader(self) -> ModelsConfigLoader:
+        config_path = self.models_config_path
+        if self._models_loader_instance is None or self._models_loader_path != config_path:
+            self._models_loader_instance = ModelsConfigLoader(config_path)
+            self._models_loader_path = config_path
+        return self._models_loader_instance
+
+    def _bots_loader(self) -> BotsConfigLoader:
+        config_path = self.bots_config_path
+        if self._bots_loader_instance is None or self._bots_loader_path != config_path:
+            self._bots_loader_instance = BotsConfigLoader(config_path)
+            self._bots_loader_path = config_path
+        return self._bots_loader_instance
+
+    def _prompt_loader(self) -> PromptConfigLoader:
+        prompts_dir = self.prompts_dir
+        if self._prompt_loader_instance is None or self._prompt_loader_path != prompts_dir:
+            self._prompt_loader_instance = PromptConfigLoader(prompts_dir)
+            self._prompt_loader_path = prompts_dir
+        return self._prompt_loader_instance
 
     def get_bot_configs(self) -> list[BotConfig]:
         """Load per-bot configurations from ``config/bots.toml``.
@@ -213,89 +191,29 @@ class Settings(BaseSettings):
         Returns an empty list if the file doesn't exist (legacy env-var mode).
         The result is mtime-cached, so edits are picked up automatically.
         """
-        bots_path = Path(self.bots_config_path)
-        if not bots_path.exists():
-            return []
-
-        try:
-            mtime = bots_path.stat().st_mtime
-        except OSError:
-            return []
-
-        if mtime != self._bots_mtime or self._bots_cache is None:
-            with open(bots_path, "rb") as f:
-                data = tomllib.load(f)
-            self._bots_mtime = mtime
-
-            configs: list[BotConfig] = []
-            for entry in data.get("bots", []):
-                token = entry.get("token", "").strip()
-                if not token:
-                    logger.warning("Skipping bot entry with empty token in bots.toml")
-                    continue
-                configs.append(
-                    BotConfig(
-                        token=token,
-                        allowed_users=entry.get("allowed_users"),
-                        allowed_models=entry.get("allowed_models"),
-                        allowed_prompts=entry.get("allowed_prompts"),
-                    )
-                )
-            self._bots_cache = configs
-            logger.info(
-                "Loaded %d bot(s) from %s (mtime=%.3f)",
-                len(configs),
-                bots_path,
-                mtime,
-            )
-
-        return self._bots_cache
+        return self._bots_loader().get_bot_configs()
 
     def get_bot_config_by_token(self, token: str) -> BotConfig | None:
         """Find the BotConfig for a given token, or None if not found."""
-        for bc in self.get_bot_configs():
-            if bc.token == token:
-                return bc
-        return None
+        return self._bots_loader().get_bot_config_by_token(token)
 
-    # -- TOML config with mtime-based caching --------------------------------
-    # The parsed dict is cached and only re-read when the file's mtime changes,
-    # so editing models.toml takes effect immediately without restarting.
-
-    _toml_cache: dict[str, Any] = {}
-    _toml_mtime: float = 0.0
+    def refresh_models_config(self) -> None:
+        """Refresh the shared models TOML cache if the file changed on disk."""
+        self._models_loader().refresh()
 
     def _load_toml(self) -> dict[str, Any]:
-        """Return parsed TOML data, re-reading only when the file has changed."""
-        config_path = Path(self.models_config_path)
-        if not config_path.exists():
-            return {}
-        try:
-            mtime = config_path.stat().st_mtime
-        except OSError:
-            return {}
-
-        if mtime != self._toml_mtime:
-            with open(config_path, "rb") as f:
-                self._toml_cache = tomllib.load(f)
-            self._toml_mtime = mtime
-            logger.info("Config reloaded: %s (mtime=%.3f)", config_path, mtime)
-
-        return self._toml_cache
+        """Backward-compatible internal alias for the models TOML loader."""
+        return self._models_loader().refresh()
 
     # -- Public TOML accessors ------------------------------------------------
 
     def get_allowed_models(self) -> list[str]:
         """Load the model whitelist from the TOML config file."""
-        data = self._load_toml()
-        result: list[str] = data.get("models", {}).get("allowed", [self.llm_model])
-        return result
+        return self._models_loader().get_allowed_models(self.llm_model)
 
     def get_default_model(self) -> str:
         """Get the default model from the TOML config."""
-        data = self._load_toml()
-        result: str = data.get("models", {}).get("default", self.llm_model)
-        return result
+        return self._models_loader().get_default_model(self.llm_model)
 
     def get_model_params(self, model_id: str) -> dict[str, Any]:
         """Load per-model parameter overrides from the TOML config.
@@ -304,8 +222,7 @@ class Settings(BaseSettings):
         that should be merged into the OpenRouter request body for this model.
         Returns an empty dict if no overrides are defined.
         """
-        data = self._load_toml()
-        return dict(data.get("models", {}).get(model_id, {}))
+        return self._models_loader().get_model_params(model_id)
 
     def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
         """Load tool enable/disable lists from the models config.
@@ -315,9 +232,7 @@ class Settings(BaseSettings):
         are allowed (whitelist). If disabled is set, those tools are
         blocked (blacklist). enabled takes precedence over disabled.
         """
-        data = self._load_toml()
-        tools_section = data.get("tools", {})
-        return tools_section.get("enabled"), tools_section.get("disabled")
+        return self._models_loader().get_tool_filter()
 
     def get_external_mcp_config(self) -> dict[str, dict[str, Any]]:
         """Load external MCP server configs from the models config.
@@ -327,30 +242,7 @@ class Settings(BaseSettings):
 
         Returns a dict mapping server_name -> server_config (command, args, env).
         """
-        import json as _json
-
-        data = self._load_toml()
-        mcp_section = data.get("mcp", {})
-        mcp_json_path = mcp_section.get("mcp_config_path", "")
-        whitelist = set(mcp_section.get("external_servers", []))
-
-        if not mcp_json_path or not whitelist:
-            return {}
-
-        mcp_json_path = Path(mcp_json_path).expanduser()
-        if not mcp_json_path.exists():
-            return {}
-
-        with open(mcp_json_path, encoding="utf-8") as f:
-            mcp_data = _json.load(f)
-
-        servers_raw = mcp_data.get("mcpServers", {})
-        result: dict[str, dict[str, Any]] = {}
-        for name, config in servers_raw.items():
-            if name in whitelist:
-                result[name] = config
-
-        return result
+        return self._models_loader().get_external_mcp_config()
 
     def get_available_prompts(self) -> dict[str, str]:
         """Load available system prompt templates from the prompts directory.
@@ -358,14 +250,7 @@ class Settings(BaseSettings):
         Returns a dict mapping prompt name (filename without extension)
         to the prompt content.
         """
-        prompts_path = Path(self.prompts_dir)
-        if not prompts_path.exists():
-            return {}
-        result: dict[str, str] = {}
-        for f in sorted(prompts_path.iterdir()):
-            if f.is_file() and f.suffix in (".txt", ".md"):
-                result[f.stem] = f.read_text(encoding="utf-8").strip()
-        return result
+        return self._prompt_loader().get_available_prompts()
 
     def get_prompt_config(self, prompt_name: str) -> PromptConfig:
         """Load per-prompt config from a companion TOML file.
@@ -374,28 +259,7 @@ class Settings(BaseSettings):
         exist or can't be parsed, returns the default PromptConfig (everything
         visible, no tool/MCP overrides).
         """
-        config_path = Path(self.prompts_dir) / f"{prompt_name}.toml"
-        if not config_path.exists():
-            return PromptConfig()
-        try:
-            with open(config_path, "rb") as f:
-                data = tomllib.load(f)
-
-            tools = data.get("tools", {})
-            mcp = data.get("mcp_servers", {})
-
-            return PromptConfig(
-                show_reasoning=data.get("show_reasoning", True),
-                show_tool_calls=data.get("show_tool_calls", True),
-                send_datetime=data.get("send_datetime"),
-                tools_enabled=tools.get("enabled"),
-                tools_disabled=tools.get("disabled"),
-                mcp_servers_enabled=mcp.get("enabled"),
-                mcp_servers_disabled=mcp.get("disabled"),
-            )
-        except Exception:
-            logger.warning("Failed to parse prompt config: %s", config_path)
-            return PromptConfig()
+        return self._prompt_loader().get_prompt_config(prompt_name)
 
 
 _settings_instance: Settings | None = None
@@ -405,7 +269,7 @@ def get_settings() -> Settings:
     """Return a shared Settings instance (singleton).
 
     The instance is created once and reused.  TOML-derived values are
-    still refreshed automatically via mtime-based caching in ``_load_toml``.
+    still refreshed automatically via the delegated file-backed loaders.
     """
     global _settings_instance
     if _settings_instance is None:

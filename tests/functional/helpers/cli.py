@@ -71,7 +71,7 @@ class CliHarness:
         allow_retry: bool = True,
     ) -> CompletedCliRun:
         command = (self.cli_path, *args)
-        deadline = time.monotonic() + 60.0
+        deadline = time.monotonic() + max(float(timeout), 60.0)
         transient_retries = 0
 
         while True:
@@ -98,8 +98,8 @@ class CliHarness:
                 return CompletedCliRun(
                     command=command,
                     returncode=124,
-                    stdout=exc.stdout or "",
-                    stderr=exc.stderr or f"Timed out after {timeout}s",
+                    stdout=_coerce_cli_text(exc.stdout),
+                    stderr=_coerce_cli_text(exc.stderr) or f"Timed out after {timeout}s",
                     root=self.root,
                 )
 
@@ -155,6 +155,7 @@ class CliHarness:
         debug: bool = False,
         stream_debug: bool = False,
         env_overrides: dict[str, str | None] | None = None,
+        timeout: int = 60,
     ) -> CompletedCliRun:
         args = ["-c", chat_id]
         if user_id is not None:
@@ -164,7 +165,7 @@ class CliHarness:
         if stream_debug:
             args.append("--stream-debug")
         args.append(text)
-        return self.run_cli(*args, env_overrides=env_overrides)
+        return self.run_cli(*args, timeout=timeout, env_overrides=env_overrides)
 
     def send_message_with_live_retry(
         self,
@@ -176,6 +177,7 @@ class CliHarness:
         stream_debug: bool = False,
         env_overrides: dict[str, str | None] | None = None,
         max_attempts: int = 3,
+        timeout: int = 120,
     ) -> CompletedCliRun:
         result: CompletedCliRun | None = None
         for attempt in range(1, max_attempts + 1):
@@ -186,6 +188,7 @@ class CliHarness:
                 debug=debug,
                 stream_debug=stream_debug,
                 env_overrides=env_overrides,
+                timeout=timeout,
             )
             if not _should_retry_live_output(result) or attempt == max_attempts:
                 return result
@@ -202,6 +205,7 @@ class CliHarness:
         user_id: str | None = None,
         env_overrides: dict[str, str | None] | None = None,
         max_attempts: int = 3,
+        timeout: int = 120,
     ) -> CompletedCliRun:
         result: CompletedCliRun | None = None
         for attempt in range(1, max_attempts + 1):
@@ -210,6 +214,7 @@ class CliHarness:
                 callback_data,
                 user_id=user_id,
                 env_overrides=env_overrides,
+                timeout=timeout,
             )
             if not _should_retry_live_output(result) or attempt == max_attempts:
                 return result
@@ -225,12 +230,13 @@ class CliHarness:
         *,
         user_id: str | None = None,
         env_overrides: dict[str, str | None] | None = None,
+        timeout: int = 60,
     ) -> CompletedCliRun:
         args = ["-c", chat_id]
         if user_id is not None:
             args.extend(["--user-id", user_id])
         args.extend(["--cb", callback_data])
-        return self.run_cli(*args, env_overrides=env_overrides)
+        return self.run_cli(*args, timeout=timeout, env_overrides=env_overrides)
 
     def run_command(
         self,
@@ -288,6 +294,14 @@ def _retry_delay(output: str, transient_retries: int, deadline: float) -> float 
         return min(2.0, remaining)
 
     return None
+
+
+def _coerce_cli_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
 
 def _should_retry_live_output(result: CompletedCliRun) -> bool:

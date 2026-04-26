@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import patch
 
 from mai_gram.config import Settings, get_settings
@@ -24,8 +25,6 @@ _SETTINGS_ENV_VARS = [
 
 class TestSettings:
     def test_default_values(self) -> None:
-        import os
-
         clean_env = {k: v for k, v in os.environ.items() if k.upper() not in _SETTINGS_ENV_VARS}
         with patch.dict("os.environ", clean_env, clear=True):
             settings = Settings(_env_file=None)  # type: ignore[call-arg]
@@ -79,6 +78,30 @@ class TestSettings:
             _env_file=None,  # type: ignore[call-arg]
         )
         assert settings.get_all_bot_tokens() == []
+
+    def test_refresh_models_config_reloads_changed_file(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text(
+            "[models]\nallowed = ['openrouter/free']\ndefault = 'openrouter/free'\n",
+            encoding="utf-8",
+        )
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+        assert settings.get_allowed_models() == ["openrouter/free"]
+
+        models_path.write_text(
+            "[models]\nallowed = ['openrouter/alt']\ndefault = 'openrouter/alt'\n",
+            encoding="utf-8",
+        )
+        current_mtime = models_path.stat().st_mtime
+        os.utime(models_path, (current_mtime + 1, current_mtime + 1))
+
+        settings.refresh_models_config()
+
+        assert settings.get_allowed_models() == ["openrouter/alt"]
 
 
 class TestAllowedUsers:
