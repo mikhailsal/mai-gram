@@ -47,6 +47,34 @@ class HandlerServices:
     callback_router: CallbackRouter
 
 
+@dataclass(frozen=True, slots=True)
+class _ConversationServices:
+    response_renderer: ResponseRenderer
+    mcp_manager_factory: MCPManagerFactory
+    assistant_turn_builder: AssistantTurnBuilder
+    conversation_executor: ConversationExecutor
+    conversation_service: ConversationService
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkflowServices:
+    import_workflow: ImportWorkflow
+    history_actions: HistoryActions
+    regenerate_service: RegenerateService
+    resend_service: ResendService
+    reset_workflow: ResetWorkflow
+    setup_workflow: SetupWorkflow
+    callback_router: CallbackRouter
+
+
+@dataclass(frozen=True)
+class _WorkflowBases:
+    import_workflow: ImportWorkflow
+    history_actions: HistoryActions
+    reset_workflow: ResetWorkflow
+    setup_workflow: SetupWorkflow
+
+
 def build_handler_services(
     messenger: Messenger,
     llm_provider: LLMProvider,
@@ -68,10 +96,53 @@ def build_handler_services(
     bot_config: BotConfig | None,
     external_mcp_pool: ExternalMCPPool | None,
 ) -> HandlerServices:
-    response_renderer = ResponseRenderer(
+    conversation = _build_conversation_services(
         messenger,
+        llm_provider,
+        settings=settings,
         message_logger=message_logger,
+        resolve_chat_id=resolve_chat_id,
+        memory_data_dir=memory_data_dir,
+        wiki_context_limit=wiki_context_limit,
+        short_term_limit=short_term_limit,
+        tool_max_iterations=tool_max_iterations,
+        test_mode=test_mode,
+        external_mcp_pool=external_mcp_pool,
     )
+    workflows = _build_workflow_services(
+        messenger,
+        settings=settings,
+        presenter=presenter,
+        resolve_chat_id=resolve_chat_id,
+        clear_setup_session=clear_setup_session,
+        show_confirmation=show_confirmation,
+        delete_callback_message=delete_callback_message,
+        cut_original_html=cut_original_html,
+        response_message_ids=response_message_ids,
+        memory_data_dir=memory_data_dir,
+        bot_config=bot_config,
+        conversation_executor=conversation.conversation_executor,
+        assistant_turn_builder=conversation.assistant_turn_builder,
+        response_renderer=conversation.response_renderer,
+    )
+    return _compose_handler_services(conversation, workflows)
+
+
+def _build_conversation_services(
+    messenger: Messenger,
+    llm_provider: LLMProvider,
+    *,
+    settings: Settings,
+    message_logger: MessageLogger,
+    resolve_chat_id: Callable[[IncomingMessage], str],
+    memory_data_dir: str,
+    wiki_context_limit: int,
+    short_term_limit: int,
+    tool_max_iterations: int,
+    test_mode: bool,
+    external_mcp_pool: ExternalMCPPool | None,
+) -> _ConversationServices:
+    response_renderer = ResponseRenderer(messenger, message_logger=message_logger)
     mcp_manager_factory = MCPManagerFactory(
         settings,
         external_mcp_pool=external_mcp_pool,
@@ -97,15 +168,40 @@ def build_handler_services(
         turn_builder=assistant_turn_builder,
         resolve_chat_id=resolve_chat_id,
     )
-    import_workflow = ImportWorkflow(
-        messenger,
-        settings,
-        get_allowed_models=lambda: _allowed_models(settings, bot_config),
-        resolve_chat_id=resolve_chat_id,
+    return _ConversationServices(
+        response_renderer=response_renderer,
+        mcp_manager_factory=mcp_manager_factory,
+        assistant_turn_builder=assistant_turn_builder,
+        conversation_executor=conversation_executor,
+        conversation_service=conversation_service,
     )
-    history_actions = HistoryActions(
+
+
+def _build_workflow_services(
+    messenger: Messenger,
+    *,
+    settings: Settings,
+    presenter: ResetPresenter,
+    resolve_chat_id: Callable[[IncomingMessage], str],
+    clear_setup_session: Callable[[str], None],
+    show_confirmation: Callable[..., Awaitable[None]],
+    delete_callback_message: Callable[[IncomingMessage], Awaitable[None]],
+    cut_original_html: dict[str, tuple[str, str | None]],
+    response_message_ids: dict[str, list[str]],
+    memory_data_dir: str,
+    bot_config: BotConfig | None,
+    conversation_executor: ConversationExecutor,
+    assistant_turn_builder: AssistantTurnBuilder,
+    response_renderer: ResponseRenderer,
+) -> _WorkflowServices:
+    bases = _build_workflow_bases(
         messenger,
+        settings=settings,
+        presenter=presenter,
         resolve_chat_id=resolve_chat_id,
+        clear_setup_session=clear_setup_session,
+        memory_data_dir=memory_data_dir,
+        bot_config=bot_config,
     )
     regenerate_service = RegenerateService(
         messenger,
@@ -118,20 +214,100 @@ def build_handler_services(
         renderer=response_renderer,
         resolve_chat_id=resolve_chat_id,
     )
-    reset_workflow = ResetWorkflow(
+    callback_router = _build_callback_router(
         messenger,
-        presenter=presenter,
-        resolve_chat_id=resolve_chat_id,
-        clear_setup_session=clear_setup_session,
-        memory_data_dir=memory_data_dir,
+        import_workflow=bases.import_workflow,
+        setup_workflow=bases.setup_workflow,
+        reset_workflow=bases.reset_workflow,
+        history_actions=bases.history_actions,
+        regenerate_service=regenerate_service,
+        show_confirmation=show_confirmation,
+        delete_callback_message=delete_callback_message,
+        cut_original_html=cut_original_html,
+        response_message_ids=response_message_ids,
     )
-    setup_workflow = SetupWorkflow(
-        messenger,
-        settings,
-        bot_config=bot_config,
-        resolve_chat_id=resolve_chat_id,
+    return _WorkflowServices(
+        import_workflow=bases.import_workflow,
+        history_actions=bases.history_actions,
+        regenerate_service=regenerate_service,
+        resend_service=resend_service,
+        reset_workflow=bases.reset_workflow,
+        setup_workflow=bases.setup_workflow,
+        callback_router=callback_router,
     )
-    callback_router = CallbackRouter(
+
+
+def _build_workflow_bases(
+    messenger: Messenger,
+    *,
+    settings: Settings,
+    presenter: ResetPresenter,
+    resolve_chat_id: Callable[[IncomingMessage], str],
+    clear_setup_session: Callable[[str], None],
+    memory_data_dir: str,
+    bot_config: BotConfig | None,
+) -> _WorkflowBases:
+    return _WorkflowBases(
+        import_workflow=ImportWorkflow(
+            messenger,
+            settings,
+            get_allowed_models=lambda: _allowed_models(settings, bot_config),
+            resolve_chat_id=resolve_chat_id,
+        ),
+        history_actions=HistoryActions(
+            messenger,
+            resolve_chat_id=resolve_chat_id,
+        ),
+        reset_workflow=ResetWorkflow(
+            messenger,
+            presenter=presenter,
+            resolve_chat_id=resolve_chat_id,
+            clear_setup_session=clear_setup_session,
+            memory_data_dir=memory_data_dir,
+        ),
+        setup_workflow=SetupWorkflow(
+            messenger,
+            settings,
+            bot_config=bot_config,
+            resolve_chat_id=resolve_chat_id,
+        ),
+    )
+
+
+def _compose_handler_services(
+    conversation: _ConversationServices,
+    workflows: _WorkflowServices,
+) -> HandlerServices:
+    return HandlerServices(
+        response_renderer=conversation.response_renderer,
+        mcp_manager_factory=conversation.mcp_manager_factory,
+        assistant_turn_builder=conversation.assistant_turn_builder,
+        conversation_executor=conversation.conversation_executor,
+        conversation_service=conversation.conversation_service,
+        import_workflow=workflows.import_workflow,
+        history_actions=workflows.history_actions,
+        regenerate_service=workflows.regenerate_service,
+        resend_service=workflows.resend_service,
+        reset_workflow=workflows.reset_workflow,
+        setup_workflow=workflows.setup_workflow,
+        callback_router=workflows.callback_router,
+    )
+
+
+def _build_callback_router(
+    messenger: Messenger,
+    *,
+    import_workflow: ImportWorkflow,
+    setup_workflow: SetupWorkflow,
+    reset_workflow: ResetWorkflow,
+    history_actions: HistoryActions,
+    regenerate_service: RegenerateService,
+    show_confirmation: Callable[..., Awaitable[None]],
+    delete_callback_message: Callable[[IncomingMessage], Awaitable[None]],
+    cut_original_html: dict[str, tuple[str, str | None]],
+    response_message_ids: dict[str, list[str]],
+) -> CallbackRouter:
+    return CallbackRouter(
         messenger,
         import_workflow=import_workflow,
         setup_workflow=setup_workflow,
@@ -142,20 +318,6 @@ def build_handler_services(
         delete_callback_message=delete_callback_message,
         cut_original_html=cut_original_html,
         response_message_ids=response_message_ids,
-    )
-    return HandlerServices(
-        response_renderer=response_renderer,
-        mcp_manager_factory=mcp_manager_factory,
-        assistant_turn_builder=assistant_turn_builder,
-        conversation_executor=conversation_executor,
-        conversation_service=conversation_service,
-        import_workflow=import_workflow,
-        history_actions=history_actions,
-        regenerate_service=regenerate_service,
-        resend_service=resend_service,
-        reset_workflow=reset_workflow,
-        setup_workflow=setup_workflow,
-        callback_router=callback_router,
     )
 
 
