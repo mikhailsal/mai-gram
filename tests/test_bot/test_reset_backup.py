@@ -338,12 +338,11 @@ class TestRegenerate:
 
         with (
             patch("mai_gram.bot.regenerate_service.get_session") as mock_get_session,
-            patch("mai_gram.bot.regenerate_service.PromptBuilder") as mock_prompt_builder,
             patch.object(
-                handler._regenerate_service,
-                "_build_mcp_manager",
-                return_value=MagicMock(),
-            ),
+                handler._assistant_turn_builder,
+                "build_request",
+                new_callable=AsyncMock,
+            ) as mock_build_request,
             patch.object(
                 handler._conversation_executor,
                 "execute",
@@ -353,8 +352,7 @@ class TestRegenerate:
             mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
             mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            prompt_builder = mock_prompt_builder.return_value
-            prompt_builder.build_context = AsyncMock(return_value=[])
+            mock_build_request.return_value = MagicMock(llm_messages=[])
             mock_execute.return_value = AssistantTurnResult(sent_message_ids=[])
 
             await handler._handle_regenerate(message)
@@ -376,6 +374,5 @@ class TestRegenerate:
         await_args = mock_execute.await_args
         assert await_args is not None
         request = await_args.args[0]
-        assert request.chat.id == chat.id
         assert request.llm_messages == []
-        assert request.failure_log_message == "Failed to regenerate response"
+        mock_build_request.assert_awaited_once()
