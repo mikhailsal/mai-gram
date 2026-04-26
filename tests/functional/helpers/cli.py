@@ -19,6 +19,10 @@ _TRANSIENT_RE = re.compile(
     r"(?:network error|timed out|temporarily unavailable|connection reset|5\d\d)",
     re.IGNORECASE,
 )
+_LIVE_OUTPUT_TRANSIENT_RE = re.compile(
+    r"(?:the model returned an empty response|stream completed without any data|without any data)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +160,34 @@ class CliHarness:
         args.append(text)
         return self.run_cli(*args, env_overrides=env_overrides)
 
+    def send_message_with_live_retry(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        user_id: str | None = None,
+        debug: bool = False,
+        stream_debug: bool = False,
+        env_overrides: dict[str, str | None] | None = None,
+        max_attempts: int = 3,
+    ) -> CompletedCliRun:
+        result: CompletedCliRun | None = None
+        for attempt in range(1, max_attempts + 1):
+            result = self.send_message(
+                chat_id,
+                text,
+                user_id=user_id,
+                debug=debug,
+                stream_debug=stream_debug,
+                env_overrides=env_overrides,
+            )
+            if not _should_retry_live_output(result) or attempt == max_attempts:
+                return result
+            time.sleep(min(2.0 * attempt, 5.0))
+
+        assert result is not None
+        return result
+
     def send_callback(
         self,
         chat_id: str,
@@ -226,3 +258,7 @@ def _retry_delay(output: str, transient_retries: int, deadline: float) -> float 
         return min(2.0, remaining)
 
     return None
+
+
+def _should_retry_live_output(result: CompletedCliRun) -> bool:
+    return result.returncode == 0 and _LIVE_OUTPUT_TRANSIENT_RE.search(result.output) is not None

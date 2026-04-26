@@ -16,6 +16,20 @@ Keep the final answer short.
 """
 
 
+def _remember_color(functional_cli, chat_id: str) -> None:
+    remember = functional_cli.send_message_with_live_retry(
+        chat_id,
+        "My favorite color is orange. Remember this exactly.",
+        debug=True,
+    )
+    remember.require_ok()
+    assert "Tools used:" in remember.stdout
+    assert "wiki_" in remember.stdout
+
+    wiki_files = list(functional_cli.chat_wiki_dir(chat_id).glob("*.md"))
+    assert wiki_files, remember.output
+
+
 def test_wiki_creation_and_recall_work_through_real_llm(
     functional_cli,
     requires_openrouter_api_key,
@@ -23,22 +37,14 @@ def test_wiki_creation_and_recall_work_through_real_llm(
     functional_cli.write_prompt("wiki_helper", _WIKI_PROMPT)
     functional_cli.start_chat("func-wiki", prompt="wiki_helper").require_ok()
 
-    remember = functional_cli.send_message(
-        "func-wiki",
-        "My favorite color is orange. Remember this exactly.",
-        debug=True,
-    )
-
-    assert remember.returncode == 0
-    assert "Tools used:" in remember.stdout
-    assert "wiki_" in remember.stdout
+    _remember_color(functional_cli, "func-wiki")
 
     wiki_listing = functional_cli.read_wiki("func-wiki")
     assert wiki_listing.returncode == 0
     assert "orange" in wiki_listing.stdout.lower()
     assert fetch_knowledge_entries(functional_cli.db_path, "func-wiki")
 
-    follow_up = functional_cli.send_message(
+    follow_up = functional_cli.send_message_with_live_retry(
         "func-wiki",
         "What is my favorite color? Reply with the color only.",
     )
@@ -52,11 +58,7 @@ def test_repair_wiki_updates_imports_and_removes_orphans(
 ) -> None:
     functional_cli.write_prompt("wiki_helper", _WIKI_PROMPT)
     functional_cli.start_chat("func-repair-wiki", prompt="wiki_helper").require_ok()
-    functional_cli.send_message(
-        "func-repair-wiki",
-        "My favorite color is orange. Remember this exactly.",
-        debug=True,
-    ).require_ok()
+    _remember_color(functional_cli, "func-repair-wiki")
 
     wiki_dir = functional_cli.chat_wiki_dir("func-repair-wiki")
     original_file = next(wiki_dir.glob("*.md"))
