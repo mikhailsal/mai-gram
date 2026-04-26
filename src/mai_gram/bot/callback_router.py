@@ -59,16 +59,7 @@ class CallbackRouter:
             return
 
         data = message.callback_data or ""
-        if data.startswith("model:") or data.startswith("prompt:"):
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text=(
-                        f"Setup callback '{data}' ignored — no setup session active.\n"
-                        "Hint: use --start --model MODEL --prompt PROMPT in a single command."
-                    ),
-                    chat_id=message.chat_id,
-                )
-            )
+        if await self._handle_stale_setup_callback(message, data):
             return
 
         if data == "regen":
@@ -84,43 +75,68 @@ class CallbackRouter:
             await self._handle_cut_confirmation(message, data)
             return
 
-        if data == "confirm_regen":
-            await self._delete_callback_message(message)
-            sent_ids = await self._regenerate_service.handle_regenerate(
-                message,
-                previous_response_ids=self._response_message_ids.get(message.chat_id, []),
-            )
-            self._response_message_ids[message.chat_id] = sent_ids
-            return
-
-        if data.startswith("confirm_cut:"):
-            parts = data.split(":", 2)
-            cut_msg_id_str = parts[1]
-            original_tg_msg_id = parts[2] if len(parts) > 2 else ""
-            await self._delete_callback_message(message)
-            cached_original = None
-            if original_tg_msg_id:
-                cache_key = f"{message.chat_id}:{original_tg_msg_id}"
-                cached_original = self._cut_original_html.pop(cache_key, None)
-            await self._history_actions.handle_cut_above(
-                message,
-                int(cut_msg_id_str),
-                original_tg_msg_id=original_tg_msg_id,
-                cached_original=cached_original,
-            )
-            return
-
-        if data.startswith("confirm_reset:"):
-            chat_id = data.split(":", 1)[1]
-            await self._delete_callback_message(message)
-            await self._reset_workflow.execute_reset(message, chat_id)
-            return
-
-        if data == "cancel_action":
-            await self._delete_callback_message(message)
+        if await self._handle_confirmation_callback(message, data):
             return
 
         logger.debug("Unhandled callback: %s", data)
+
+    async def _handle_stale_setup_callback(self, message: IncomingMessage, data: str) -> bool:
+        if not (data.startswith("model:") or data.startswith("prompt:")):
+            return False
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=(
+                    f"Setup callback '{data}' ignored — no setup session active.\n"
+                    "Hint: use --start --model MODEL --prompt PROMPT in a single command."
+                ),
+                chat_id=message.chat_id,
+            )
+        )
+        return True
+
+    async def _handle_confirmation_callback(self, message: IncomingMessage, data: str) -> bool:
+        if data == "confirm_regen":
+            await self._confirm_regenerate(message)
+            return True
+        if data.startswith("confirm_cut:"):
+            await self._confirm_cut(message, data)
+            return True
+        if data.startswith("confirm_reset:"):
+            await self._confirm_reset(message, data)
+            return True
+        if data == "cancel_action":
+            await self._delete_callback_message(message)
+            return True
+        return False
+
+    async def _confirm_regenerate(self, message: IncomingMessage) -> None:
+        await self._delete_callback_message(message)
+        sent_ids = await self._regenerate_service.handle_regenerate(
+            message,
+            previous_response_ids=self._response_message_ids.get(message.chat_id, []),
+        )
+        self._response_message_ids[message.chat_id] = sent_ids
+
+    async def _confirm_cut(self, message: IncomingMessage, data: str) -> None:
+        parts = data.split(":", 2)
+        cut_msg_id_str = parts[1]
+        original_tg_msg_id = parts[2] if len(parts) > 2 else ""
+        await self._delete_callback_message(message)
+        cached_original = None
+        if original_tg_msg_id:
+            cache_key = f"{message.chat_id}:{original_tg_msg_id}"
+            cached_original = self._cut_original_html.pop(cache_key, None)
+        await self._history_actions.handle_cut_above(
+            message,
+            int(cut_msg_id_str),
+            original_tg_msg_id=original_tg_msg_id,
+            cached_original=cached_original,
+        )
+
+    async def _confirm_reset(self, message: IncomingMessage, data: str) -> None:
+        chat_id = data.split(":", 1)[1]
+        await self._delete_callback_message(message)
+        await self._reset_workflow.execute_reset(message, chat_id)
 
     async def _handle_cut_confirmation(self, message: IncomingMessage, data: str) -> None:
         cut_msg_id = data.split(":", 1)[1]

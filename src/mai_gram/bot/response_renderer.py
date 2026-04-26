@@ -149,7 +149,6 @@ class ResponseRenderer:
         committed_content_offset: int,
     ) -> tuple[int, str | None]:
         """Commit overflowing streamed content into finalized messages."""
-        from mai_gram.core.md_to_telegram import markdown_to_html
         from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
 
         if header_html and not reasoning_committed:
@@ -163,25 +162,29 @@ class ResponseRenderer:
             placeholder_msg_id = None
 
         while len(remaining_content) > 0:
-            chunk_text = remaining_content[: SAFE_MAX_LENGTH - 200]
-            para_break = chunk_text.rfind("\n\n")
-            if para_break > len(chunk_text) // 3:
-                chunk_text = chunk_text[:para_break]
-            elif (nl := chunk_text.rfind("\n")) > len(chunk_text) // 3:
-                chunk_text = chunk_text[:nl]
-
-            chunk_html = markdown_to_html(chunk_text)
-            if len(chunk_html) > SAFE_MAX_LENGTH:
-                chunk_html = chunk_html[: SAFE_MAX_LENGTH - 10]
-
             if placeholder_msg_id:
-                await self._edit_part(tg_chat_id, placeholder_msg_id, chunk_html)
-                sent_msg_ids.append(placeholder_msg_id)
+                chunk_text = self._overflow_chunk_text(
+                    remaining_content,
+                    max_length=SAFE_MAX_LENGTH,
+                )
+                await self._commit_overflow_chunk(
+                    tg_chat_id,
+                    chunk_text=chunk_text,
+                    message_id=placeholder_msg_id,
+                    sent_msg_ids=sent_msg_ids,
+                )
                 placeholder_msg_id = None
             else:
-                message_id = await self._send_part(tg_chat_id, chunk_html)
-                if message_id:
-                    sent_msg_ids.append(message_id)
+                chunk_text = self._overflow_chunk_text(
+                    remaining_content,
+                    max_length=SAFE_MAX_LENGTH,
+                )
+                await self._commit_overflow_chunk(
+                    tg_chat_id,
+                    chunk_text=chunk_text,
+                    message_id=None,
+                    sent_msg_ids=sent_msg_ids,
+                )
 
             committed_content_offset += len(chunk_text)
             remaining_content = current_content[committed_content_offset:]
@@ -189,19 +192,60 @@ class ResponseRenderer:
             if len(remaining_content) <= SAFE_MAX_LENGTH - 200:
                 break
 
-        new_placeholder: str | None = None
-        if remaining_content.strip():
-            content_html = markdown_to_html(remaining_content) + " ▍"
-            result = await self._messenger.send_message(
-                OutgoingMessage(
-                    text=content_html,
-                    chat_id=tg_chat_id,
-                    parse_mode="html",
-                )
-            )
-            if result.success:
-                new_placeholder = result.message_id
+        new_placeholder = await self._create_overflow_placeholder(tg_chat_id, remaining_content)
         return committed_content_offset, new_placeholder
+
+    @staticmethod
+    def _overflow_chunk_text(remaining_content: str, *, max_length: int) -> str:
+        chunk_text = remaining_content[: max_length - 200]
+        para_break = chunk_text.rfind("\n\n")
+        if para_break > len(chunk_text) // 3:
+            return chunk_text[:para_break]
+        newline_break = chunk_text.rfind("\n")
+        if newline_break > len(chunk_text) // 3:
+            return chunk_text[:newline_break]
+        return chunk_text
+
+    async def _commit_overflow_chunk(
+        self,
+        chat_id: str,
+        *,
+        chunk_text: str,
+        message_id: str | None,
+        sent_msg_ids: list[str],
+    ) -> None:
+        from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+
+        chunk_html = markdown_to_html(chunk_text)
+        if len(chunk_html) > SAFE_MAX_LENGTH:
+            chunk_html = chunk_html[: SAFE_MAX_LENGTH - 10]
+        if message_id:
+            await self._edit_part(chat_id, message_id, chunk_html)
+            sent_msg_ids.append(message_id)
+            return
+        sent_message_id = await self._send_part(chat_id, chunk_html)
+        if sent_message_id:
+            sent_msg_ids.append(sent_message_id)
+
+    async def _create_overflow_placeholder(
+        self,
+        chat_id: str,
+        remaining_content: str,
+    ) -> str | None:
+        from mai_gram.core.md_to_telegram import markdown_to_html
+
+        if not remaining_content.strip():
+            return None
+        content_html = markdown_to_html(remaining_content) + " ▍"
+        result = await self._messenger.send_message(
+            OutgoingMessage(
+                text=content_html,
+                chat_id=chat_id,
+                parse_mode="html",
+            )
+        )
+        return result.message_id if result.success else None
 
     async def _send_part(
         self,
