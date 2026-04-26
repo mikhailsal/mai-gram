@@ -74,6 +74,7 @@ reasoning.effort = "high"
 # No special overrides needed for the free-tier model.
 [models."google/gemma-4-31b-it:free"]
 reasoning.effort = "high"
+temperature = 1.0
 
 # ─────────────────────────────────────────────────────────────────────
 # Tool configuration
