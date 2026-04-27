@@ -16,6 +16,146 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _PREVIEW_MAX_CHARS = 120
+_WIKI_TOOL_SPECS: tuple[MCPToolSpec, ...] = (
+    MCPToolSpec(
+        name="wiki_create",
+        description=(
+            "Save a new piece of knowledge to your personal wiki. Use this when you "
+            "learn something important about your human or want to remember something. "
+            "Choose importance carefully: 9999 = human's name, 9000+ = family/close "
+            "relationships, 8000+ = major life events, 7000+ = important dates, "
+            "5000+ = strong preferences and hobbies, 3000+ = casual preferences, "
+            "1000+ = minor details."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "A short descriptive title for the entry",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The knowledge content to store",
+                },
+                "importance": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9999,
+                    "description": "Importance score (see tool description for scale)",
+                },
+            },
+            "required": ["key", "content", "importance"],
+            "additionalProperties": False,
+        },
+    ),
+    MCPToolSpec(
+        name="wiki_edit",
+        description=(
+            "Update an existing wiki entry with new or corrected information. "
+            "Use this to fix mistakes or add details to existing knowledge."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key of the entry to edit",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "New content (optional if only changing importance)",
+                },
+                "importance": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9999,
+                    "description": "New importance score (optional)",
+                },
+            },
+            "required": ["key"],
+            "additionalProperties": False,
+        },
+    ),
+    MCPToolSpec(
+        name="wiki_read",
+        description="Read a specific entry from your wiki by its key.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "The key of the entry to read",
+                },
+            },
+            "required": ["key"],
+            "additionalProperties": False,
+        },
+    ),
+    MCPToolSpec(
+        name="wiki_search",
+        description=(
+            "Search your wiki for entries matching a query. "
+            "Searches both keys and content. "
+            "Returns a short preview — use wiki_read for full content."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query text",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20,
+                    "description": "Maximum number of results",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    ),
+    MCPToolSpec(
+        name="wiki_list",
+        description=(
+            "List all entries in your wiki with keys, importance, and a short preview. "
+            "Use this to browse what you know about your human. To read the full content "
+            "of any entry, call wiki_read with the entry's key."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["importance", "key", "updated"],
+                    "default": "importance",
+                    "description": (
+                        "Sort order: 'importance' (highest first, default), "
+                        "'key' (alphabetical), or 'updated' (most recently changed first)"
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20,
+                    "description": "Maximum number of entries to return",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Skip this many entries (for pagination)",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    ),
+)
 
 
 def _content_preview(text: str, max_chars: int = _PREVIEW_MAX_CHARS) -> str:
@@ -60,146 +200,7 @@ class WikiMCPServer:
 
     async def list_tools(self) -> list[MCPToolSpec]:
         """Return tools exposed by this server."""
-        return [
-            MCPToolSpec(
-                name="wiki_create",
-                description=(
-                    "Save a new piece of knowledge to your personal wiki. Use this when you "
-                    "learn something important about your human or want to remember something. "
-                    "Choose importance carefully: 9999 = human's name, 9000+ = family/close "
-                    "relationships, 8000+ = major life events, 7000+ = important dates, "
-                    "5000+ = strong preferences and hobbies, 3000+ = casual preferences, "
-                    "1000+ = minor details."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "key": {
-                            "type": "string",
-                            "description": "A short descriptive title for the entry",
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "The knowledge content to store",
-                        },
-                        "importance": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9999,
-                            "description": "Importance score (see tool description for scale)",
-                        },
-                    },
-                    "required": ["key", "content", "importance"],
-                    "additionalProperties": False,
-                },
-            ),
-            MCPToolSpec(
-                name="wiki_edit",
-                description=(
-                    "Update an existing wiki entry with new or corrected information. "
-                    "Use this to fix mistakes or add details to existing knowledge."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "key": {
-                            "type": "string",
-                            "description": "The key of the entry to edit",
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "New content (optional if only changing importance)",
-                        },
-                        "importance": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9999,
-                            "description": "New importance score (optional)",
-                        },
-                    },
-                    "required": ["key"],
-                    "additionalProperties": False,
-                },
-            ),
-            MCPToolSpec(
-                name="wiki_read",
-                description="Read a specific entry from your wiki by its key.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "key": {
-                            "type": "string",
-                            "description": "The key of the entry to read",
-                        },
-                    },
-                    "required": ["key"],
-                    "additionalProperties": False,
-                },
-            ),
-            MCPToolSpec(
-                name="wiki_search",
-                description=(
-                    "Search your wiki for entries matching a query. "
-                    "Searches both keys and content. "
-                    "Returns a short preview — use wiki_read for full content."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query text",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 50,
-                            "default": 20,
-                            "description": "Maximum number of results",
-                        },
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            ),
-            MCPToolSpec(
-                name="wiki_list",
-                description=(
-                    "List all entries in your wiki with keys, importance, and a short preview. "
-                    "Use this to browse what you know about your human. To read the full content "
-                    "of any entry, call wiki_read with the entry's key."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "sort_by": {
-                            "type": "string",
-                            "enum": ["importance", "key", "updated"],
-                            "default": "importance",
-                            "description": (
-                                "Sort order: 'importance' (highest first, default), "
-                                "'key' (alphabetical), or 'updated' (most recently changed first)"
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 50,
-                            "default": 20,
-                            "description": "Maximum number of entries to return",
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "default": 0,
-                            "description": "Skip this many entries (for pagination)",
-                        },
-                    },
-                    "required": [],
-                    "additionalProperties": False,
-                },
-            ),
-        ]
+        return list(_WIKI_TOOL_SPECS)
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a named wiki tool."""
