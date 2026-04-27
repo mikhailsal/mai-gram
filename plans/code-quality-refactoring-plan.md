@@ -254,6 +254,10 @@ Validation:
 
 Expand unit tests for MCP bridging, streaming delta parsing, malformed tool-call JSON, and external server error handling. Keep the live CLI path passing for tool-enabled prompts.
 
+Status:
+
+`src/mai_gram/mcp_servers/messages_server.py` now keeps its MCP tool metadata in focused static specs and routes timerange requests through typed parsing and formatting helpers, so `MessagesMCPServer.list_tools` and `MessagesMCPServer._call_get_messages_by_timerange` no longer appear in the size audit while the direct messages-server and adjacent MCP bridge tests stay green. Broader typed MCP boundary work across bridge and external server payloads is still pending.
+
 ### 8. Normalize persistence semantics and make wiki synchronization explicit
 
 - [ ] Align database types and workflow semantics with the actual domain model.

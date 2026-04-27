@@ -21,6 +21,215 @@ class MCPToolSpec:
     input_schema: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class MessageTimeRangeQuery:
+    """Parsed arguments for the timerange messages tool."""
+
+    start_date_str: str
+    start_date: date
+    end_date_str: str | None
+    end_date: date | None
+    limit: int
+    offset: int
+    oldest_first: bool
+
+
+_MESSAGE_TOOL_SPECS = (
+    MCPToolSpec(
+        name="search_messages",
+        description=(
+            "Search your conversation history by keywords. Use this when you need "
+            "to recall what was said about a specific topic. Works like searching "
+            "in a messenger app. Returns message IDs that you can use with "
+            "get_message_context for more detail."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query text"},
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20,
+                },
+                "oldest_first": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, return oldest matches first (useful for finding"
+                        " when something was first mentioned)."
+                        " Default: false (newest first)."
+                    ),
+                    "default": False,
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    ),
+    MCPToolSpec(
+        name="get_message_context",
+        description=(
+            "Get detailed context around a specific message. Use this after "
+            "search_messages when you want to see what was said before and after "
+            "a particular message. Provide the message ID from search results."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "The message ID to get context for (from search results)",
+                },
+                "before": {
+                    "type": "integer",
+                    "description": "Number of messages to show before the target",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "default": 5,
+                },
+                "after": {
+                    "type": "integer",
+                    "description": "Number of messages to show after the target",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "default": 5,
+                },
+            },
+            "required": ["message_id"],
+            "additionalProperties": False,
+        },
+    ),
+    MCPToolSpec(
+        name="get_messages_by_timerange",
+        description=(
+            "Get messages from a specific time period. When only start_date "
+            "is given, returns messages from that date onward (no upper bound). "
+            "Supports pagination to avoid overloading context — call multiple "
+            "times with increasing offset to see more messages."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "start_date": {
+                    "type": "string",
+                    "description": (
+                        "Start date in YYYY-MM-DD format (inclusive). "
+                        "When used alone, returns all messages from this date onward."
+                    ),
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": (
+                        "End date in YYYY-MM-DD format (inclusive). "
+                        "If not provided, no upper date limit is applied."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum messages to return (default 10, max 20)",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip this many messages (for pagination)",
+                    "minimum": 0,
+                    "default": 0,
+                },
+                "oldest_first": {
+                    "type": "boolean",
+                    "description": "If true (default), show oldest messages first",
+                    "default": True,
+                },
+            },
+            "required": ["start_date"],
+            "additionalProperties": False,
+        },
+    ),
+)
+
+
+def _parse_bounded_int(
+    arguments: dict[str, Any],
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    raw_value = arguments.get(key, default)
+    if not isinstance(raw_value, int):
+        raise ValueError(f"'{key}' must be an integer")
+
+    parsed = max(minimum, raw_value)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
+
+
+def _parse_boolean(arguments: dict[str, Any], key: str, *, default: bool) -> bool:
+    value = arguments.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"'{key}' must be a boolean")
+    return value
+
+
+def _parse_iso_date(value: Any, *, field_name: str) -> date:
+    if not isinstance(value, str):
+        raise ValueError(f"get_messages_by_timerange requires '{field_name}' string")
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError as err:
+        raise ValueError(f"Invalid {field_name} format: {value}. Use YYYY-MM-DD.") from err
+
+
+def _parse_optional_iso_date(value: Any) -> tuple[str | None, date | None]:
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        raise ValueError("'end_date' must be a string")
+    try:
+        return value, date.fromisoformat(value)
+    except ValueError as err:
+        raise ValueError(f"Invalid end_date format: {value}. Use YYYY-MM-DD.") from err
+
+
+def _build_time_range_query(arguments: dict[str, Any]) -> MessageTimeRangeQuery:
+    raw_start_date = arguments.get("start_date")
+    start_date = _parse_iso_date(raw_start_date, field_name="start_date")
+    assert isinstance(raw_start_date, str)
+    end_date_str, end_date = _parse_optional_iso_date(arguments.get("end_date"))
+    return MessageTimeRangeQuery(
+        start_date_str=raw_start_date,
+        start_date=start_date,
+        end_date_str=end_date_str,
+        end_date=end_date,
+        limit=_parse_bounded_int(arguments, "limit", default=10, minimum=1, maximum=20),
+        offset=_parse_bounded_int(arguments, "offset", default=0, minimum=0),
+        oldest_first=_parse_boolean(arguments, "oldest_first", default=True),
+    )
+
+
+def _format_empty_time_range_result(query: MessageTimeRangeQuery) -> str:
+    if query.end_date_str and query.end_date_str != query.start_date_str:
+        return f"No messages found from {query.start_date_str} to {query.end_date_str}."
+    if query.end_date_str is None:
+        return f"No messages found from {query.start_date_str} onward."
+    return f"No messages found for {query.start_date_str}."
+
+
+def _build_timerange_header(*, offset: int, result_count: int, total_count: int) -> str:
+    showing_end = min(offset + result_count, total_count)
+    header = f"Showing messages {offset + 1}-{showing_end} of {total_count} total"
+    if showing_end < total_count:
+        header += f" (use offset={showing_end} to see more)"
+    return header
+
+
 class MessagesMCPServer:
     """Expose message history tools for MCP-style tool calling."""
 
@@ -30,124 +239,7 @@ class MessagesMCPServer:
 
     async def list_tools(self) -> list[MCPToolSpec]:
         """Return tools exposed by this server."""
-        return [
-            MCPToolSpec(
-                name="search_messages",
-                description=(
-                    "Search your conversation history by keywords. Use this when you need "
-                    "to recall what was said about a specific topic. Works like searching "
-                    "in a messenger app. Returns message IDs that you can use with "
-                    "get_message_context for more detail."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query text"},
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of results",
-                            "minimum": 1,
-                            "maximum": 50,
-                            "default": 20,
-                        },
-                        "oldest_first": {
-                            "type": "boolean",
-                            "description": (
-                                "If true, return oldest matches first (useful for finding"
-                                " when something was first mentioned)."
-                                " Default: false (newest first)."
-                            ),
-                            "default": False,
-                        },
-                    },
-                    "required": ["query"],
-                    "additionalProperties": False,
-                },
-            ),
-            MCPToolSpec(
-                name="get_message_context",
-                description=(
-                    "Get detailed context around a specific message. Use this after "
-                    "search_messages when you want to see what was said before and after "
-                    "a particular message. Provide the message ID from search results."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "message_id": {
-                            "type": "integer",
-                            "description": (
-                                "The message ID to get context for (from search results)"
-                            ),
-                        },
-                        "before": {
-                            "type": "integer",
-                            "description": "Number of messages to show before the target",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "default": 5,
-                        },
-                        "after": {
-                            "type": "integer",
-                            "description": "Number of messages to show after the target",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "default": 5,
-                        },
-                    },
-                    "required": ["message_id"],
-                    "additionalProperties": False,
-                },
-            ),
-            MCPToolSpec(
-                name="get_messages_by_timerange",
-                description=(
-                    "Get messages from a specific time period. When only start_date "
-                    "is given, returns messages from that date onward (no upper bound). "
-                    "Supports pagination to avoid overloading context — call multiple "
-                    "times with increasing offset to see more messages."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "start_date": {
-                            "type": "string",
-                            "description": (
-                                "Start date in YYYY-MM-DD format (inclusive). "
-                                "When used alone, returns all messages from this date onward."
-                            ),
-                        },
-                        "end_date": {
-                            "type": "string",
-                            "description": (
-                                "End date in YYYY-MM-DD format (inclusive). "
-                                "If not provided, no upper date limit is applied."
-                            ),
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum messages to return (default 10, max 20)",
-                            "minimum": 1,
-                            "maximum": 20,
-                            "default": 10,
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "description": "Skip this many messages (for pagination)",
-                            "minimum": 0,
-                            "default": 0,
-                        },
-                        "oldest_first": {
-                            "type": "boolean",
-                            "description": "If true (default), show oldest messages first",
-                            "default": True,
-                        },
-                    },
-                    "required": ["start_date"],
-                    "additionalProperties": False,
-                },
-            ),
-        ]
+        return list(_MESSAGE_TOOL_SPECS)
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a named tool with JSON-like arguments."""
@@ -230,68 +322,28 @@ class MessagesMCPServer:
 
     async def _call_get_messages_by_timerange(self, arguments: dict[str, Any]) -> str:
         """Handle get_messages_by_timerange tool call."""
-        start_date_str = arguments.get("start_date")
-        if not isinstance(start_date_str, str):
-            raise ValueError("get_messages_by_timerange requires 'start_date' string")
-
-        try:
-            start_date = date.fromisoformat(start_date_str)
-        except ValueError as err:
-            raise ValueError(
-                f"Invalid start_date format: {start_date_str}. Use YYYY-MM-DD."
-            ) from err
-
-        end_date_str = arguments.get("end_date")
-        end_date: date | None = None
-        if end_date_str is None:
-            pass
-        elif not isinstance(end_date_str, str):
-            raise ValueError("'end_date' must be a string")
-        else:
-            try:
-                end_date = date.fromisoformat(end_date_str)
-            except ValueError as err:
-                raise ValueError(
-                    f"Invalid end_date format: {end_date_str}. Use YYYY-MM-DD."
-                ) from err
-
-        raw_limit = arguments.get("limit", 10)
-        if not isinstance(raw_limit, int):
-            raise ValueError("'limit' must be an integer")
-        limit = max(1, min(raw_limit, 20))
-
-        raw_offset = arguments.get("offset", 0)
-        if not isinstance(raw_offset, int):
-            raise ValueError("'offset' must be an integer")
-        offset = max(0, raw_offset)
-
-        oldest_first = arguments.get("oldest_first", True)
-        if not isinstance(oldest_first, bool):
-            raise ValueError("'oldest_first' must be a boolean")
+        query = _build_time_range_query(arguments)
 
         messages, total_count = await self._store.get_messages_paginated(
             self._chat_id,
-            limit=limit,
-            offset=offset,
-            oldest_first=oldest_first,
-            start_date=start_date,
-            end_date=end_date,
+            limit=query.limit,
+            offset=query.offset,
+            oldest_first=query.oldest_first,
+            start_date=query.start_date,
+            end_date=query.end_date,
         )
 
         if not messages:
-            if end_date_str and end_date_str != start_date_str:
-                return f"No messages found from {start_date_str} to {end_date_str}."
-            if end_date_str is None:
-                return f"No messages found from {start_date_str} onward."
-            return f"No messages found for {start_date_str}."
+            return _format_empty_time_range_result(query)
 
-        # Header with pagination info
-        showing_end = min(offset + len(messages), total_count)
-        header = f"Showing messages {offset + 1}-{showing_end} of {total_count} total"
-        if showing_end < total_count:
-            header += f" (use offset={showing_end} to see more)"
-
-        lines = [header, ""]
+        lines = [
+            _build_timerange_header(
+                offset=query.offset,
+                result_count=len(messages),
+                total_count=total_count,
+            ),
+            "",
+        ]
         for msg in messages:
             lines.append(self._format_message_with_id(msg))
 
