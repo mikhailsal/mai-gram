@@ -310,6 +310,10 @@ Validation:
 
 Add tests for timeout paths, malformed upstream payloads, rate-limit retries, MCP subprocess termination failures, and invalid config files.
 
+Status:
+
+`src/mai_gram/core/replay.py` now routes import replay through focused helpers for retry classification, per-role replay, and intro/progress/summary delivery, so `replay_imported_messages` and `_send_with_retry` no longer appear in the size audit while the direct replay test suite still passes. Broader shared retry-policy consolidation across the rest of the runtime remains follow-on work.
+
 ### 10. Decide the fate of the summarization subsystem and stop carrying unowned complexity
 
 - [ ] Either fully integrate or explicitly quarantine the large summarization codepath.

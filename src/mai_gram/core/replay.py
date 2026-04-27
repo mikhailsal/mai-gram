@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mai_gram.core.telegram_limits import (
     MAX_CONTENT_LENGTH_FOR_TRUNCATION,
@@ -31,6 +31,274 @@ DELAY_SECONDS = 1.5
 PROGRESS_INTERVAL = 25
 MAX_SEND_RETRIES = 10
 FLOOD_EXTRA_BUFFER = 5
+
+
+def _truncate_oversized_message(msg: OutgoingMessage, error: str) -> OutgoingMessage | None:
+    """Return a truncated retry message when Telegram rejects the payload as too large."""
+    if "too long" not in error and "message is too long" not in error:
+        return None
+
+    logger.error("Message too long even after splitting (%d chars)", len(msg.text))
+    if len(msg.text) <= SAFE_MAX_LENGTH:
+        return None
+
+    return OutgoingMessage(
+        text=msg.text[:SAFE_MAX_LENGTH] + "...",
+        chat_id=msg.chat_id,
+        parse_mode=msg.parse_mode,
+        keyboard=msg.keyboard,
+    )
+
+
+def _retry_delay_for_send_error(error: str, attempt: int) -> tuple[int, str] | None:
+    """Classify replay send failures into retryable delays."""
+    if "flood control" in error or "too many requests" in error or "429" in error:
+        import re
+
+        match = re.search(r"retry in (\d+)", error)
+        wait_seconds = int(match.group(1)) + FLOOD_EXTRA_BUFFER if match else 30
+        return wait_seconds, "Flood control on replay"
+
+    if "timed out" in error or "network" in error:
+        return min(2**attempt, 60), "Transient error on replay"
+
+    return None
+
+
+async def _send_replay_message(
+    messenger: Messenger,
+    msg: OutgoingMessage,
+    *,
+    delay_seconds: float,
+    parse_mode: str | None = None,
+    keyboard: list[list[tuple[str, str]]] | None = None,
+) -> bool:
+    """Send a replay message and apply the standard post-send pacing delay."""
+    ok = await _send_with_retry(
+        messenger,
+        OutgoingMessage(
+            text=msg.text,
+            chat_id=msg.chat_id,
+            parse_mode=parse_mode if parse_mode is not None else msg.parse_mode,
+            keyboard=keyboard if keyboard is not None else msg.keyboard,
+        ),
+    )
+    await asyncio.sleep(delay_seconds)
+    return ok
+
+
+async def _send_replay_parts(
+    messenger: Messenger,
+    tg_chat_id: str,
+    parts: list[str],
+    *,
+    delay_seconds: float,
+    keyboard: list[list[tuple[str, str]]] | None = None,
+) -> bool:
+    """Send one or more replay parts, attaching the keyboard only to the last part."""
+    delivered_last_part = False
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        delivered_last_part = await _send_replay_message(
+            messenger,
+            OutgoingMessage(text=part, chat_id=tg_chat_id),
+            delay_seconds=delay_seconds,
+            parse_mode="html",
+            keyboard=keyboard if is_last else None,
+        )
+    return delivered_last_part
+
+
+async def _replay_user_message(
+    messenger: Messenger,
+    tg_chat_id: str,
+    content: str,
+    *,
+    delay_seconds: float,
+) -> int:
+    parts = _format_user_message(content)
+    return int(
+        await _send_replay_parts(
+            messenger,
+            tg_chat_id,
+            parts,
+            delay_seconds=delay_seconds,
+        )
+    )
+
+
+async def _replay_assistant_message(
+    messenger: Messenger,
+    tg_chat_id: str,
+    msg: Message,
+    *,
+    delay_seconds: float,
+    show_tool_calls: bool,
+) -> int:
+    content = msg.content or ""
+    reasoning = getattr(msg, "reasoning", None)
+    has_tool_calls = bool(msg.tool_calls)
+
+    if not content.strip() and has_tool_calls:
+        if not show_tool_calls:
+            return 0
+        return int(
+            await _send_replay_parts(
+                messenger,
+                tg_chat_id,
+                ["\U0001f916 <i>[AI tool call]</i>"],
+                delay_seconds=delay_seconds,
+                keyboard=_build_cut_keyboard(msg.id),
+            )
+        )
+
+    parts = _format_assistant_message(content, reasoning)
+    return int(
+        await _send_replay_parts(
+            messenger,
+            tg_chat_id,
+            parts,
+            delay_seconds=delay_seconds,
+            keyboard=_build_cut_keyboard(msg.id),
+        )
+    )
+
+
+async def _replay_tool_message(
+    messenger: Messenger,
+    tg_chat_id: str,
+    msg: Message,
+    *,
+    delay_seconds: float,
+    show_tool_calls: bool,
+) -> int:
+    if not show_tool_calls:
+        return 0
+
+    return int(
+        await _send_replay_parts(
+            messenger,
+            tg_chat_id,
+            [_format_tool_message(msg.content, msg.tool_call_id)],
+            delay_seconds=delay_seconds,
+        )
+    )
+
+
+async def _replay_message(
+    messenger: Messenger,
+    tg_chat_id: str,
+    msg: Message,
+    *,
+    delay_seconds: float,
+    show_tool_calls: bool,
+) -> int:
+    if msg.role == "system":
+        return 0
+    if msg.role == "user":
+        return await _replay_user_message(
+            messenger,
+            tg_chat_id,
+            msg.content,
+            delay_seconds=delay_seconds,
+        )
+    if msg.role == "assistant":
+        return await _replay_assistant_message(
+            messenger,
+            tg_chat_id,
+            msg,
+            delay_seconds=delay_seconds,
+            show_tool_calls=show_tool_calls,
+        )
+    if msg.role == "tool":
+        return await _replay_tool_message(
+            messenger,
+            tg_chat_id,
+            msg,
+            delay_seconds=delay_seconds,
+            show_tool_calls=show_tool_calls,
+        )
+    return 0
+
+
+def _count_displayable_messages(messages: list[Message], *, show_tool_calls: bool) -> int:
+    return sum(
+        1
+        for msg in messages
+        if msg.role in ("user", "assistant") or (msg.role == "tool" and show_tool_calls)
+    )
+
+
+async def _send_replay_intro(
+    messenger: Messenger,
+    tg_chat_id: str,
+    *,
+    displayable_count: int,
+    delay_seconds: float,
+) -> None:
+    estimated_minutes = int(displayable_count * delay_seconds / 60) + 1
+    await _send_replay_message(
+        messenger,
+        OutgoingMessage(
+            text=(
+                f"\U0001f4e5 Replaying {displayable_count} messages from imported history...\n"
+                f"This will take about {estimated_minutes} minute(s)."
+            ),
+            chat_id=tg_chat_id,
+        ),
+        delay_seconds=delay_seconds,
+    )
+
+
+async def _send_replay_progress(
+    messenger: Messenger,
+    tg_chat_id: str,
+    *,
+    sent_count: int,
+    displayable_count: int,
+    delay_seconds: float,
+) -> None:
+    await _send_replay_message(
+        messenger,
+        OutgoingMessage(
+            text=f"\u23f3 Replay progress: {sent_count}/{displayable_count} messages...",
+            chat_id=tg_chat_id,
+        ),
+        delay_seconds=delay_seconds,
+    )
+
+
+def _find_last_assistant_id(messages: list[Message]) -> int | None:
+    for msg in reversed(messages):
+        if msg.role == "assistant" and (msg.content or "").strip():
+            return msg.id
+    return None
+
+
+def _build_replay_summary(sent_count: int, *, last_assistant_id: int | None) -> str:
+    summary_parts = [f"\u2705 Import complete! {sent_count} messages replayed."]
+    if last_assistant_id is not None:
+        summary_parts.append(
+            'Use the "\u2702 Cut this & above" button on any AI message to trim history.'
+        )
+    summary_parts.append("Send a message to continue the conversation.")
+    return "\n".join(summary_parts)
+
+
+async def _send_replay_summary(
+    messenger: Messenger,
+    tg_chat_id: str,
+    *,
+    sent_count: int,
+    last_assistant_id: int | None,
+) -> None:
+    await _send_with_retry(
+        messenger,
+        OutgoingMessage(
+            text=_build_replay_summary(sent_count, last_assistant_id=last_assistant_id),
+            chat_id=tg_chat_id,
+        ),
+    )
 
 
 def _format_user_message(content: str) -> list[str]:
@@ -118,36 +386,19 @@ async def _send_with_retry(
 
         error = (result.error or "").lower()
 
+        truncated = _truncate_oversized_message(msg, error)
+        if truncated is not None:
+            msg = truncated
+            continue
         if "too long" in error or "message is too long" in error:
-            logger.error("Message too long even after splitting (%d chars)", len(msg.text))
-            if len(msg.text) > SAFE_MAX_LENGTH:
-                msg = OutgoingMessage(
-                    text=msg.text[:SAFE_MAX_LENGTH] + "...",
-                    chat_id=msg.chat_id,
-                    parse_mode=msg.parse_mode,
-                    keyboard=msg.keyboard,
-                )
-                continue
             return False
 
-        if "flood control" in error or "too many requests" in error or "429" in error:
-            import re
-
-            match = re.search(r"retry in (\d+)", error)
-            wait = int(match.group(1)) + FLOOD_EXTRA_BUFFER if match else 30
+        retry = _retry_delay_for_send_error(error, attempt)
+        if retry is not None:
+            wait, reason = retry
             logger.warning(
-                "Flood control on replay (attempt %d/%d): waiting %ds",
-                attempt,
-                max_retries,
-                wait,
-            )
-            await asyncio.sleep(wait)
-            continue
-
-        if "timed out" in error or "network" in error:
-            wait = min(2**attempt, 60)
-            logger.warning(
-                "Transient error on replay (attempt %d/%d): %s - waiting %ds",
+                "%s (attempt %d/%d): %s - waiting %ds",
+                reason,
                 attempt,
                 max_retries,
                 result.error,
@@ -186,133 +437,37 @@ async def replay_imported_messages(
         return 0
 
     sent_count = 0
-    displayable_count = sum(
-        1
-        for m in messages
-        if m.role in ("user", "assistant") or (m.role == "tool" and show_tool_calls)
-    )
-
-    est_minutes = int(displayable_count * delay_seconds / 60) + 1
-    await _send_with_retry(
+    displayable_count = _count_displayable_messages(messages, show_tool_calls=show_tool_calls)
+    await _send_replay_intro(
         messenger,
-        OutgoingMessage(
-            text=(
-                f"\U0001f4e5 Replaying {displayable_count} messages from imported history...\n"
-                f"This will take about {est_minutes} minute(s)."
-            ),
-            chat_id=tg_chat_id,
-        ),
+        tg_chat_id,
+        displayable_count=displayable_count,
+        delay_seconds=delay_seconds,
     )
-    await asyncio.sleep(delay_seconds)
 
     for msg in messages:
-        if msg.role == "system":
-            continue
-
-        if msg.role == "user":
-            parts = _format_user_message(msg.content)
-            for part in parts:
-                ok = await _send_with_retry(
-                    messenger,
-                    OutgoingMessage(
-                        text=part,
-                        chat_id=tg_chat_id,
-                        parse_mode="html",
-                    ),
-                )
-                if ok and part is parts[-1]:
-                    sent_count += 1
-                await asyncio.sleep(delay_seconds)
-
-        elif msg.role == "assistant":
-            content = msg.content or ""
-            reasoning = getattr(msg, "reasoning", None)
-            has_tool_calls = bool(msg.tool_calls)
-
-            if not content.strip() and has_tool_calls:
-                if show_tool_calls:
-                    text = "\U0001f916 <i>[AI tool call]</i>"
-                    kb: Any = _build_cut_keyboard(msg.id)
-                    ok = await _send_with_retry(
-                        messenger,
-                        OutgoingMessage(
-                            text=text,
-                            chat_id=tg_chat_id,
-                            parse_mode="html",
-                            keyboard=kb,
-                        ),
-                    )
-                    if ok:
-                        sent_count += 1
-                    await asyncio.sleep(delay_seconds)
-                continue
-
-            parts = _format_assistant_message(content, reasoning)
-            kb = _build_cut_keyboard(msg.id)
-            for i, part in enumerate(parts):
-                is_last = i == len(parts) - 1
-                ok = await _send_with_retry(
-                    messenger,
-                    OutgoingMessage(
-                        text=part,
-                        chat_id=tg_chat_id,
-                        parse_mode="html",
-                        keyboard=kb if is_last else None,
-                    ),
-                )
-                if ok and is_last:
-                    sent_count += 1
-                await asyncio.sleep(delay_seconds)
-
-        elif msg.role == "tool":
-            if not show_tool_calls:
-                continue
-            text = _format_tool_message(msg.content, msg.tool_call_id)
-            ok = await _send_with_retry(
-                messenger,
-                OutgoingMessage(
-                    text=text,
-                    chat_id=tg_chat_id,
-                    parse_mode="html",
-                ),
-            )
-            if ok:
-                sent_count += 1
-            await asyncio.sleep(delay_seconds)
-        else:
-            continue
+        sent_count += await _replay_message(
+            messenger,
+            tg_chat_id,
+            msg,
+            delay_seconds=delay_seconds,
+            show_tool_calls=show_tool_calls,
+        )
 
         if sent_count > 0 and sent_count % progress_interval == 0:
-            await _send_with_retry(
+            await _send_replay_progress(
                 messenger,
-                OutgoingMessage(
-                    text=f"\u23f3 Replay progress: {sent_count}/{displayable_count} messages...",
-                    chat_id=tg_chat_id,
-                ),
+                tg_chat_id,
+                sent_count=sent_count,
+                displayable_count=displayable_count,
+                delay_seconds=delay_seconds,
             )
-            await asyncio.sleep(delay_seconds)
 
-    last_assistant_id: int | None = None
-    for msg in reversed(messages):
-        if msg.role == "assistant" and (msg.content or "").strip():
-            last_assistant_id = msg.id
-            break
-
-    summary_parts = [
-        f"\u2705 Import complete! {sent_count} messages replayed.",
-    ]
-    if last_assistant_id is not None:
-        summary_parts.append(
-            'Use the "\u2702 Cut this & above" button on any AI message to trim history.'
-        )
-    summary_parts.append("Send a message to continue the conversation.")
-
-    await _send_with_retry(
+    await _send_replay_summary(
         messenger,
-        OutgoingMessage(
-            text="\n".join(summary_parts),
-            chat_id=tg_chat_id,
-        ),
+        tg_chat_id,
+        sent_count=sent_count,
+        last_assistant_id=_find_last_assistant_id(messages),
     )
 
     return sent_count
