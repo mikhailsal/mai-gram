@@ -45,6 +45,32 @@ class ImportSession:
     created_at: float = 0.0
 
 
+@dataclass(frozen=True)
+class ImportDocument:
+    """Validated document metadata for an import upload."""
+
+    file_id: str
+    file_name: str
+    file_size: int
+
+
+@dataclass(frozen=True)
+class ParsedImportDocument:
+    """Parsed import payload plus the extracted system prompt."""
+
+    messages_data: list[dict[str, object]]
+    system_prompt: str
+
+
+@dataclass(frozen=True)
+class SavedImportChat:
+    """Persisted import result needed for user feedback and replay."""
+
+    chat_id: str
+    imported_count: int
+    system_prompt: str
+
+
 class ImportWorkflow:
     """Own the /import state machine and document upload flow."""
 
@@ -184,119 +210,159 @@ class ImportWorkflow:
 
     async def handle_document(self, message: IncomingMessage) -> None:
         """Handle an uploaded JSON file for the active import session."""
-        import_session = self.get_import_session(message.user_id)
-        if not import_session or import_session.state != ImportState.AWAITING_FILE:
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="No import in progress. Use /import to start importing a conversation.",
-                    chat_id=message.chat_id,
-                )
+        import_session = await self._get_upload_session(message)
+        if import_session is None:
+            return
+
+        document = await self._validate_import_document(message)
+        if document is None:
+            return
+
+        parsed_document = await self._download_and_parse_import_document(message, document)
+        if parsed_document is None:
+            return
+
+        saved_chat = await self._save_imported_chat(
+            message=message,
+            import_session=import_session,
+            parsed_document=parsed_document,
+        )
+        if saved_chat is None:
+            return
+
+        self.clear_import_session(message.user_id)
+        if saved_chat.imported_count == 0:
+            await self._send_import_outcome(
+                message.chat_id,
+                text=(
+                    "❌ No messages could be imported (all entries were skipped).\n\n"
+                    "The chat was created but has no history. "
+                    "Send a message to start chatting."
+                ),
             )
             return
 
+        await self._send_import_outcome(
+            message.chat_id,
+            text=(
+                f"✅ Saved {saved_chat.imported_count} messages to database.\n"
+                f"Model: {import_session.selected_model}\n"
+                f"System prompt: {saved_chat.system_prompt[:100]}"
+                f"{'...' if len(saved_chat.system_prompt) > 100 else ''}\n\n"
+                "Starting message replay..."
+            ),
+        )
+        await self._start_replay_task(message.chat_id, saved_chat.chat_id)
+
+    async def _get_upload_session(self, message: IncomingMessage) -> ImportSession | None:
+        import_session = self.get_import_session(message.user_id)
+        if import_session and import_session.state == ImportState.AWAITING_FILE:
+            return import_session
+
+        await self._send_import_outcome(
+            message.chat_id,
+            text="No import in progress. Use /import to start importing a conversation.",
+        )
+        return None
+
+    async def _validate_import_document(self, message: IncomingMessage) -> ImportDocument | None:
         file_name = message.document_file_name or ""
         file_size = message.document_file_size or 0
         if not file_name.lower().endswith(".json"):
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="Please upload a .json file.",
-                    chat_id=message.chat_id,
-                )
-            )
-            return
+            await self._send_import_outcome(message.chat_id, text="Please upload a .json file.")
+            return None
         if file_size > 20 * 1024 * 1024:
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="File is too large (max 20 MB). Please upload a smaller file.",
-                    chat_id=message.chat_id,
-                )
+            await self._send_import_outcome(
+                message.chat_id,
+                text="File is too large (max 20 MB). Please upload a smaller file.",
             )
-            return
+            return None
 
         file_id = message.document_file_id
         if not file_id:
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="Could not read the file. Please try again.",
-                    chat_id=message.chat_id,
-                )
+            await self._send_import_outcome(
+                message.chat_id,
+                text="Could not read the file. Please try again.",
             )
-            return
+            return None
 
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=f"📄 Received: {file_name} ({file_size:,} bytes)\nParsing...",
-                chat_id=message.chat_id,
-            )
+        return ImportDocument(file_id=file_id, file_name=file_name, file_size=file_size)
+
+    async def _download_and_parse_import_document(
+        self,
+        message: IncomingMessage,
+        document: ImportDocument,
+    ) -> ParsedImportDocument | None:
+        await self._send_import_outcome(
+            message.chat_id,
+            text=f"📄 Received: {document.file_name} ({document.file_size:,} bytes)\nParsing...",
         )
 
         try:
-            file_data = await self._messenger.download_file(file_id)
+            file_data = await self._messenger.download_file(document.file_id)
         except Exception:
-            logger.exception("Failed to download file %s", file_id)
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="Failed to download the file from Telegram. Please try again.",
-                    chat_id=message.chat_id,
-                )
+            logger.exception("Failed to download file %s", document.file_id)
+            await self._send_import_outcome(
+                message.chat_id,
+                text="Failed to download the file from Telegram. Please try again.",
             )
-            return
+            return None
 
         from mai_gram.core.importer import ImportError as ImportParseError
-        from mai_gram.core.importer import (
-            extract_system_prompt,
-            parse_import_json,
-            save_imported_messages,
-        )
+        from mai_gram.core.importer import extract_system_prompt, parse_import_json
 
         try:
             messages_data = parse_import_json(file_data)
         except ImportParseError as exc:
             self.clear_import_session(message.user_id)
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text=f"❌ Import failed: {exc}\n\nUse /import to try again.",
-                    chat_id=message.chat_id,
-                )
+            await self._send_import_outcome(
+                message.chat_id,
+                text=f"❌ Import failed: {exc}\n\nUse /import to try again.",
             )
-            return
+            return None
 
         if not messages_data:
             self.clear_import_session(message.user_id)
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="❌ The file contains no messages.\n\nUse /import to try again.",
-                    chat_id=message.chat_id,
-                )
+            await self._send_import_outcome(
+                message.chat_id,
+                text="❌ The file contains no messages.\n\nUse /import to try again.",
             )
-            return
+            return None
 
-        system_prompt = extract_system_prompt(messages_data) or "You are a helpful assistant."
+        return ParsedImportDocument(
+            messages_data=messages_data,
+            system_prompt=extract_system_prompt(messages_data) or "You are a helpful assistant.",
+        )
+
+    async def _save_imported_chat(
+        self,
+        *,
+        message: IncomingMessage,
+        import_session: ImportSession,
+        parsed_document: ParsedImportDocument,
+    ) -> SavedImportChat | None:
+        from mai_gram.core.importer import save_imported_messages
+
         chat_id = self._resolve_chat_id(message)
-        user_id = message.user_id
-        bot_id = message.bot_id or ""
-
         async with get_session() as db:
             existing = await self._get_chat(db, chat_id)
             if existing:
                 self.clear_import_session(message.user_id)
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text=(
-                            "A chat was created while you were importing. "
-                            "Use /reset first, then /import again."
-                        ),
-                        chat_id=message.chat_id,
-                    )
+                await self._send_import_outcome(
+                    message.chat_id,
+                    text=(
+                        "A chat was created while you were importing. "
+                        "Use /reset first, then /import again."
+                    ),
                 )
-                return
+                return None
 
             chat = Chat(
                 id=chat_id,
-                user_id=user_id,
-                bot_id=bot_id,
+                user_id=message.user_id,
+                bot_id=message.bot_id or "",
                 llm_model=import_session.selected_model,
-                system_prompt=system_prompt,
+                system_prompt=parsed_document.system_prompt,
                 prompt_name=None,
                 timezone=self._settings.default_timezone,
                 show_reasoning=True,
@@ -307,36 +373,20 @@ class ImportWorkflow:
             await db.flush()
 
             message_store = MessageStore(db)
-            imported_count = await save_imported_messages(chat_id, messages_data, message_store)
+            imported_count = await save_imported_messages(
+                chat_id,
+                parsed_document.messages_data,
+                message_store,
+            )
             await db.commit()
 
-        self.clear_import_session(message.user_id)
-        if imported_count == 0:
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text=(
-                        "❌ No messages could be imported (all entries were skipped).\n\n"
-                        "The chat was created but has no history. "
-                        "Send a message to start chatting."
-                    ),
-                    chat_id=message.chat_id,
-                )
-            )
-            return
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=(
-                    f"✅ Saved {imported_count} messages to database.\n"
-                    f"Model: {import_session.selected_model}\n"
-                    f"System prompt: {system_prompt[:100]}"
-                    f"{'...' if len(system_prompt) > 100 else ''}\n\n"
-                    "Starting message replay..."
-                ),
-                chat_id=message.chat_id,
-            )
+        return SavedImportChat(
+            chat_id=chat_id,
+            imported_count=imported_count,
+            system_prompt=parsed_document.system_prompt,
         )
 
+    async def _start_replay_task(self, tg_chat_id: str, chat_id: str) -> None:
         async with get_session() as db:
             from sqlalchemy import asc
 
@@ -346,8 +396,6 @@ class ImportWorkflow:
             all_messages = list(result.scalars().all())
 
         from mai_gram.core.replay import replay_imported_messages
-
-        tg_chat_id = message.chat_id
 
         async def _replay_task() -> None:
             try:
@@ -373,6 +421,9 @@ class ImportWorkflow:
 
         task = asyncio.create_task(_replay_task())
         self._replay_tasks[tg_chat_id] = task
+
+    async def _send_import_outcome(self, chat_id: str, *, text: str) -> None:
+        await self._messenger.send_message(OutgoingMessage(text=text, chat_id=chat_id))
 
     @staticmethod
     async def _get_chat(session: AsyncSession, chat_id: str) -> Chat | None:
