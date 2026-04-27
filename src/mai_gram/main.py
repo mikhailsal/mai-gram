@@ -13,11 +13,12 @@ import logging
 import os
 import signal
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mai_gram.bot.handler import BotHandler
-from mai_gram.config import get_settings
+from mai_gram.config import Settings, get_settings
 from mai_gram.db import close_db, init_db, run_migrations
 from mai_gram.llm.openrouter import OpenRouterProvider
 from mai_gram.mcp_servers.external import ExternalMCPPool
@@ -25,12 +26,16 @@ from mai_gram.messenger.telegram import TelegramMessenger
 
 logger = logging.getLogger(__name__)
 
-_messengers: list[TelegramMessenger] = []
-_llm_provider: OpenRouterProvider | None = None
-_external_mcp_pool: ExternalMCPPool | None = None
-_config_watcher_task: asyncio.Task[None] | None = None
-
 PID_FILE = Path("data/.mai-gram.pid")
+
+
+@dataclass(slots=True)
+class AppRuntime:
+    settings: Settings | None = None
+    messengers: list[TelegramMessenger] = field(default_factory=list)
+    llm_provider: OpenRouterProvider | None = None
+    external_mcp_pool: ExternalMCPPool | None = None
+    config_watcher_task: asyncio.Task[None] | None = None
 
 
 def _is_process_alive(pid: int) -> bool:
@@ -77,21 +82,15 @@ def _release_pid_lock() -> None:
         pass
 
 
-async def startup() -> None:
-    """Initialize all application subsystems."""
-    global _llm_provider, _external_mcp_pool
-
-    settings = get_settings()
-
+def _configure_logging(settings: Settings) -> None:
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         stream=sys.stdout,
     )
 
-    _acquire_pid_lock()
-    logger.info("mai-gram starting up (PID %d)...", os.getpid())
 
+def _get_bot_tokens(settings: Settings) -> list[str]:
     bot_tokens = settings.get_all_bot_tokens()
     if not bot_tokens:
         logger.error("TELEGRAM_BOT_TOKEN is required. Set it in .env or environment.")
@@ -101,11 +100,68 @@ async def startup() -> None:
         logger.error("OPENROUTER_API_KEY is required. Set it in .env or environment.")
         sys.exit(1)
 
+    return bot_tokens
+
+
+def _build_external_mcp_pool(settings: Settings) -> ExternalMCPPool | None:
+    external_mcp_configs = settings.get_external_mcp_config()
+    if not external_mcp_configs:
+        return None
+
+    pool = ExternalMCPPool(external_mcp_configs)
+    logger.info(
+        "External MCP pool: %d server(s) configured: %s",
+        len(external_mcp_configs),
+        ", ".join(external_mcp_configs.keys()),
+    )
+    return pool
+
+
+async def _start_messengers(runtime: AppRuntime, bot_tokens: list[str]) -> None:
+    settings = runtime.settings
+    llm_provider = runtime.llm_provider
+    if settings is None or llm_provider is None:
+        raise RuntimeError("Application runtime is not initialized")
+
+    bot_configs = settings.get_bot_configs()
+
+    for i, token in enumerate(bot_tokens, start=1):
+        messenger = TelegramMessenger(token)
+        bot_config = settings.get_bot_config_by_token(token) if bot_configs else None
+
+        _handler = BotHandler(
+            messenger,
+            llm_provider,
+            memory_data_dir=settings.memory_data_dir,
+            wiki_context_limit=settings.wiki_context_limit,
+            short_term_limit=settings.short_term_limit,
+            tool_max_iterations=settings.tool_max_iterations,
+            external_mcp_pool=runtime.external_mcp_pool,
+            bot_config=bot_config,
+        )
+
+        await messenger.start()
+        runtime.messengers.append(messenger)
+        logger.info("Bot %d/%d started: @%s", i, len(bot_tokens), messenger.bot_id)
+
+
+async def startup(runtime: AppRuntime) -> None:
+    """Initialize all application subsystems."""
+    settings = get_settings()
+    runtime.settings = settings
+
+    _configure_logging(settings)
+
+    _acquire_pid_lock()
+    logger.info("mai-gram starting up (PID %d)...", os.getpid())
+
+    bot_tokens = _get_bot_tokens(settings)
+
     engine = await init_db(settings.database_url, echo=settings.debug)
     await run_migrations(engine)
     logger.info("Database ready")
 
-    _llm_provider = OpenRouterProvider(
+    runtime.llm_provider = OpenRouterProvider(
         api_key=settings.openrouter_api_key,
         default_model=settings.llm_model,
         base_url=settings.openrouter_base_url,
@@ -116,47 +172,17 @@ async def startup() -> None:
         settings.openrouter_base_url,
     )
 
-    external_mcp_configs = settings.get_external_mcp_config()
-    if external_mcp_configs:
-        _external_mcp_pool = ExternalMCPPool(external_mcp_configs)
-        logger.info(
-            "External MCP pool: %d server(s) configured: %s",
-            len(external_mcp_configs),
-            ", ".join(external_mcp_configs.keys()),
-        )
-
-    bot_configs = settings.get_bot_configs()
-
-    for i, token in enumerate(bot_tokens, start=1):
-        messenger = TelegramMessenger(token)
-
-        bot_config = settings.get_bot_config_by_token(token) if bot_configs else None
-
-        _handler = BotHandler(
-            messenger,
-            _llm_provider,
-            memory_data_dir=settings.memory_data_dir,
-            wiki_context_limit=settings.wiki_context_limit,
-            short_term_limit=settings.short_term_limit,
-            tool_max_iterations=settings.tool_max_iterations,
-            external_mcp_pool=_external_mcp_pool,
-            bot_config=bot_config,
-        )
-
-        await messenger.start()
-        _messengers.append(messenger)
-        logger.info("Bot %d/%d started: @%s", i, len(bot_tokens), messenger.bot_id)
-
-    global _config_watcher_task
-    _config_watcher_task = asyncio.create_task(_watch_config(settings))
+    runtime.external_mcp_pool = _build_external_mcp_pool(settings)
+    await _start_messengers(runtime, bot_tokens)
+    runtime.config_watcher_task = asyncio.create_task(_watch_config(settings))
 
     logger.info(
         "mai-gram is running with %d bot(s)! Press Ctrl+C to stop.",
-        len(_messengers),
+        len(runtime.messengers),
     )
 
 
-async def _watch_config(settings: Any) -> None:
+async def _watch_config(settings: Settings) -> None:
     """Background task that watches models.toml for changes and pre-warms the cache.
 
     Uses simple mtime polling (2s interval).  The actual cache refresh is
@@ -189,35 +215,34 @@ async def _watch_config(settings: Any) -> None:
             logger.debug("Config watcher error", exc_info=True)
 
 
-async def shutdown() -> None:
+async def shutdown(runtime: AppRuntime) -> None:
     """Gracefully shut down all application subsystems."""
-    global _llm_provider, _external_mcp_pool, _config_watcher_task
-
     logger.info("mai-gram shutting down...")
 
-    if _config_watcher_task and not _config_watcher_task.done():
-        _config_watcher_task.cancel()
-        _config_watcher_task = None
+    if runtime.config_watcher_task and not runtime.config_watcher_task.done():
+        runtime.config_watcher_task.cancel()
+    runtime.config_watcher_task = None
 
-    if _llm_provider and _llm_provider.active_requests > 0:
+    if runtime.llm_provider and runtime.llm_provider.active_requests > 0:
         logger.info(
             "Waiting for %d in-flight LLM request(s) to complete...",
-            _llm_provider.active_requests,
+            runtime.llm_provider.active_requests,
         )
 
-    for messenger in _messengers:
+    for messenger in runtime.messengers:
         await messenger.stop()
-    _messengers.clear()
+    runtime.messengers.clear()
 
-    if _external_mcp_pool:
-        await _external_mcp_pool.stop_all()
-        _external_mcp_pool = None
+    if runtime.external_mcp_pool:
+        await runtime.external_mcp_pool.stop_all()
+        runtime.external_mcp_pool = None
 
-    if _llm_provider:
-        await _llm_provider.close()
-        _llm_provider = None
+    if runtime.llm_provider:
+        await runtime.llm_provider.close()
+        runtime.llm_provider = None
 
     await close_db()
+    runtime.settings = None
     _release_pid_lock()
     logger.info("Shutdown complete")
 
@@ -225,25 +250,26 @@ async def shutdown() -> None:
 async def run() -> None:
     """Run the application with proper signal handling."""
     loop = asyncio.get_running_loop()
+    runtime = AppRuntime()
 
     def signal_handler() -> None:
         logger.info("Received shutdown signal")
-        asyncio.create_task(shutdown())
+        asyncio.create_task(shutdown(runtime))
 
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, signal_handler)
 
     try:
-        await startup()
-        while _messengers:
+        await startup(runtime)
+        while runtime.messengers:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception:
         logger.exception("Unexpected error")
     finally:
-        await shutdown()
+        await shutdown(runtime)
 
 
 def _run_with_reload() -> None:

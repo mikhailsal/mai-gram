@@ -14,7 +14,10 @@ def test_simple_message_produces_non_empty_ai_response(
 ) -> None:
     functional_cli.start_chat("func-conversation").require_ok()
 
-    result = functional_cli.send_message("func-conversation", "Reply with exactly READY.")
+    result = functional_cli.send_message_with_live_retry(
+        "func-conversation",
+        "Reply with exactly READY.",
+    )
 
     assert result.returncode == 0
     assert "--- AI Response" in result.stdout
@@ -31,7 +34,7 @@ def test_debug_logging_writes_jsonl_and_summary(
 ) -> None:
     functional_cli.start_chat("func-debug").require_ok()
 
-    result = functional_cli.send_message(
+    result = functional_cli.send_message_with_live_retry(
         "func-debug",
         "Reply with exactly DEBUG_OK.",
         debug=True,
@@ -52,7 +55,7 @@ def test_stream_debug_shows_intermediate_edits(
 ) -> None:
     functional_cli.start_chat("func-stream").require_ok()
 
-    result = functional_cli.send_message(
+    result = functional_cli.send_message_with_live_retry(
         "func-stream",
         "In 2 short sentences, explain why rainbows appear in the sky.",
         stream_debug=True,
@@ -67,7 +70,10 @@ def test_prompt_preview_reflects_test_mode_and_real_mode(
     requires_openrouter_api_key,
 ) -> None:
     functional_cli.start_chat("func-prompt-preview").require_ok()
-    functional_cli.send_message("func-prompt-preview", "Reply with exactly PREVIEW.").require_ok()
+    functional_cli.send_message_with_live_retry(
+        "func-prompt-preview",
+        "Reply with exactly PREVIEW.",
+    ).require_ok()
 
     preview = functional_cli.show_prompt("func-prompt-preview")
     real_preview = functional_cli.show_prompt("func-prompt-preview", real=True)

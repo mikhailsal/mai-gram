@@ -59,7 +59,10 @@ def test_import_proxy_json_and_continue_conversation(
 
     functional_cli.start_chat(chat_id).require_ok()
     imported = functional_cli.import_json(chat_id, json_path)
-    follow_up = functional_cli.send_message(chat_id, "Reply with exactly CONTINUED.")
+    follow_up = functional_cli.send_message_with_live_retry(
+        chat_id,
+        "Reply with exactly CONTINUED.",
+    )
 
     assert imported.returncode == 0
     assert "Imported 2 messages into chat 'func-import-proxy'." in imported.stdout

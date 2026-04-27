@@ -54,14 +54,20 @@ def test_datetime_and_timezone_affect_future_prompt_assembly(
     functional_cli.start_chat(chat_id).require_ok()
     functional_cli.run_command(chat_id, "datetime").require_ok()
     functional_cli.run_command(chat_id, "timezone", args="Europe/Moscow").require_ok()
-    functional_cli.send_message(chat_id, "Reply with exactly FIRST_PASS.").require_ok()
+    functional_cli.send_message_with_live_retry(
+        chat_id,
+        "Reply with exactly FIRST_PASS.",
+    ).require_ok()
 
     hidden_preview = functional_cli.show_prompt(chat_id)
     assert "[user] Reply with exactly FIRST_PASS." in hidden_preview.stdout
     assert "Europe/Moscow] Reply with exactly FIRST_PASS." not in hidden_preview.stdout
 
     functional_cli.run_command(chat_id, "datetime").require_ok()
-    functional_cli.send_message(chat_id, "Reply with exactly SECOND_PASS.").require_ok()
+    functional_cli.send_message_with_live_retry(
+        chat_id,
+        "Reply with exactly SECOND_PASS.",
+    ).require_ok()
 
     visible_preview = functional_cli.show_prompt(chat_id)
     assert "SECOND_PASS" in visible_preview.stdout

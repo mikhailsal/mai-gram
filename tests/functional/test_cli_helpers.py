@@ -74,3 +74,44 @@ def test_send_message_with_live_retry_uses_extended_timeout(monkeypatch, tmp_pat
 
     assert result.returncode == 0
     assert seen_timeouts == [120]
+
+
+def test_send_message_with_live_retry_retries_transient_timeout(monkeypatch, tmp_path) -> None:
+    harness = _build_harness(tmp_path)
+    attempts = 0
+
+    def fake_send_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        user_id: str | None = None,
+        debug: bool = False,
+        stream_debug: bool = False,
+        env_overrides: dict[str, str | None] | None = None,
+        timeout: int = 60,
+    ) -> CompletedCliRun:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return CompletedCliRun(
+                command=("mai-chat", "-c", chat_id, text),
+                returncode=124,
+                stdout="",
+                stderr="WARNING: Network error during stream (attempt 1/3): ",
+                root=self.root,
+            )
+        return CompletedCliRun(
+            command=("mai-chat", "-c", chat_id, text),
+            returncode=0,
+            stdout="ok",
+            stderr="",
+            root=self.root,
+        )
+
+    monkeypatch.setattr(CliHarness, "send_message", fake_send_message)
+
+    result = harness.send_message_with_live_retry("func-chat", "hello")
+
+    assert result.returncode == 0
+    assert attempts == 2

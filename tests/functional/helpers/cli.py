@@ -305,6 +305,8 @@ def _coerce_cli_text(value: str | bytes | None) -> str:
 
 
 def _should_retry_live_output(result: CompletedCliRun) -> bool:
+    if result.returncode == 124:
+        return _TRANSIENT_RE.search(result.output) is not None
     if result.returncode != 0:
         return False
     if _LIVE_OUTPUT_TRANSIENT_RE.search(result.output) is not None:

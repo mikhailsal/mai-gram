@@ -78,7 +78,7 @@ def test_send_datetime_false_removes_timestamp_from_future_prompt_context(
         toml="send_datetime = false",
     )
     functional_cli.start_chat("func-no-datetime", prompt="no_datetime").require_ok()
-    functional_cli.send_message(
+    functional_cli.send_message_with_live_retry(
         "func-no-datetime",
         "Reply with exactly NO_DATETIME.",
     ).require_ok()
