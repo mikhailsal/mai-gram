@@ -18,6 +18,7 @@ from mai_gram.mcp_servers.bridge import (
     mcp_tools_to_openai,
     openai_tool_call_to_mcp,
     run_with_tools,
+    run_with_tools_stream,
 )
 from mai_gram.mcp_servers.manager import MCPManager, RegisteredTool
 from mai_gram.mcp_servers.messages_server import MCPToolSpec
@@ -46,11 +47,18 @@ class _FakeServer:
 
 
 class _MockLLMProvider(LLMProvider):
-    def __init__(self, responses: list[LLMResponse]) -> None:
+    def __init__(
+        self,
+        responses: list[LLMResponse],
+        *,
+        stream_sequences: list[list[StreamChunk]] | None = None,
+    ) -> None:
         self._responses = responses
+        self._stream_sequences = stream_sequences or []
         self.calls: list[list[ChatMessage]] = []
+        self.stream_calls: list[list[ChatMessage]] = []
         self.last_tools: list[Any] | None = None
-        self.last_tool_choice: str | dict | None = None
+        self.last_tool_choice: str | dict[str, Any] | None = None
 
     async def generate(
         self,
@@ -60,8 +68,8 @@ class _MockLLMProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[Any] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> LLMResponse:
         self.calls.append(list(messages))
         self.last_tools = tools
@@ -76,12 +84,13 @@ class _MockLLMProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[Any] | None = None,
-        tool_choice: str | dict | None = None,
-        extra_params: dict | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        extra_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        del messages, model, temperature, max_tokens, tools, tool_choice, extra_params
-        if False:  # pragma: no cover
-            yield StreamChunk(content="")
+        del model, temperature, max_tokens, tools, tool_choice, extra_params
+        self.stream_calls.append(list(messages))
+        for chunk in self._stream_sequences[len(self.stream_calls) - 1]:
+            yield chunk
 
     async def count_tokens(self, messages: list[ChatMessage], *, model: str | None = None) -> int:
         del model
@@ -377,3 +386,111 @@ class TestRunWithTools:
             message.role == MessageRole.TOOL and "Tool execution error" in message.content
             for message in second_call_messages
         )
+
+
+class TestRunWithToolsStream:
+    async def test_run_with_tools_stream_yields_final_usage_without_tools(self) -> None:
+        llm = _MockLLMProvider(
+            [],
+            stream_sequences=[
+                [
+                    StreamChunk(content="Hello ", reasoning="think", usage=None),
+                    StreamChunk(
+                        content="world",
+                        finish_reason="stop",
+                        usage=TokenUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5),
+                        cost=0.25,
+                        is_byok=True,
+                    ),
+                ]
+            ],
+        )
+        manager = MCPManager()
+
+        chunks = [
+            chunk
+            async for chunk in run_with_tools_stream(
+                llm,
+                manager,
+                [ChatMessage(role=MessageRole.USER, content="Hi")],
+            )
+        ]
+
+        assert [chunk.content for chunk in chunks[:-1]] == ["Hello ", "world"]
+        assert chunks[-1].finish_reason == "stop"
+        assert chunks[-1].usage is not None
+        assert chunks[-1].usage.total_tokens == 5
+        assert chunks[-1].cost == 0.25
+        assert chunks[-1].is_byok is True
+
+    async def test_run_with_tools_stream_executes_tool_loop_and_callbacks(self) -> None:
+        llm = _MockLLMProvider(
+            [],
+            stream_sequences=[
+                [
+                    StreamChunk(content="Working", usage=None),
+                    StreamChunk(
+                        content="",
+                        tool_calls_delta=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "sleep", "arguments": '{"duration":'},
+                            }
+                        ],
+                    ),
+                    StreamChunk(
+                        content="",
+                        tool_calls_delta=[{"index": 0, "function": {"arguments": "0}"}}],
+                        finish_reason="tool_calls",
+                        usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+                    ),
+                ],
+                [
+                    StreamChunk(
+                        content="Done",
+                        finish_reason="stop",
+                        usage=TokenUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7),
+                    )
+                ],
+            ],
+        )
+        manager = MCPManager()
+        server = _FakeServer([MCPToolSpec("sleep", "Pause", {"type": "object"})], "ok")
+        manager.register_server("sleep", server)
+
+        delivered: list[str] = []
+        assistant_tool_calls: list[tuple[str, str]] = []
+        tool_results: list[str] = []
+
+        async def on_intermediate_content(text: str) -> None:
+            delivered.append(text)
+
+        async def on_assistant_tool_call(*, content: str, tool_calls_json: str) -> None:
+            assistant_tool_calls.append((content, tool_calls_json))
+
+        async def on_tool_result(**kwargs: Any) -> None:
+            tool_results.append(kwargs["content"])
+
+        chunks = [
+            chunk
+            async for chunk in run_with_tools_stream(
+                llm,
+                manager,
+                [ChatMessage(role=MessageRole.USER, content="Hi")],
+                on_intermediate_content=on_intermediate_content,
+                on_assistant_tool_call=on_assistant_tool_call,
+                on_tool_result=on_tool_result,
+            )
+        ]
+
+        assert server.calls == [("sleep", {"duration": 0})]
+        assert delivered == ["Working"]
+        assert assistant_tool_calls == [
+            ("Working", '[{"id": "call_1", "name": "sleep", "arguments": "{\\"duration\\":0}"}]')
+        ]
+        assert tool_results == ["ok"]
+        assert any(chunk.turn_complete for chunk in chunks)
+        assert chunks[-1].finish_reason == "stop"
+        assert chunks[-1].usage is not None
+        assert chunks[-1].usage.total_tokens == 10
