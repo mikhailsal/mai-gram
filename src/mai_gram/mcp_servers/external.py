@@ -7,6 +7,7 @@ JSON-RPC 2.0 over stdin/stdout, following the MCP stdio transport spec.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -173,60 +174,77 @@ class ExternalMCPServer:
         timeout: float = 60.0,
     ) -> dict[str, Any]:
         """Send a JSON-RPC request and wait for the response."""
-        if self._process is None or self._process.stdin is None or self._process.stdout is None:
-            raise RuntimeError(f"MCP server '{self._name}' is not running")
-
-        self._request_id += 1
-        request_id = self._request_id
-
-        request = {
-            "jsonrpc": _JSONRPC_VERSION,
-            "id": request_id,
-            "method": method,
-            "params": params,
-        }
-
-        line = json.dumps(request, ensure_ascii=False) + "\n"
-        self._process.stdin.write(line.encode("utf-8"))
-        await self._process.stdin.drain()
+        stdin, stdout = self._require_request_pipes()
+        request_id = self._next_request_id()
+        stdin.write(self._serialize_request(request_id, method, params))
+        await stdin.drain()
 
         while True:
-            raw_line = await asyncio.wait_for(
-                self._process.stdout.readline(),
-                timeout=timeout,
-            )
+            raw_line = await asyncio.wait_for(stdout.readline(), timeout=timeout)
             if not raw_line:
-                stderr_out = ""
-                if self._process.stderr:
-                    import contextlib
-
-                    with contextlib.suppress(asyncio.TimeoutError):
-                        stderr_out = (
-                            await asyncio.wait_for(self._process.stderr.read(4096), timeout=1.0)
-                        ).decode("utf-8", errors="replace")
                 raise RuntimeError(
                     f"MCP server '{self._name}' closed stdout unexpectedly. "
-                    f"stderr: {stderr_out[:500]}"
+                    f"stderr: {await self._read_stderr_excerpt()}"
                 )
 
-            try:
-                response = json.loads(raw_line)
-            except json.JSONDecodeError:
+            response = self._decode_matching_response(raw_line, request_id)
+            if response is None:
                 continue
+            return self._extract_result(response)
 
-            if "id" not in response:
-                continue
+    def _require_request_pipes(
+        self,
+    ) -> tuple[asyncio.StreamWriter, asyncio.StreamReader]:
+        if self._process is None or self._process.stdin is None or self._process.stdout is None:
+            raise RuntimeError(f"MCP server '{self._name}' is not running")
+        return self._process.stdin, self._process.stdout
 
-            if response.get("id") != request_id:
-                continue
+    def _next_request_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
 
-            if "error" in response:
-                err = response["error"]
-                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                raise RuntimeError(f"MCP server '{self._name}' error: {msg}")
+    @staticmethod
+    def _serialize_request(request_id: int, method: str, params: dict[str, Any]) -> bytes:
+        return (
+            json.dumps(
+                {
+                    "jsonrpc": _JSONRPC_VERSION,
+                    "id": request_id,
+                    "method": method,
+                    "params": params,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        ).encode("utf-8")
 
-            result: dict[str, Any] = response.get("result", {})
-            return result
+    async def _read_stderr_excerpt(self) -> str:
+        if self._process is None or self._process.stderr is None:
+            return ""
+        with contextlib.suppress(asyncio.TimeoutError):
+            stderr_bytes = await asyncio.wait_for(self._process.stderr.read(4096), timeout=1.0)
+            return stderr_bytes.decode("utf-8", errors="replace")[:500]
+        return ""
+
+    @staticmethod
+    def _decode_matching_response(raw_line: bytes, request_id: int) -> dict[str, Any] | None:
+        try:
+            response = json.loads(raw_line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(response, dict) or "id" not in response:
+            return None
+        if response.get("id") != request_id:
+            return None
+        return response
+
+    def _extract_result(self, response: dict[str, Any]) -> dict[str, Any]:
+        if "error" in response:
+            err = response["error"]
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            raise RuntimeError(f"MCP server '{self._name}' error: {msg}")
+        result = response.get("result", {})
+        return result if isinstance(result, dict) else {}
 
     async def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no response expected)."""

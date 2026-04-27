@@ -22,6 +22,7 @@ from mai_gram.llm.provider import (
     LLMResponse,
     MessageRole,
     StreamChunk,
+    TokenUsage,
     ToolCall,
     ToolDefinition,
 )
@@ -42,7 +43,7 @@ def _make_chat_response(
     tool_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a minimal OpenAI-compatible chat-completion JSON response."""
-    response = {
+    response: dict[str, Any] = {
         "id": "gen-abc123",
         "model": model,
         "choices": [
@@ -726,6 +727,126 @@ class TestGenerateStream:
         with pytest.raises(LLMProviderError, match="without any data"):
             async for _chunk in provider.generate_stream(sample_messages):
                 pass
+
+        await provider.close()
+
+    async def test_stream_emits_reasoning_and_tool_call_deltas(
+        self,
+        sample_messages: list[ChatMessage],
+    ) -> None:
+        first_chunk = {
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning": "Thinking",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {
+                                    "name": "wiki_read",
+                                    "arguments": '{"key":"human_name"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+        finish_chunk = {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}
+        stream = (
+            "\n\n".join(
+                [
+                    f"data: {json.dumps(first_chunk)}",
+                    f"data: {json.dumps(finish_chunk)}",
+                    "data: [DONE]",
+                ]
+            )
+            + "\n\n"
+        )
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=stream.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        provider = OpenRouterProvider(api_key=API_KEY)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        chunks = [chunk async for chunk in provider.generate_stream(sample_messages)]
+
+        assert chunks[0].content == ""
+        assert chunks[0].reasoning == "Thinking"
+        assert chunks[0].tool_calls_delta == [
+            {
+                "index": 0,
+                "id": "call_1",
+                "function": {
+                    "name": "wiki_read",
+                    "arguments": '{"key":"human_name"}',
+                },
+            }
+        ]
+        assert chunks[1].finish_reason == "tool_calls"
+
+        await provider.close()
+
+    async def test_stream_usage_chunk_resolves_byok_cost(
+        self,
+        sample_messages: list[ChatMessage],
+    ) -> None:
+        content_chunk = {"choices": [{"delta": {"content": "Hello"}}]}
+        usage_event = {
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+                "is_byok": True,
+                "cost": 0.1,
+                "cost_details": {"upstream_inference_cost": 0.25},
+            },
+        }
+        stream = (
+            "\n\n".join(
+                [
+                    f"data: {json.dumps(content_chunk)}",
+                    f"data: {json.dumps(usage_event)}",
+                    "data: [DONE]",
+                ]
+            )
+            + "\n\n"
+        )
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=stream.encode(),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        provider = OpenRouterProvider(api_key=API_KEY)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        chunks = [chunk async for chunk in provider.generate_stream(sample_messages)]
+
+        usage_chunk = chunks[-1]
+        assert usage_chunk.finish_reason == "stop"
+        assert usage_chunk.usage == TokenUsage(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+        )
+        assert usage_chunk.is_byok is True
+        assert usage_chunk.cost == pytest.approx(0.35)
 
         await provider.close()
 

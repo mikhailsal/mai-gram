@@ -158,3 +158,44 @@ def test_send_message_with_live_retry_retries_malformed_toolcall_output(
 
     assert result.returncode == 0
     assert attempts == 2
+
+
+def test_send_message_with_live_retry_retries_truncated_call_marker(monkeypatch, tmp_path) -> None:
+    harness = _build_harness(tmp_path)
+    attempts = 0
+
+    def fake_send_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        user_id: str | None = None,
+        debug: bool = False,
+        stream_debug: bool = False,
+        env_overrides: dict[str, str | None] | None = None,
+        timeout: int = 60,
+    ) -> CompletedCliRun:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return CompletedCliRun(
+                command=("mai-chat", "-c", chat_id, text),
+                returncode=0,
+                stdout='CALL&gt;[{"name": "wiki_create"}]\nTools used: none',
+                stderr="",
+                root=self.root,
+            )
+        return CompletedCliRun(
+            command=("mai-chat", "-c", chat_id, text),
+            returncode=0,
+            stdout="Tools used: wiki_create",
+            stderr="",
+            root=self.root,
+        )
+
+    monkeypatch.setattr(CliHarness, "send_message", fake_send_message)
+
+    result = harness.send_message_with_live_retry("func-chat", "remember this")
+
+    assert result.returncode == 0
+    assert attempts == 2

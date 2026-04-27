@@ -8,12 +8,21 @@ Implements the ``LLMProvider`` interface using the OpenRouter service
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from mai_gram.llm.openrouter_support import (
+    EMPTY_STREAM_ERROR,
+    decode_sse_json,
+    parse_inline_stream_error,
+    parse_response,
+    parse_stream_chunk,
+    parse_tool_calls,
+    serialize_message,
+    serialize_tool_definition,
+)
 from mai_gram.llm.provider import (
     ChatMessage,
     LLMAuthenticationError,
@@ -24,7 +33,6 @@ from mai_gram.llm.provider import (
     LLMRateLimitError,
     LLMResponse,
     StreamChunk,
-    TokenUsage,
     ToolCall,
     ToolDefinition,
 )
@@ -41,6 +49,24 @@ DEFAULT_TIMEOUT = httpx.Timeout(
     write=10.0,
     pool=10.0,
 )
+
+
+def _log_stream_chunk(data: Any, chunk: StreamChunk, elapsed_ms: float) -> None:
+    if chunk.usage is not None:
+        logger.info(
+            "Usage data: %s (resolved cost=%.6f, byok=%s)",
+            data.get("usage") if isinstance(data, dict) else None,
+            chunk.cost or 0,
+            chunk.is_byok,
+        )
+    logger.debug(
+        "SSE chunk at %.0fms: content=%d reasoning=%d tc=%s fin=%s",
+        elapsed_ms,
+        len(chunk.content),
+        len(chunk.reasoning or ""),
+        bool(chunk.tool_calls_delta),
+        chunk.finish_reason,
+    )
 
 
 class OpenRouterProvider(LLMProvider):
@@ -243,38 +269,11 @@ class OpenRouterProvider(LLMProvider):
 
     @staticmethod
     def _serialize_tool_definition(tool: ToolDefinition) -> dict[str, Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            },
-        }
+        return serialize_tool_definition(tool)
 
     @staticmethod
     def _serialize_message(message: ChatMessage) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "role": message.role.value,
-            "content": message.content,
-        }
-        if message.reasoning is not None:
-            payload["reasoning"] = message.reasoning
-        if message.tool_call_id is not None:
-            payload["tool_call_id"] = message.tool_call_id
-        if message.tool_calls:
-            payload["tool_calls"] = [
-                {
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_call.name,
-                        "arguments": tool_call.arguments,
-                    },
-                }
-                for tool_call in message.tool_calls
-            ]
-        return payload
+        return serialize_message(message)
 
     # -- Non-streaming request with retry ---------------------------------
 
@@ -399,21 +398,10 @@ class OpenRouterProvider(LLMProvider):
                 if not line:
                     continue
 
-                # OpenAI-compatible SSE format: "data: {...}" or "data: [DONE]"
                 if not line.startswith("data: "):
-                    # Some providers/proxies send error JSON without SSE framing.
-                    if line.startswith("{"):
-                        try:
-                            raw = json.loads(line)
-                            if isinstance(raw, dict) and "error" in raw:
-                                err = raw["error"]
-                                if isinstance(err, dict):
-                                    msg = err.get("message", str(err))
-                                else:
-                                    msg = str(err)
-                                raise LLMProviderError(f"Stream error: {msg}")
-                        except json.JSONDecodeError:
-                            pass
+                    error_msg = parse_inline_stream_error(line)
+                    if error_msg is not None:
+                        raise LLMProviderError(f"Stream error: {error_msg}")
                     logger.debug("Skipping non-SSE line: %s", line[:120])
                     continue
 
@@ -421,162 +409,37 @@ class OpenRouterProvider(LLMProvider):
 
                 if data_str == "[DONE]":
                     if not any_data_received:
-                        raise LLMProviderError(
-                            "Stream completed without any data — the provider likely "
-                            "returned an error in an unsupported format"
-                        )
+                        raise LLMProviderError(EMPTY_STREAM_ERROR)
                     return
 
-                try:
-                    data = json.loads(data_str)
-                except json.JSONDecodeError:
+                data = decode_sse_json(data_str)
+                if data is None:
                     logger.debug("Skipping non-JSON SSE line: %s", data_str[:100])
                     continue
 
                 any_data_received = True
 
-                # Handle inline error objects that some providers send
-                if "error" in data:
-                    error_msg = data["error"]
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    raise LLMProviderError(f"Stream error: {error_msg}")
-
-                choices = data.get("choices", [])
-                if not choices:
+                chunk = parse_stream_chunk(data)
+                if chunk is None:
                     continue
 
-                delta = choices[0].get("delta", {})
-                content = delta.get("content", "")
-                reasoning = delta.get("reasoning", "")
-                finish_reason = choices[0].get("finish_reason")
-                raw_tool_calls = delta.get("tool_calls")
-
-                tool_calls_delta: list[dict[str, Any]] | None = None
-                if isinstance(raw_tool_calls, list) and raw_tool_calls:
-                    tool_calls_delta = raw_tool_calls
-
-                usage_obj: TokenUsage | None = None
-                cost_val: float | None = None
-                is_byok_val = False
-                usage_data = data.get("usage")
-                if isinstance(usage_data, dict):
-                    usage_obj = TokenUsage(
-                        prompt_tokens=usage_data.get("prompt_tokens", 0),
-                        completion_tokens=usage_data.get("completion_tokens", 0),
-                        total_tokens=usage_data.get("total_tokens", 0),
-                    )
-                    is_byok_val = bool(usage_data.get("is_byok", False))
-                    raw_cost = usage_data.get("cost") or 0.0
-                    if is_byok_val:
-                        cost_details = usage_data.get("cost_details") or {}
-                        inference_cost = (
-                            cost_details.get("upstream_inference_cost")
-                            or usage_data.get("native_tokens_cost")
-                            or usage_data.get("inference_cost")
-                            or 0.0
-                        )
-                        cost_val = float(raw_cost) + float(inference_cost)
-                    else:
-                        cost_val = float(raw_cost) if raw_cost else None
-                    logger.info(
-                        "Usage data: %s (resolved cost=%.6f, byok=%s)",
-                        usage_data,
-                        cost_val or 0,
-                        is_byok_val,
-                    )
-
-                if content or reasoning or finish_reason or tool_calls_delta or usage_obj:
-                    _elapsed = (_time.monotonic() - _t0) * 1000
-                    logger.debug(
-                        "SSE chunk at %.0fms: content=%d reasoning=%d tc=%s fin=%s",
-                        _elapsed,
-                        len(content or ""),
-                        len(reasoning or ""),
-                        bool(tool_calls_delta),
-                        finish_reason,
-                    )
-                    yield StreamChunk(
-                        content=content or "",
-                        finish_reason=finish_reason,
-                        reasoning=reasoning or None,
-                        tool_calls_delta=tool_calls_delta,
-                        usage=usage_obj,
-                        cost=cost_val,
-                        is_byok=is_byok_val,
-                    )
+                _elapsed = (_time.monotonic() - _t0) * 1000
+                _log_stream_chunk(data, chunk, _elapsed)
+                yield chunk
 
             if not any_data_received:
-                raise LLMProviderError(
-                    "Stream completed without any data — the provider likely "
-                    "returned an error in an unsupported format"
-                )
+                raise LLMProviderError(EMPTY_STREAM_ERROR)
 
     # -- Response parsing --------------------------------------------------
 
     @staticmethod
     def _parse_response(data: dict[str, Any]) -> LLMResponse:
         """Turn a raw JSON response dict into an ``LLMResponse``."""
-        # Handle error responses that came back with HTTP 200
-        if "error" in data:
-            error = data["error"]
-            msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-            raise LLMProviderError(f"API error: {msg}")
-
-        choices = data.get("choices", [])
-        if not choices:
-            raise LLMProviderError("No choices in API response")
-
-        message = choices[0].get("message", {})
-        content = message.get("content") or ""
-        reasoning = message.get("reasoning") or None
-        tool_calls = OpenRouterProvider._parse_tool_calls(message.get("tool_calls"))
-        finish_reason = choices[0].get("finish_reason", "")
-
-        usage_data = data.get("usage", {})
-        usage = TokenUsage(
-            prompt_tokens=usage_data.get("prompt_tokens", 0),
-            completion_tokens=usage_data.get("completion_tokens", 0),
-            total_tokens=usage_data.get("total_tokens", 0),
-        )
-
-        return LLMResponse(
-            content=content,
-            model=data.get("model", ""),
-            usage=usage,
-            finish_reason=finish_reason,
-            tool_calls=tool_calls,
-            reasoning=reasoning,
-        )
+        return parse_response(data)
 
     @staticmethod
     def _parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
-        if not isinstance(raw_tool_calls, list):
-            return []
-
-        parsed_calls: list[ToolCall] = []
-        for tool_call in raw_tool_calls:
-            if not isinstance(tool_call, dict):
-                continue
-            function_data = tool_call.get("function")
-            if not isinstance(function_data, dict):
-                continue
-
-            tool_call_id = tool_call.get("id")
-            name = function_data.get("name")
-            arguments = function_data.get("arguments")
-            if not isinstance(tool_call_id, str) or not isinstance(name, str):
-                continue
-
-            parsed_calls.append(
-                ToolCall(
-                    id=tool_call_id,
-                    name=name,
-                    arguments=arguments if isinstance(arguments, str) else "",
-                )
-            )
-
-        return parsed_calls
+        return parse_tool_calls(raw_tool_calls)
 
     # -- HTTP status → typed exception mapping -----------------------------
 

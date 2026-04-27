@@ -7,193 +7,44 @@ keyboard building, and bot lifecycle management.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import re
-from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from telegram import (
-    Bot,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-    Update,
-)
-from telegram.constants import ChatAction, ParseMode
+from telegram.constants import ChatAction
 from telegram.error import TelegramError
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    filters,
-)
-from telegram.ext import (
-    MessageHandler as TGMessageHandler,
-)
 
 from mai_gram.messenger.base import (
-    IncomingMessage,
     MessageHandler,
-    MessageType,
     Messenger,
     MessengerError,
     OutgoingMessage,
     SendResult,
 )
+from mai_gram.messenger.telegram_support import (
+    build_application,
+    build_inline_keyboard,
+    build_reply_keyboard,
+    build_reply_markup,
+    convert_update_to_message,
+    get_parse_mode,
+    register_bot_commands,
+    register_handlers,
+    resolve_bot_id,
+    send_message_with_retry,
+)
+
+if TYPE_CHECKING:
+    from telegram import Bot, Update
+    from telegram.ext import Application, ContextTypes
+
+__all__ = [
+    "TelegramMessenger",
+    "answer_callback_query",
+    "build_inline_keyboard",
+    "build_reply_keyboard",
+]
 
 logger = logging.getLogger(__name__)
-
-
-def _convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingMessage | None:
-    """Convert a Telegram Update to our IncomingMessage format.
-
-    Parameters
-    ----------
-    update:
-        The Telegram update object.
-    bot_id:
-        Identifier of the bot that received this update.
-
-    Returns
-    -------
-    IncomingMessage or None
-        The converted message, or None if the update is not a message.
-    """
-    # Handle callback queries (button presses)
-    if update.callback_query:
-        query = update.callback_query
-        return IncomingMessage(
-            platform="telegram",
-            chat_id=str(query.message.chat_id) if query.message else "",  # type: ignore[attr-defined]
-            user_id=str(query.from_user.id) if query.from_user else "",
-            message_id=str(query.id),
-            message_type=MessageType.CALLBACK,
-            callback_data=query.data,
-            timestamp=datetime.now(timezone.utc),
-            bot_id=bot_id,
-            raw=update,
-        )
-
-    # Handle regular messages
-    message = update.message or update.edited_message
-    if not message:
-        return None
-
-    # Determine message type
-    if message.text and message.text.startswith("/"):
-        msg_type = MessageType.COMMAND
-        # Parse command and arguments
-        parts = message.text.split(maxsplit=1)
-        command = parts[0][1:].split("@")[0]  # Remove / and @botname
-        command_args = parts[1] if len(parts) > 1 else None
-    elif message.text:
-        msg_type = MessageType.TEXT
-        command = None
-        command_args = None
-    elif message.photo:
-        msg_type = MessageType.PHOTO
-        command = None
-        command_args = None
-    elif message.voice:
-        msg_type = MessageType.VOICE
-        command = None
-        command_args = None
-    elif message.document:
-        msg_type = MessageType.DOCUMENT
-        command = None
-        command_args = None
-    else:
-        msg_type = MessageType.OTHER
-        command = None
-        command_args = None
-
-    doc_file_id: str | None = None
-    doc_file_name: str | None = None
-    doc_mime_type: str | None = None
-    doc_file_size: int | None = None
-    if message.document:
-        doc_file_id = message.document.file_id
-        doc_file_name = message.document.file_name
-        doc_mime_type = message.document.mime_type
-        doc_file_size = message.document.file_size
-
-    return IncomingMessage(
-        platform="telegram",
-        chat_id=str(message.chat_id),
-        user_id=str(message.from_user.id) if message.from_user else "",
-        message_id=str(message.message_id),
-        message_type=msg_type,
-        text=message.text or message.caption or "",
-        command=command,
-        command_args=command_args,
-        timestamp=message.date,
-        bot_id=bot_id,
-        document_file_id=doc_file_id,
-        document_file_name=doc_file_name,
-        document_mime_type=doc_mime_type,
-        document_file_size=doc_file_size,
-        raw=update,
-    )
-
-
-def build_inline_keyboard(buttons: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
-    """Build an inline keyboard from a list of button rows.
-
-    Parameters
-    ----------
-    buttons:
-        List of rows, where each row is a list of (text, callback_data) tuples.
-
-    Returns
-    -------
-    InlineKeyboardMarkup
-        The Telegram inline keyboard markup.
-    """
-    keyboard = [
-        [InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in buttons
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-def build_reply_keyboard(
-    buttons: list[list[str]],
-    *,
-    one_time: bool = True,
-    resize: bool = True,
-) -> ReplyKeyboardMarkup:
-    """Build a reply keyboard from a list of button rows.
-
-    Parameters
-    ----------
-    buttons:
-        List of rows, where each row is a list of button texts.
-    one_time:
-        If True, the keyboard disappears after a button is pressed.
-    resize:
-        If True, the keyboard is resized to fit the buttons.
-
-    Returns
-    -------
-    ReplyKeyboardMarkup
-        The Telegram reply keyboard markup.
-    """
-    return ReplyKeyboardMarkup(
-        buttons,
-        one_time_keyboard=one_time,
-        resize_keyboard=resize,
-    )
-
-
-_RETRY_AFTER_RE = re.compile(r"retry in (\d+)")
-
-
-def _extract_retry_after(error_text: str) -> int:
-    """Parse the retry-after duration from a Telegram flood control error."""
-    match = _RETRY_AFTER_RE.search(error_text)
-    return int(match.group(1)) if match else 30
 
 
 class TelegramMessenger(Messenger):
@@ -245,73 +96,23 @@ class TelegramMessenger(Messenger):
     async def start(self) -> None:
         """Start the Telegram bot and begin polling for updates."""
         logger.info("Starting Telegram messenger (bot_id=%s)...", self._bot_id or "(resolving)")
-
-        # Build the application with increased timeouts for network resilience
-        # Default timeouts are 5 seconds which is too aggressive for unstable networks
-        self._app = (
-            Application.builder()
-            .token(self._token)
-            .read_timeout(30.0)  # Wait up to 30s for response data
-            .write_timeout(30.0)  # Wait up to 30s for sending data
-            .connect_timeout(15.0)  # Wait up to 15s for connection
-            .pool_timeout(10.0)  # Wait up to 10s for connection from pool
-            .get_updates_read_timeout(30.0)  # Polling read timeout
-            .get_updates_write_timeout(30.0)  # Polling write timeout
-            .get_updates_connect_timeout(15.0)  # Polling connect timeout
-            .build()
+        self._app = build_application(self._token)
+        self._bot_id = await resolve_bot_id(self._app, self._bot_id)
+        logger.info("Resolved bot_id: %s", self._bot_id)
+        register_handlers(
+            self._app,
+            command_handlers=self._command_handlers,
+            callback_handlers=self._callback_handlers,
+            document_handlers=self._document_handlers,
+            message_handlers=self._message_handlers,
+            make_command_wrapper=self._make_command_wrapper,
+            handle_callback_query=self._handle_callback_query,
+            handle_document=self._handle_document,
+            handle_message=self._handle_message,
         )
-
-        # Resolve bot_id from Telegram API if not provided
-        if not self._bot_id:
-            bot_info = await self._app.bot.get_me()
-            self._bot_id = bot_info.username or str(bot_info.id)
-            logger.info("Resolved bot_id: %s", self._bot_id)
-
-        # Register command handlers
-        for command, handler in self._command_handlers.items():
-            self._app.add_handler(CommandHandler(command, self._make_command_wrapper(handler)))
-
-        # Register callback query handler
-        if self._callback_handlers:
-            self._app.add_handler(CallbackQueryHandler(self._handle_callback_query))
-
-        # Register document handler (before general text handler)
-        if self._document_handlers:
-            self._app.add_handler(
-                TGMessageHandler(
-                    filters.Document.ALL,
-                    self._handle_document,
-                )
-            )
-
-        # Register general message handler (must be last)
-        if self._message_handlers:
-            self._app.add_handler(
-                TGMessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    self._handle_message,
-                )
-            )
-
-        # Initialize the application
         await self._app.initialize()
         await self._app.start()
-
-        # Register commands with Telegram so they appear in the "/" menu
-        if self._command_descriptions:
-            from telegram import BotCommand
-
-            bot_commands = [
-                BotCommand(cmd, desc) for cmd, desc in self._command_descriptions.items()
-            ]
-            try:
-                await self._app.bot.set_my_commands(bot_commands)
-                logger.info(
-                    "Registered %d command(s) with Telegram",
-                    len(bot_commands),
-                )
-            except TelegramError as e:
-                logger.warning("Failed to set bot commands: %s", e)
+        await register_bot_commands(self._app, self._command_descriptions, logger=logger)
 
         # Start polling in the background
         assert self._app.updater is not None
@@ -347,94 +148,12 @@ class TelegramMessenger(Messenger):
         """
         if self._app is None:
             return SendResult(success=False, error="Messenger not started")
-
-        # Determine parse mode
-        parse_mode = None
-        if message.parse_mode:
-            if message.parse_mode.lower() == "markdown":
-                parse_mode = ParseMode.MARKDOWN_V2
-            elif message.parse_mode.lower() == "html":
-                parse_mode = ParseMode.HTML
-
-        # Build keyboard if provided
-        reply_markup: ReplyKeyboardRemove | InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None
-        if message.keyboard is not None:
-            if message.keyboard == "remove":
-                reply_markup = ReplyKeyboardRemove()
-            elif isinstance(message.keyboard, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
-                reply_markup = message.keyboard
-            elif isinstance(message.keyboard, list):
-                # Assume it's inline keyboard data
-                reply_markup = build_inline_keyboard(message.keyboard)
-
-        last_error: Exception | None = None
-        for attempt in range(1, max_retries + 2):  # +2 because range is exclusive
-            try:
-                # Send photo if provided
-                if message.photo_path:
-                    with open(message.photo_path, "rb") as photo:
-                        sent = await self._app.bot.send_photo(
-                            chat_id=int(message.chat_id),
-                            photo=photo,
-                            caption=message.text if message.text else None,
-                            parse_mode=parse_mode,
-                            reply_markup=reply_markup,
-                            reply_to_message_id=int(message.reply_to) if message.reply_to else None,
-                        )
-                elif message.photo_url:
-                    sent = await self._app.bot.send_photo(
-                        chat_id=int(message.chat_id),
-                        photo=message.photo_url,
-                        caption=message.text if message.text else None,
-                        parse_mode=parse_mode,
-                        reply_markup=reply_markup,
-                        reply_to_message_id=int(message.reply_to) if message.reply_to else None,
-                    )
-                else:
-                    # Send text message
-                    sent = await self._app.bot.send_message(
-                        chat_id=int(message.chat_id),
-                        text=message.text,
-                        parse_mode=parse_mode,
-                        reply_markup=reply_markup,
-                        reply_to_message_id=int(message.reply_to) if message.reply_to else None,
-                    )
-
-                return SendResult(success=True, message_id=str(sent.message_id))
-
-            except TelegramError as e:
-                last_error = e
-                error_str = str(e).lower()
-
-                if "flood control" in error_str or "too many requests" in error_str:
-                    retry_after = _extract_retry_after(error_str)
-                    logger.warning(
-                        "Flood control hit (attempt %d/%d): retry in %ds",
-                        attempt,
-                        max_retries + 1,
-                        retry_after,
-                    )
-                    if attempt <= max_retries:
-                        await asyncio.sleep(retry_after)
-                        continue
-                    return SendResult(success=False, error=str(e))
-
-                is_transient = "timed out" in error_str or "network" in error_str
-                if is_transient and attempt <= max_retries:
-                    logger.warning(
-                        "Telegram send failed (attempt %d/%d): %s - retrying...",
-                        attempt,
-                        max_retries + 1,
-                        e,
-                    )
-                    await asyncio.sleep(1.0 * attempt)
-                    continue
-
-                logger.error("Failed to send Telegram message: %s", e)
-                return SendResult(success=False, error=str(e))
-
-        logger.error("Failed to send Telegram message after retries: %s", last_error)
-        return SendResult(success=False, error=str(last_error) if last_error else "Unknown error")
+        return await send_message_with_retry(
+            self._app.bot,
+            message,
+            max_retries=max_retries,
+            logger=logger,
+        )
 
     async def edit_message(
         self, chat_id: str, message_id: str, new_text: str, **kwargs: Any
@@ -444,17 +163,8 @@ class TelegramMessenger(Messenger):
             return SendResult(success=False, error="Messenger not started")
 
         try:
-            parse_mode = None
-            if kwargs.get("parse_mode"):
-                pm = kwargs["parse_mode"].lower()
-                if pm == "markdown":
-                    parse_mode = ParseMode.MARKDOWN_V2
-                elif pm == "html":
-                    parse_mode = ParseMode.HTML
-
-            reply_markup = kwargs.get("keyboard")
-            if isinstance(reply_markup, list):
-                reply_markup = build_inline_keyboard(reply_markup)
+            parse_mode = get_parse_mode(kwargs.get("parse_mode"))
+            reply_markup = build_reply_markup(kwargs.get("keyboard"))
 
             await self._app.bot.edit_message_text(
                 chat_id=int(chat_id),
@@ -554,7 +264,8 @@ class TelegramMessenger(Messenger):
         """Create a Telegram CommandHandler-compatible wrapper."""
 
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-            msg = _convert_update_to_message(update, bot_id=self._bot_id)
+            _ = context
+            msg = convert_update_to_message(update, bot_id=self._bot_id)
             if msg:
                 await handler(msg)
 
@@ -562,14 +273,16 @@ class TelegramMessenger(Messenger):
 
     async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming document uploads."""
-        msg = _convert_update_to_message(update, bot_id=self._bot_id)
+        _ = context
+        msg = convert_update_to_message(update, bot_id=self._bot_id)
         if msg:
             for handler in self._document_handlers:
                 await handler(msg)
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming text messages."""
-        msg = _convert_update_to_message(update, bot_id=self._bot_id)
+        _ = context
+        msg = convert_update_to_message(update, bot_id=self._bot_id)
         if msg:
             for handler in self._message_handlers:
                 await handler(msg)
@@ -578,7 +291,8 @@ class TelegramMessenger(Messenger):
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Handle callback queries (button presses)."""
-        msg = _convert_update_to_message(update, bot_id=self._bot_id)
+        _ = context
+        msg = convert_update_to_message(update, bot_id=self._bot_id)
         if msg:
             # Acknowledge the callback to remove the loading indicator
             if update.callback_query:

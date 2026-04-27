@@ -24,7 +24,7 @@ _LIVE_OUTPUT_TRANSIENT_RE = re.compile(
     re.IGNORECASE,
 )
 _LIVE_OUTPUT_MALFORMED_TOOLCALL_RE = re.compile(
-    r"(?:toolcall|olcall)(?:[>\]]|&gt;)",
+    r"(?:toolcall|olcall|call)(?:[>\]]|&gt;)\s*\[",
     re.IGNORECASE,
 )
 _LIVE_OUTPUT_NO_TOOLS_RE = re.compile(r"tools used:\s*none", re.IGNORECASE)

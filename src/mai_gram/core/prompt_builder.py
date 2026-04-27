@@ -57,22 +57,8 @@ class PromptBuilder:
         self._chat_timezone = chat_timezone
         now = current_time or datetime.now(timezone.utc)
 
-        await self._wiki_store.sync_from_disk(chat.id)
-        wiki_entries, _ = await self._wiki_store.list_entries_sorted(
-            chat.id, sort_by="importance", limit=self._wiki_context_limit
-        )
-
-        recent_messages = await self._message_store.get_recent(
-            chat.id,
-            limit=self._short_term_limit,
-            after_message_id=cut_above_message_id,
-        )
-
-        llm_history = []
-        for msg in sorted(recent_messages, key=lambda m: m.id):
-            llm_history.append(self._message_to_chat_message(msg))
-
-        llm_history = self._normalize_conversation(llm_history)
+        wiki_entries = await self._load_wiki_entries(chat.id)
+        llm_history = await self._load_llm_history(chat.id, cut_above_message_id)
         loaded_count = len(llm_history)
 
         system_prompt = self._build_system_prompt(
@@ -81,23 +67,12 @@ class PromptBuilder:
             now,
             cut_above_message_id=cut_above_message_id,
         )
-        context = [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
-
-        token_count = await self._llm.count_tokens(context)
-        if token_count > self._max_context_tokens and len(llm_history) > 2:
-            logger.warning(
-                "Context exceeds token budget for chat %s (%d > %d), truncating oldest messages",
-                chat.id,
-                token_count,
-                self._max_context_tokens,
-            )
-            while token_count > self._max_context_tokens and len(llm_history) > 2:
-                llm_history.pop(0)
-                context = [
-                    ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
-                    *llm_history,
-                ]
-                token_count = await self._llm.count_tokens(context)
+        llm_history, token_count = await self._truncate_history_for_budget(
+            chat.id,
+            system_prompt,
+            llm_history,
+        )
+        context = self._build_context_messages(system_prompt, llm_history)
 
         final_count = len(llm_history)
         logger.info(
@@ -110,6 +85,61 @@ class PromptBuilder:
         )
 
         return context
+
+    async def _load_wiki_entries(self, chat_id: str) -> list[KnowledgeEntry]:
+        await self._wiki_store.sync_from_disk(chat_id)
+        wiki_entries, _ = await self._wiki_store.list_entries_sorted(
+            chat_id,
+            sort_by="importance",
+            limit=self._wiki_context_limit,
+        )
+        return wiki_entries
+
+    async def _load_llm_history(
+        self,
+        chat_id: str,
+        cut_above_message_id: int | None,
+    ) -> list[ChatMessage]:
+        recent_messages = await self._message_store.get_recent(
+            chat_id,
+            limit=self._short_term_limit,
+            after_message_id=cut_above_message_id,
+        )
+        llm_history = [
+            self._message_to_chat_message(msg)
+            for msg in sorted(recent_messages, key=lambda message: message.id)
+        ]
+        return self._normalize_conversation(llm_history)
+
+    async def _truncate_history_for_budget(
+        self,
+        chat_id: str,
+        system_prompt: str,
+        llm_history: list[ChatMessage],
+    ) -> tuple[list[ChatMessage], int]:
+        context = self._build_context_messages(system_prompt, llm_history)
+        token_count = await self._llm.count_tokens(context)
+        if token_count <= self._max_context_tokens or len(llm_history) <= 2:
+            return llm_history, token_count
+
+        logger.warning(
+            "Context exceeds token budget for chat %s (%d > %d), truncating oldest messages",
+            chat_id,
+            token_count,
+            self._max_context_tokens,
+        )
+        while token_count > self._max_context_tokens and len(llm_history) > 2:
+            llm_history.pop(0)
+            context = self._build_context_messages(system_prompt, llm_history)
+            token_count = await self._llm.count_tokens(context)
+        return llm_history, token_count
+
+    @staticmethod
+    def _build_context_messages(
+        system_prompt: str,
+        llm_history: list[ChatMessage],
+    ) -> list[ChatMessage]:
+        return [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
 
     def _normalize_conversation(self, messages: list[ChatMessage]) -> list[ChatMessage]:
         """Merge consecutive user messages for LLM compatibility."""

@@ -221,14 +221,22 @@ class WikiStore:
         report = SyncReport()
         wiki_dir = self._wiki_dir(chat_id)
         if not wiki_dir.exists():
-            db_entries = await self._all_entries_map(chat_id)
-            for key, entry in db_entries.items():
-                await self._session.delete(entry)
-                report.db_rows_deleted.append(key)
-            if report.db_rows_deleted:
-                await self._session.flush()
+            await self._delete_db_entries(await self._all_entries_map(chat_id), report)
             return report
 
+        disk_entries = self._load_disk_entries(wiki_dir, report)
+        db_entries = await self._all_entries_map(chat_id)
+        self._sync_disk_entries(chat_id, disk_entries, db_entries, report)
+        await self._delete_db_entries(db_entries, report)
+
+        await self._session.flush()
+        return report
+
+    def _load_disk_entries(
+        self,
+        wiki_dir: Path,
+        report: SyncReport,
+    ) -> dict[str, tuple[int, str, Path]]:
         disk_entries: dict[str, tuple[int, str, Path]] = {}
         for md_file in sorted(wiki_dir.glob("*.md")):
             if md_file.name == "changelog.jsonl":
@@ -238,40 +246,48 @@ class WikiStore:
                 report.skipped_files.append(md_file.name)
                 continue
             importance, safe_key = parsed
-            content = md_file.read_text(encoding="utf-8")
-            disk_entries[safe_key] = (importance, content, md_file)
+            disk_entries[safe_key] = (importance, md_file.read_text(encoding="utf-8"), md_file)
+        return disk_entries
 
-        db_entries = await self._all_entries_map(chat_id)
-
+    def _sync_disk_entries(
+        self,
+        chat_id: str,
+        disk_entries: dict[str, tuple[int, str, Path]],
+        db_entries: dict[str, KnowledgeEntry],
+        report: SyncReport,
+    ) -> None:
         for safe_key, (importance, content, _path) in disk_entries.items():
             db_entry = db_entries.pop(safe_key, None)
             if db_entry is None:
-                new_entry = KnowledgeEntry(
-                    chat_id=chat_id,
-                    category="wiki",
-                    key=safe_key,
-                    value=content,
-                    importance=float(importance),
+                self._session.add(
+                    KnowledgeEntry(
+                        chat_id=chat_id,
+                        category="wiki",
+                        key=safe_key,
+                        value=content,
+                        importance=float(importance),
+                    )
                 )
-                self._session.add(new_entry)
                 report.created.append(safe_key)
-            else:
-                changed = False
-                if db_entry.value != content:
-                    db_entry.value = content
-                    changed = True
-                if int(db_entry.importance) != importance:
-                    db_entry.importance = float(importance)
-                    changed = True
-                if changed:
-                    report.updated.append(safe_key)
+                continue
+            changed = False
+            if db_entry.value != content:
+                db_entry.value = content
+                changed = True
+            if int(db_entry.importance) != importance:
+                db_entry.importance = float(importance)
+                changed = True
+            if changed:
+                report.updated.append(safe_key)
 
+    async def _delete_db_entries(
+        self,
+        db_entries: dict[str, KnowledgeEntry],
+        report: SyncReport,
+    ) -> None:
         for key, entry in db_entries.items():
             await self._session.delete(entry)
             report.db_rows_deleted.append(key)
-
-        await self._session.flush()
-        return report
 
     async def _all_entries_map(self, chat_id: str) -> dict[str, KnowledgeEntry]:
         """Return all DB entries for a chat_id as a {key: entry} dict."""
