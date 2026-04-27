@@ -23,7 +23,10 @@ _LIVE_OUTPUT_TRANSIENT_RE = re.compile(
     r"(?:the model returned an empty response|stream completed without any data|without any data)",
     re.IGNORECASE,
 )
-_LIVE_OUTPUT_MALFORMED_TOOLCALL_RE = re.compile(r"toolcall[>\]]", re.IGNORECASE)
+_LIVE_OUTPUT_MALFORMED_TOOLCALL_RE = re.compile(
+    r"(?:toolcall|olcall)(?:[>\]]|&gt;)",
+    re.IGNORECASE,
+)
 _LIVE_OUTPUT_NO_TOOLS_RE = re.compile(r"tools used:\s*none", re.IGNORECASE)
 _LIVE_OUTPUT_PROVIDER_ERROR_RE = re.compile(
     r"(?:ai provider error|something went wrong with the ai provider|tap regenerate to retry)",

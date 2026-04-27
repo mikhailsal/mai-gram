@@ -282,6 +282,10 @@ Validation:
 
 Add migration tests if schema changes are needed, plus black-box tests for wiki repair, wiki listing, and context-building behavior before and after explicit sync.
 
+Status:
+
+`src/mai_gram/core/importer.py` now uses focused helpers for entry validation, content/tool-call normalization, reasoning extraction, and persistence so `save_imported_messages` no longer appears in the size audit while the importer test suite and full live validation remain green. The broader persistence-normalization work, including enum-backed roles and structured persisted tool-call types, is still pending.
+
 ### 9. Reduce broad exception handling and centralize retry and error translation policy
 
 - [ ] Replace catch-all exception blocks with typed failure handling and shared retry policy.

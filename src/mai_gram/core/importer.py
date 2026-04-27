@@ -21,6 +21,114 @@ class ImportError(Exception):  # noqa: A001
     """Raised when import data cannot be parsed or validated."""
 
 
+def _normalize_import_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    return str(content) if content is not None else ""
+
+
+def _extract_reasoning_text(entry: dict[str, Any]) -> str | None:
+    reasoning_raw = entry.get("reasoning") or entry.get("reasoning_content")
+    if isinstance(reasoning_raw, str) and reasoning_raw.strip():
+        return reasoning_raw.strip()
+    return None
+
+
+def _normalize_tool_calls(entry: dict[str, Any], *, entry_index: int) -> str | None:
+    tool_calls_raw = entry.get("tool_calls")
+    if not isinstance(tool_calls_raw, list) or not tool_calls_raw:
+        return None
+
+    normalized_tool_calls: list[dict[str, Any]] = []
+    for tool_call in tool_calls_raw:
+        if not isinstance(tool_call, dict):
+            continue
+
+        function_payload = tool_call.get("function", tool_call)
+        if not isinstance(function_payload, dict):
+            continue
+
+        normalized_tool_calls.append(
+            {
+                "id": tool_call.get("id", f"import_{entry_index}"),
+                "name": function_payload.get("name", "unknown"),
+                "arguments": function_payload.get("arguments", "{}"),
+            }
+        )
+
+    if not normalized_tool_calls:
+        return None
+    return json.dumps(normalized_tool_calls)
+
+
+def _normalize_tool_call_id(entry: dict[str, Any]) -> str | None:
+    tool_call_id = entry.get("tool_call_id")
+    if tool_call_id is None:
+        return None
+    if isinstance(tool_call_id, str):
+        return tool_call_id
+    return str(tool_call_id)
+
+
+def _validate_import_entry(entry: Any, *, entry_index: int) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        logger.warning("Skipping entry %d: not a JSON object", entry_index)
+        return None
+
+    role = entry.get("role")
+    if role not in {"system", "user", "assistant", "tool"}:
+        logger.warning("Skipping entry %d: invalid role '%s'", entry_index, role)
+        return None
+
+    if role == "system":
+        logger.debug("Skipping entry %d: system message", entry_index)
+        return None
+
+    return entry
+
+
+def _build_import_message_payload(
+    entry: dict[str, Any],
+    *,
+    entry_index: int,
+    timestamp: datetime,
+) -> dict[str, Any]:
+    return {
+        "role": entry["role"],
+        "content": _normalize_import_content(entry.get("content", "")),
+        "timestamp": timestamp,
+        "tool_calls": _normalize_tool_calls(entry, entry_index=entry_index),
+        "tool_call_id": _normalize_tool_call_id(entry),
+        "reasoning": _extract_reasoning_text(entry),
+        "show_datetime": False,
+    }
+
+
+async def _save_import_entry(
+    chat_id: str,
+    payload: dict[str, Any],
+    message_store: MessageStore,
+    *,
+    entry_index: int,
+) -> bool:
+    logger.debug(
+        "Entry %d: saving role=%s, content_len=%d, ts=%s",
+        entry_index,
+        payload["role"],
+        len(payload["content"]),
+        payload["timestamp"].isoformat(),
+    )
+
+    try:
+        await message_store.save_message(chat_id=chat_id, **payload)
+    except ValueError as exc:
+        logger.warning("Skipping entry %d due to timestamp conflict: %s", entry_index, exc)
+        return False
+
+    logger.debug("Entry %d saved successfully", entry_index)
+    return True
+
+
 def _extract_messages_from_proxy_request(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract messages from an AI Proxy v2 request JSON.
 
@@ -119,72 +227,23 @@ async def save_imported_messages(
     )
 
     for i, entry in enumerate(messages):
-        if not isinstance(entry, dict):
-            logger.warning("Skipping entry %d: not a JSON object", i)
+        normalized_entry = _validate_import_entry(entry, entry_index=i)
+        if normalized_entry is None:
             continue
-
-        role = entry.get("role")
-        if role not in {"system", "user", "assistant", "tool"}:
-            logger.warning("Skipping entry %d: invalid role '%s'", i, role)
-            continue
-
-        if role == "system":
-            logger.debug("Skipping entry %d: system message", i)
-            continue
-
-        content = entry.get("content", "")
-        if not isinstance(content, str):
-            content = str(content) if content is not None else ""
-
-        reasoning_text: str | None = None
-        reasoning_raw = entry.get("reasoning") or entry.get("reasoning_content")
-        if isinstance(reasoning_raw, str) and reasoning_raw.strip():
-            reasoning_text = reasoning_raw.strip()
-
-        tool_calls_raw = entry.get("tool_calls")
-        tool_calls_json: str | None = None
-        if isinstance(tool_calls_raw, list) and tool_calls_raw:
-            tc_list = []
-            for tc in tool_calls_raw:
-                if isinstance(tc, dict):
-                    func = tc.get("function", tc)
-                    tc_list.append(
-                        {
-                            "id": tc.get("id", f"import_{i}"),
-                            "name": func.get("name", "unknown"),
-                            "arguments": func.get("arguments", "{}"),
-                        }
-                    )
-            if tc_list:
-                tool_calls_json = json.dumps(tc_list)
-
-        tool_call_id = entry.get("tool_call_id")
-        if tool_call_id is not None and not isinstance(tool_call_id, str):
-            tool_call_id = str(tool_call_id)
 
         timestamp = import_base + timedelta(seconds=imported)
-
-        logger.debug(
-            "Entry %d: saving role=%s, content_len=%d, ts=%s",
-            i,
-            role,
-            len(content),
-            timestamp.isoformat(),
+        payload = _build_import_message_payload(
+            normalized_entry,
+            entry_index=i,
+            timestamp=timestamp,
         )
-
-        try:
-            await message_store.save_message(
-                chat_id=chat_id,
-                role=role,
-                content=content,
-                timestamp=timestamp,
-                tool_calls=tool_calls_json,
-                tool_call_id=tool_call_id,
-                reasoning=reasoning_text,
-                show_datetime=False,
-            )
-        except ValueError as exc:
-            logger.warning("Skipping entry %d due to timestamp conflict: %s", i, exc)
+        saved = await _save_import_entry(
+            chat_id,
+            payload,
+            message_store,
+            entry_index=i,
+        )
+        if not saved:
             continue
 
         imported += 1
