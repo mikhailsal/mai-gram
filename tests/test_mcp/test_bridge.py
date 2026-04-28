@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from mai_gram.llm.provider import (
     ChatMessage,
     LLMProvider,
@@ -145,6 +147,18 @@ class TestBridgeHelpers:
 
 
 class TestRunWithTools:
+    async def test_run_with_tools_rejects_non_positive_max_iterations(self) -> None:
+        llm = _MockLLMProvider([])
+        manager = MCPManager()
+
+        with pytest.raises(ValueError, match="max_iterations"):
+            await run_with_tools(
+                llm,
+                manager,
+                [ChatMessage(role=MessageRole.USER, content="Hello")],
+                max_iterations=0,
+            )
+
     async def test_run_with_tools_no_tool_calls(self) -> None:
         llm = _MockLLMProvider(
             [
@@ -389,6 +403,21 @@ class TestRunWithTools:
 
 
 class TestRunWithToolsStream:
+    async def test_run_with_tools_stream_rejects_non_positive_max_iterations(self) -> None:
+        llm = _MockLLMProvider([])
+        manager = MCPManager()
+
+        with pytest.raises(ValueError, match="max_iterations"):
+            [
+                chunk
+                async for chunk in run_with_tools_stream(
+                    llm,
+                    manager,
+                    [ChatMessage(role=MessageRole.USER, content="Hi")],
+                    max_iterations=0,
+                )
+            ]
+
     async def test_run_with_tools_stream_yields_final_usage_without_tools(self) -> None:
         llm = _MockLLMProvider(
             [],
@@ -492,5 +521,59 @@ class TestRunWithToolsStream:
         assert tool_results == ["ok"]
         assert any(chunk.turn_complete for chunk in chunks)
         assert chunks[-1].finish_reason == "stop"
+        assert chunks[-1].usage is not None
+        assert chunks[-1].usage.total_tokens == 10
+
+    async def test_run_with_tools_stream_emits_max_iteration_final_chunk(self) -> None:
+        llm = _MockLLMProvider(
+            [],
+            stream_sequences=[
+                [
+                    StreamChunk(content="Working", usage=None),
+                    StreamChunk(
+                        content="",
+                        tool_calls_delta=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "sleep", "arguments": '{"duration":'},
+                            }
+                        ],
+                    ),
+                    StreamChunk(
+                        content="",
+                        tool_calls_delta=[{"index": 0, "function": {"arguments": "0}"}}],
+                        finish_reason="tool_calls",
+                        usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+                    ),
+                ],
+                [
+                    StreamChunk(
+                        content="Fallback answer",
+                        finish_reason="stop",
+                        usage=TokenUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7),
+                    )
+                ],
+            ],
+        )
+        manager = MCPManager()
+        manager.register_server(
+            "sleep",
+            _FakeServer([MCPToolSpec("sleep", "Pause", {"type": "object"})], "ok"),
+        )
+
+        chunks = [
+            chunk
+            async for chunk in run_with_tools_stream(
+                llm,
+                manager,
+                [ChatMessage(role=MessageRole.USER, content="Hi")],
+                max_iterations=1,
+            )
+        ]
+
+        assert any(chunk.turn_complete for chunk in chunks)
+        assert any(chunk.content == "Fallback answer" for chunk in chunks)
+        assert chunks[-1].finish_reason == "max_tool_iterations"
         assert chunks[-1].usage is not None
         assert chunks[-1].usage.total_tokens == 10

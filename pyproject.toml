@@ -52,21 +52,12 @@ testpaths = ["tests"]
 source = ["mai_gram"]
 omit = [
     "src/mai_gram/__main__.py",
-    "src/mai_gram/main.py",
     "src/mai_gram/console_runner.py",
-    "src/mai_gram/messenger/telegram.py",
     "src/mai_gram/bot/handler.py",
-    "src/mai_gram/core/md_to_telegram.py",
-    "src/mai_gram/core/prompt_builder.py",
-    "src/mai_gram/mcp_servers/bridge.py",
-    "src/mai_gram/mcp_servers/external.py",
-    "src/mai_gram/debug/*",
     "src/mai_gram/memory/forgetting.py",
     "src/mai_gram/memory/summarizer.py",
     "src/mai_gram/memory/summaries.py",
     "src/mai_gram/db/migrations.py",
-    "src/mai_gram/config.py",
-    "src/mai_gram/messenger/console.py",
 ]
 
 [tool.coverage.report]
@@ -80,7 +71,6 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

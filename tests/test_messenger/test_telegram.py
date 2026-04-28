@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
 
-from mai_gram.messenger.base import MessageType, OutgoingMessage
+from mai_gram.messenger.base import MessageType, MessengerError, OutgoingMessage, SendResult
+from mai_gram.messenger.telegram import TelegramMessenger, answer_callback_query
 from mai_gram.messenger.telegram_support import (
     build_inline_keyboard,
     build_reply_keyboard,
@@ -285,3 +286,185 @@ async def test_send_message_with_retry_sends_photo_path(tmp_path: Path) -> None:
     assert result.success is True
     assert result.message_id == "13"
     bot.send_photo.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_telegram_messenger_start_and_stop_manage_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = SimpleNamespace(
+        bot=SimpleNamespace(),
+        updater=SimpleNamespace(running=True, start_polling=AsyncMock(), stop=AsyncMock()),
+        initialize=AsyncMock(),
+        start=AsyncMock(),
+        stop=AsyncMock(),
+        shutdown=AsyncMock(),
+    )
+    register_handlers_mock = MagicMock()
+    register_bot_commands_mock = AsyncMock()
+    monkeypatch.setattr(
+        "mai_gram.messenger.telegram.build_application",
+        MagicMock(return_value=app),
+    )
+    monkeypatch.setattr(
+        "mai_gram.messenger.telegram.resolve_bot_id",
+        AsyncMock(return_value="mai_bot"),
+    )
+    monkeypatch.setattr("mai_gram.messenger.telegram.register_handlers", register_handlers_mock)
+    monkeypatch.setattr(
+        "mai_gram.messenger.telegram.register_bot_commands",
+        register_bot_commands_mock,
+    )
+
+    messenger = TelegramMessenger("token")
+    messenger.register_message_handler(AsyncMock())
+    messenger.register_command_handler("start", AsyncMock(), description="Start the bot")
+    messenger.register_callback_handler(AsyncMock())
+    messenger.register_document_handler(AsyncMock())
+
+    await messenger.start()
+    await messenger.stop()
+
+    assert messenger.bot_id == "mai_bot"
+    app.initialize.assert_awaited_once()
+    app.start.assert_awaited_once()
+    app.updater.start_polling.assert_awaited_once_with(drop_pending_updates=True)
+    register_handlers_mock.assert_called_once()
+    register_bot_commands_mock.assert_awaited_once_with(app, {"start": "Start the bot"}, logger=ANY)
+    app.updater.stop.assert_awaited_once()
+    app.stop.assert_awaited_once()
+    app.shutdown.assert_awaited_once()
+    assert messenger._app is None
+
+
+@pytest.mark.asyncio
+async def test_telegram_messenger_bot_property_and_send_message_delegate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messenger = TelegramMessenger("token", bot_id="bot-a")
+
+    with pytest.raises(MessengerError, match="Messenger not started"):
+        _ = messenger.bot
+
+    not_started_result = await messenger.send_message(OutgoingMessage(text="hello", chat_id="7"))
+    assert not_started_result == SendResult(success=False, error="Messenger not started")
+
+    fake_bot = SimpleNamespace()
+    app_stub: Any = SimpleNamespace(bot=fake_bot)
+    messenger._app = app_stub
+    delegate = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+    monkeypatch.setattr("mai_gram.messenger.telegram.send_message_with_retry", delegate)
+
+    result = await messenger.send_message(OutgoingMessage(text="hello", chat_id="7"), max_retries=5)
+
+    assert messenger.bot is fake_bot
+    assert result == SendResult(success=True, message_id="42")
+    delegate.assert_awaited_once_with(fake_bot, ANY, max_retries=5, logger=ANY)
+
+
+@pytest.mark.asyncio
+async def test_telegram_messenger_edit_delete_typing_download_and_photo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    messenger = TelegramMessenger("token")
+
+    assert await messenger.edit_message("7", "9", "hi") == SendResult(
+        success=False,
+        error="Messenger not started",
+    )
+    assert await messenger.delete_message("7", "9") is False
+    await messenger.send_typing_indicator("7")
+    with pytest.raises(MessengerError, match="Messenger not started"):
+        await messenger.download_file("file-1")
+    assert await messenger.set_profile_photo(str(tmp_path / "missing.jpg")) is False
+
+    download_file = SimpleNamespace(download_as_bytearray=AsyncMock(return_value=bytearray(b"abc")))
+    bot = SimpleNamespace(
+        edit_message_text=AsyncMock(),
+        delete_message=AsyncMock(),
+        send_chat_action=AsyncMock(),
+        get_file=AsyncMock(return_value=download_file),
+        set_chat_photo=AsyncMock(),
+        id=99,
+    )
+    app_stub: Any = SimpleNamespace(bot=bot, updater=None)
+    messenger._app = app_stub
+    monkeypatch.setattr(
+        "mai_gram.messenger.telegram.get_parse_mode",
+        MagicMock(return_value="HTML"),
+    )
+    monkeypatch.setattr(
+        "mai_gram.messenger.telegram.build_reply_markup",
+        MagicMock(return_value="markup"),
+    )
+
+    assert await messenger.edit_message("7", "9", "hi", parse_mode="html") == SendResult(
+        success=True,
+        message_id="9",
+    )
+    assert await messenger.delete_message("7", "9") is True
+    await messenger.send_typing_indicator("7")
+    assert await messenger.download_file("file-1") == b"abc"
+
+    photo_path = tmp_path / "photo.jpg"
+    photo_path.write_bytes(b"image-bytes")
+    assert await messenger.set_profile_photo(str(photo_path)) is True
+
+    bot.edit_message_text.side_effect = TelegramError("edit failed")
+    bot.delete_message.side_effect = TelegramError("delete failed")
+    bot.send_chat_action.side_effect = TelegramError("typing failed")
+    bot.set_chat_photo.side_effect = TelegramError("photo failed")
+
+    failed_edit = await messenger.edit_message("7", "9", "bye")
+    failed_delete = await messenger.delete_message("7", "9")
+    await messenger.send_typing_indicator("7")
+    failed_photo = await messenger.set_profile_photo(str(photo_path))
+
+    assert failed_edit == SendResult(success=False, error="edit failed")
+    assert failed_delete is False
+    assert failed_photo is False
+    assert "Failed to send typing indicator" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_messenger_internal_handlers_and_callback_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    messenger = TelegramMessenger("token", bot_id="bot-a")
+    incoming = SimpleNamespace(message_type=MessageType.TEXT)
+    convert_mock = MagicMock(return_value=incoming)
+    monkeypatch.setattr("mai_gram.messenger.telegram.convert_update_to_message", convert_mock)
+
+    command_handler = AsyncMock()
+    document_handler = AsyncMock()
+    message_handler = AsyncMock()
+    callback_handler = AsyncMock()
+
+    wrapper = messenger._make_command_wrapper(command_handler)
+    messenger.register_document_handler(document_handler)
+    messenger.register_message_handler(message_handler)
+    messenger.register_callback_handler(callback_handler)
+
+    callback_query = SimpleNamespace(answer=AsyncMock(side_effect=RuntimeError("boom")))
+    update: Any = SimpleNamespace(callback_query=callback_query)
+
+    await wrapper(update, None)
+    await messenger._handle_document(update, None)
+    await messenger._handle_message(update, None)
+    await messenger._handle_callback_query(update, None)
+
+    command_handler.assert_awaited_once_with(incoming)
+    document_handler.assert_awaited_once_with(incoming)
+    message_handler.assert_awaited_once_with(incoming)
+    callback_handler.assert_awaited_once_with(incoming)
+    assert "Failed to answer callback query" in caplog.text
+
+    callback_query.answer = AsyncMock()
+    await answer_callback_query(update, text="ok")
+    callback_query.answer.assert_awaited_once_with(text="ok")
+
+    empty_update: Any = SimpleNamespace(callback_query=None)
+    await answer_callback_query(empty_update, text="noop")

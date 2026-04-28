@@ -33,7 +33,7 @@ The current codebase already has useful guardrails: Ruff, strict mypy, a pre-com
 - [ ] Move toward the `ai-proxy2` coverage posture.
   `ai-proxy2` enforces `95%` coverage with minimal omissions. `mai-gram` should not jump straight to `95%` while major modules are still monoliths, but it should first shrink the omit list, then raise `fail_under` in steps until it reaches `95%`.
 
-- [ ] Add a repository-owned pre-commit quality gate for maintainability, not only correctness.
+- [x] Add a repository-owned pre-commit quality gate for maintainability, not only correctness.
   Mirror the `ai-proxy2` pattern of using tracked hooks to enforce both static analysis and structural limits, so code size and coverage regressions are blocked before they accumulate.
 
 ## Refactoring Checklist
@@ -68,7 +68,7 @@ Run `make check`, `make precommit`, and verify the new size checker reports curr
 
 Status:
 
-The repository now has an explicit mypy policy and a tracked code-size audit wired into `make check` and the local pre-commit hook in report-only mode. Ruff rule expansion and coverage tightening remain follow-on work because they still require violation cleanup rather than a safe configuration-only change.
+The repository now has an explicit mypy policy and a tracked code-size audit wired into `make check` and the local pre-commit hook in report-only mode. Coverage tightening has restored `src/mai_gram/core/prompt_builder.py`, `src/mai_gram/debug/cost_tracker.py`, `src/mai_gram/mcp_servers/external.py`, `src/mai_gram/messenger/telegram.py`, `src/mai_gram/core/md_to_telegram.py`, `src/mai_gram/mcp_servers/bridge.py`, `src/mai_gram/messenger/console.py`, `src/mai_gram/config.py`, and `src/mai_gram/main.py` to the thresholded set. The follow-on test passes now lift `src/mai_gram/mcp_servers/bridge.py` and `src/mai_gram/messenger/console.py` to `100%` direct coverage and `src/mai_gram/main.py` to `95%` direct coverage, and the full `make precommit` gate remains green above the 90% floor. Ruff rule expansion and the remaining omit-list cleanup still require additional violation and coverage work rather than a safe configuration-only change.
 
 ### 2. Decompose `BotHandler` into transport-facing dispatch plus application services
 
@@ -375,6 +375,10 @@ This is the direct coverage alignment task. The important principle is that the 
 Validation:
 
 Track omit-list reduction and coverage-threshold increases in the same change sets as the service extractions that make them feasible.
+
+Status:
+
+Direct unit coverage now exercises `src/mai_gram/core/prompt_builder.py`, `src/mai_gram/mcp_servers/external.py`, `src/mai_gram/messenger/telegram.py`, and `src/mai_gram/debug/cost_tracker.py`, and those files have been removed from the coverage omit list. The current repository-wide coverage run holds at 91.13% after that reduction, so follow-on work can keep shrinking the remaining omissions in measured steps instead of treating these seams as permanently exempt.
 
 ## Recommended Order
 
