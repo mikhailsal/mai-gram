@@ -36,6 +36,7 @@ class AppRuntime:
     llm_provider: OpenRouterProvider | None = None
     external_mcp_pool: ExternalMCPPool | None = None
     config_watcher_task: asyncio.Task[None] | None = None
+    shutdown_task: asyncio.Task[None] | None = None
 
 
 def _is_process_alive(pid: int) -> bool:
@@ -243,6 +244,7 @@ async def shutdown(runtime: AppRuntime) -> None:
 
     await close_db()
     runtime.settings = None
+    runtime.shutdown_task = None
     _release_pid_lock()
     logger.info("Shutdown complete")
 
@@ -254,7 +256,8 @@ async def run() -> None:
 
     def signal_handler() -> None:
         logger.info("Received shutdown signal")
-        asyncio.create_task(shutdown(runtime))
+        if runtime.shutdown_task is None or runtime.shutdown_task.done():
+            runtime.shutdown_task = asyncio.create_task(shutdown(runtime))
 
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):

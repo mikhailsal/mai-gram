@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from mai_gram.core.importer import (
-    ImportError as ImportParseError,
+    ImportDataError as ImportParseError,
 )
 from mai_gram.core.importer import (
     extract_system_prompt,

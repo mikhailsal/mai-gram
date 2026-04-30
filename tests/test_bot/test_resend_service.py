@@ -19,6 +19,9 @@ def _make_service() -> tuple[ResendService, MagicMock, MagicMock]:
     messenger = MagicMock()
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
     messenger.delete_message = AsyncMock()
+    messenger.build_inline_keyboard.return_value = {
+        "inline_keyboard": [[{"text": "Regen", "callback_data": "regen"}]]
+    }
 
     renderer = MagicMock()
     renderer._send_response = AsyncMock(return_value=["resent-1", "resent-2"])
@@ -120,6 +123,7 @@ class TestResendService:
         assert result.replaced_previous is True
         assert result.sent_message_ids == ["resent-1", "resent-2"]
         assert messenger.delete_message.await_count == 2
+        messenger.build_inline_keyboard.assert_called_once()
         renderer._send_response.assert_awaited_once()
 
         saved_message = (

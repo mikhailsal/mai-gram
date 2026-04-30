@@ -31,7 +31,7 @@ __all__ = [
     "MessageRole",
     "OpenRouterProvider",
     "StreamChunk",
+    "TokenUsage",
     "ToolCall",
     "ToolDefinition",
-    "TokenUsage",
 ]

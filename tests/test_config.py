@@ -23,6 +23,10 @@ _SETTINGS_ENV_VARS = [
 ]
 
 
+def _fake_secret(label: str) -> str:
+    return f"test-{label}-value"
+
+
 class TestSettings:
     def test_default_values(self) -> None:
         clean_env = {k: v for k, v in os.environ.items() if k.upper() not in _SETTINGS_ENV_VARS}
@@ -42,17 +46,19 @@ class TestSettings:
         assert settings.tool_max_iterations == 5
 
     def test_override_via_constructor(self) -> None:
+        telegram_bot_token = _fake_secret("telegram-bot-token")
+        openrouter_api_key = _fake_secret("openrouter-api-key")
         settings = Settings(
-            telegram_bot_token="my-token",
-            openrouter_api_key="my-key",
+            telegram_bot_token=telegram_bot_token,
+            openrouter_api_key=openrouter_api_key,
             llm_model="anthropic/claude-3-opus",
             openrouter_base_url="http://localhost:8080/v1",
             log_level="DEBUG",
             debug=True,
             _env_file=None,  # type: ignore[call-arg]
         )
-        assert settings.telegram_bot_token == "my-token"
-        assert settings.openrouter_api_key == "my-key"
+        assert settings.telegram_bot_token == telegram_bot_token
+        assert settings.openrouter_api_key == openrouter_api_key
         assert settings.llm_model == "anthropic/claude-3-opus"
         assert settings.openrouter_base_url == "http://localhost:8080/v1"
         assert settings.log_level == "DEBUG"
@@ -63,14 +69,16 @@ class TestSettings:
         assert isinstance(settings, Settings)
 
     def test_get_all_bot_tokens(self) -> None:
+        telegram_bot_token = _fake_secret("telegram-bot-token-1")
+        telegram_bot_token_2 = _fake_secret("telegram-bot-token-2")
         settings = Settings(
-            telegram_bot_token="token1",
-            telegram_bot_token_2="token2",
+            telegram_bot_token=telegram_bot_token,
+            telegram_bot_token_2=telegram_bot_token_2,
             telegram_bot_token_3="",
             bots_config_path="/nonexistent/bots.toml",
             _env_file=None,  # type: ignore[call-arg]
         )
-        assert settings.get_all_bot_tokens() == ["token1", "token2"]
+        assert settings.get_all_bot_tokens() == [telegram_bot_token, telegram_bot_token_2]
 
     def test_get_all_bot_tokens_empty(self) -> None:
         settings = Settings(

@@ -144,6 +144,7 @@ class MessengerError(Exception):
 
 # Type alias for message handlers
 MessageHandler = Callable[[IncomingMessage], Coroutine[Any, Any, None]]
+InlineKeyboardSpec = list[list[tuple[str, str]]]
 
 
 class Messenger(ABC):
@@ -280,7 +281,7 @@ class Messenger(ABC):
             Async function that will be called for callback queries.
         """
 
-    def register_document_handler(self, handler: MessageHandler) -> None:  # noqa: B027
+    def register_document_handler(self, handler: MessageHandler) -> None:
         """Register a handler for incoming document uploads.
 
         Not all platforms support document uploads. The default is a no-op.
@@ -290,6 +291,17 @@ class Messenger(ABC):
         handler:
             Async function that will be called for document messages.
         """
+        del handler
+        return None
+
+    def build_inline_keyboard(self, buttons: InlineKeyboardSpec) -> Any:
+        """Build a transport-specific inline keyboard payload from button tuples."""
+        return {
+            "inline_keyboard": [
+                [{"text": text, "callback_data": callback_data} for text, callback_data in row]
+                for row in buttons
+            ]
+        }
 
     async def download_file(self, file_id: str) -> bytes:
         """Download a file by its platform-specific file ID.

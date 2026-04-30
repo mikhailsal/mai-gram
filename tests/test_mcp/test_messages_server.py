@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
@@ -56,7 +56,7 @@ class TestMessagesMCPServer:
             chat_id,
             "user",
             "I was in Paris",
-            timestamp=datetime(2026, 2, 14, 9, 30, 0),
+            timestamp=datetime(2026, 2, 14, 9, 30, 0, tzinfo=timezone.utc),
         )
         server = MessagesMCPServer(store, chat_id)
 
@@ -84,7 +84,7 @@ class TestMessagesMCPServer:
                 chat_id,
                 "user",
                 f"keyword-{i}",
-                timestamp=datetime(2026, 2, 14, 9, 0, i),
+                timestamp=datetime(2026, 2, 14, 9, 0, i, tzinfo=timezone.utc),
             )
         server = MessagesMCPServer(store, chat_id)
 
@@ -99,7 +99,7 @@ class TestMessagesMCPServer:
         """Verify oldest_first parameter works in MCP tool."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
-        base = datetime(2026, 2, 14, 9, 0, 0)
+        base = datetime(2026, 2, 14, 9, 0, 0, tzinfo=timezone.utc)
         await store.save_message(chat_id, "user", "keyword-old", timestamp=base)
         await store.save_message(
             chat_id, "user", "keyword-new", timestamp=base + timedelta(hours=1)
@@ -124,7 +124,7 @@ class TestGetMessageContext:
         """Verify get_message_context returns surrounding messages."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
-        base = datetime(2026, 2, 14, 9, 0, 0)
+        base = datetime(2026, 2, 14, 9, 0, 0, tzinfo=timezone.utc)
 
         messages = []
         for i in range(7):
@@ -164,7 +164,7 @@ class TestGetMessageContext:
         """Verify before/after are clamped to max 10."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
-        base = datetime(2026, 2, 14, 9, 0, 0)
+        base = datetime(2026, 2, 14, 9, 0, 0, tzinfo=timezone.utc)
 
         messages = []
         for i in range(25):
@@ -199,10 +199,16 @@ class TestGetMessagesByTimerange:
         chat_id = await _create_companion(session)
         store = MessageStore(session)
         await store.save_message(
-            chat_id, "user", "msg-day1", timestamp=datetime(2026, 2, 14, 10, 0)
+            chat_id,
+            "user",
+            "msg-day1",
+            timestamp=datetime(2026, 2, 14, 10, 0, tzinfo=timezone.utc),
         )
         await store.save_message(
-            chat_id, "user", "msg-day2", timestamp=datetime(2026, 2, 15, 10, 0)
+            chat_id,
+            "user",
+            "msg-day2",
+            timestamp=datetime(2026, 2, 15, 10, 0, tzinfo=timezone.utc),
         )
 
         server = MessagesMCPServer(store, chat_id)
@@ -217,10 +223,16 @@ class TestGetMessagesByTimerange:
         chat_id = await _create_companion(session)
         store = MessageStore(session)
         await store.save_message(
-            chat_id, "user", "msg-day1", timestamp=datetime(2026, 2, 14, 10, 0)
+            chat_id,
+            "user",
+            "msg-day1",
+            timestamp=datetime(2026, 2, 14, 10, 0, tzinfo=timezone.utc),
         )
         await store.save_message(
-            chat_id, "user", "msg-day2", timestamp=datetime(2026, 2, 15, 10, 0)
+            chat_id,
+            "user",
+            "msg-day2",
+            timestamp=datetime(2026, 2, 15, 10, 0, tzinfo=timezone.utc),
         )
 
         server = MessagesMCPServer(store, chat_id)
@@ -242,7 +254,7 @@ class TestGetMessagesByTimerange:
                 chat_id,
                 "user",
                 f"day{i + 10}",
-                timestamp=datetime(2026, 2, 10 + i, 10, 0),
+                timestamp=datetime(2026, 2, 10 + i, 10, 0, tzinfo=timezone.utc),
             )
 
         server = MessagesMCPServer(store, chat_id)
@@ -262,7 +274,7 @@ class TestGetMessagesByTimerange:
         """Verify pagination works correctly."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
-        base = datetime(2026, 2, 14, 10, 0, 0)
+        base = datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc)
         for i in range(15):
             await store.save_message(
                 chat_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
@@ -294,7 +306,7 @@ class TestGetMessagesByTimerange:
         """Verify oldest_first=false returns newest messages first."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
-        base = datetime(2026, 2, 14, 10, 0, 0)
+        base = datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc)
         for i in range(5):
             await store.save_message(
                 chat_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)
@@ -332,7 +344,7 @@ class TestGetMessagesByTimerange:
         """Verify limit is clamped to max 20."""
         chat_id = await _create_companion(session)
         store = MessageStore(session)
-        base = datetime(2026, 2, 14, 10, 0, 0)
+        base = datetime(2026, 2, 14, 10, 0, 0, tzinfo=timezone.utc)
         for i in range(30):
             await store.save_message(
                 chat_id, "user", f"msg-{i}", timestamp=base + timedelta(minutes=i)

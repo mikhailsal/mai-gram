@@ -11,9 +11,15 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from mai_gram.core.import_chat_service import (
+    ImportChatConflictError,
+    ImportedChatResult,
+    ParsedImportPayload,
+    create_chat_from_import,
+    parse_import_payload,
+)
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
-from mai_gram.memory.messages import MessageStore
 from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
 
 if TYPE_CHECKING:
@@ -52,23 +58,6 @@ class ImportDocument:
     file_id: str
     file_name: str
     file_size: int
-
-
-@dataclass(frozen=True)
-class ParsedImportDocument:
-    """Parsed import payload plus the extracted system prompt."""
-
-    messages_data: list[dict[str, object]]
-    system_prompt: str
-
-
-@dataclass(frozen=True)
-class SavedImportChat:
-    """Persisted import result needed for user feedback and replay."""
-
-    chat_id: str
-    imported_count: int
-    system_prompt: str
 
 
 class ImportWorkflow:
@@ -150,8 +139,6 @@ class ImportWorkflow:
         await self._show_import_model_selection(import_session)
 
     async def _show_import_model_selection(self, session: ImportSession) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
         session.state = ImportState.CHOOSING_MODEL
         keyboard_rows = []
         allowed_models = self._get_allowed_models()
@@ -161,7 +148,7 @@ class ImportWorkflow:
             label = f"{short_name} [default]" if model == default_model else short_name
             keyboard_rows.append([(label, f"import_model:{model}")])
 
-        kb = build_inline_keyboard(keyboard_rows)
+        kb = self._messenger.build_inline_keyboard(keyboard_rows)
 
         await self._messenger.send_message(
             OutgoingMessage(
@@ -292,7 +279,7 @@ class ImportWorkflow:
         self,
         message: IncomingMessage,
         document: ImportDocument,
-    ) -> ParsedImportDocument | None:
+    ) -> ParsedImportPayload | None:
         await self._send_import_outcome(
             message.chat_id,
             text=f"📄 Received: {document.file_name} ({document.file_size:,} bytes)\nParsing...",
@@ -308,11 +295,10 @@ class ImportWorkflow:
             )
             return None
 
-        from mai_gram.core.importer import ImportError as ImportParseError
-        from mai_gram.core.importer import extract_system_prompt, parse_import_json
+        from mai_gram.core.importer import ImportDataError as ImportParseError
 
         try:
-            messages_data = parse_import_json(file_data)
+            parsed_payload = parse_import_payload(file_data)
         except ImportParseError as exc:
             self.clear_import_session(message.user_id)
             await self._send_import_outcome(
@@ -321,7 +307,7 @@ class ImportWorkflow:
             )
             return None
 
-        if not messages_data:
+        if not parsed_payload.messages_data:
             self.clear_import_session(message.user_id)
             await self._send_import_outcome(
                 message.chat_id,
@@ -329,24 +315,28 @@ class ImportWorkflow:
             )
             return None
 
-        return ParsedImportDocument(
-            messages_data=messages_data,
-            system_prompt=extract_system_prompt(messages_data) or "You are a helpful assistant.",
-        )
+        return parsed_payload
 
     async def _save_imported_chat(
         self,
         *,
         message: IncomingMessage,
         import_session: ImportSession,
-        parsed_document: ParsedImportDocument,
-    ) -> SavedImportChat | None:
-        from mai_gram.core.importer import save_imported_messages
-
+        parsed_document: ParsedImportPayload,
+    ) -> ImportedChatResult | None:
         chat_id = self._resolve_chat_id(message)
         async with get_session() as db:
-            existing = await self._get_chat(db, chat_id)
-            if existing:
+            try:
+                saved_chat = await create_chat_from_import(
+                    db,
+                    chat_id=chat_id,
+                    user_id=message.user_id,
+                    bot_id=message.bot_id or "",
+                    llm_model=import_session.selected_model,
+                    timezone=self._settings.default_timezone,
+                    payload=parsed_document,
+                )
+            except ImportChatConflictError:
                 self.clear_import_session(message.user_id)
                 await self._send_import_outcome(
                     message.chat_id,
@@ -356,35 +346,9 @@ class ImportWorkflow:
                     ),
                 )
                 return None
-
-            chat = Chat(
-                id=chat_id,
-                user_id=message.user_id,
-                bot_id=message.bot_id or "",
-                llm_model=import_session.selected_model,
-                system_prompt=parsed_document.system_prompt,
-                prompt_name=None,
-                timezone=self._settings.default_timezone,
-                show_reasoning=True,
-                show_tool_calls=True,
-                send_datetime=False,
-            )
-            db.add(chat)
-            await db.flush()
-
-            message_store = MessageStore(db)
-            imported_count = await save_imported_messages(
-                chat_id,
-                parsed_document.messages_data,
-                message_store,
-            )
             await db.commit()
 
-        return SavedImportChat(
-            chat_id=chat_id,
-            imported_count=imported_count,
-            system_prompt=parsed_document.system_prompt,
-        )
+        return saved_chat
 
     async def _start_replay_task(self, tg_chat_id: str, chat_id: str) -> None:
         async with get_session() as db:

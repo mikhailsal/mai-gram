@@ -22,6 +22,8 @@ from mai_gram.console_cli import (
     resolve_user_id,
 )
 from mai_gram.console_output import print_debug_session_stats
+from mai_gram.core.chat_inspection_service import ChatInspectionService
+from mai_gram.core.import_chat_service import import_into_existing_chat, parse_import_payload
 from mai_gram.core.prompt_preview_service import PromptPreviewService
 from mai_gram.db import close_db, get_session, init_db, run_migrations
 from mai_gram.db.models import Chat, Message
@@ -35,8 +37,6 @@ from mai_gram.llm.provider import (
     StreamChunk,
     ToolDefinition,
 )
-from mai_gram.memory.knowledge_base import WikiStore
-from mai_gram.memory.messages import MessageStore
 from mai_gram.messenger.base import IncomingMessage, MessageType
 from mai_gram.messenger.console import ConsoleMessenger
 
@@ -154,12 +154,7 @@ async def _print_chat_list() -> None:
 
 async def _print_history(chat_id: str) -> None:
     async with get_session() as session:
-        result = await session.execute(
-            select(Message)
-            .where(Message.chat_id == chat_id)
-            .order_by(Message.timestamp.asc(), Message.id.asc())
-        )
-        messages = list(result.scalars().all())
+        messages = await ChatInspectionService().list_history(session, chat_id=chat_id)
     print(f"=== History: {chat_id} ===")
     if not messages:
         print("(no messages)")
@@ -170,24 +165,23 @@ async def _print_history(chat_id: str) -> None:
 
 async def _print_wiki(chat_id: str, data_dir: str) -> None:
     async with get_session() as session:
-        wiki_store = WikiStore(session, data_dir=data_dir)
-        report = await wiki_store.sync_from_disk(chat_id)
-        if report.total_changes > 0:
-            print(f"[sync] {report.summary()}")
+        inspection_service = ChatInspectionService(data_dir=data_dir)
+        result = await inspection_service.list_wiki(session, chat_id=chat_id)
+        if result.sync_report.total_changes > 0:
+            print(f"[sync] {result.sync_report.summary()}")
             await session.commit()
-        entries, _ = await wiki_store.list_entries_sorted(chat_id)
     print(f"=== Wiki: {chat_id} ===")
-    if not entries:
+    if not result.entries:
         print("(no wiki entries)")
         return
-    for entry in entries:
+    for entry in result.entries:
         print(f"- ({int(entry.importance)}) {entry.key}: {entry.value}")
 
 
 async def _repair_wiki(chat_id: str, data_dir: str) -> None:
     async with get_session() as session:
-        wiki_store = WikiStore(session, data_dir=data_dir)
-        report = await wiki_store.sync_from_disk(chat_id)
+        inspection_service = ChatInspectionService(data_dir=data_dir)
+        report = await inspection_service.repair_wiki(session, chat_id=chat_id)
         await session.commit()
     print(f"=== Wiki Repair: {chat_id} ===")
     if report.total_changes == 0:
@@ -258,8 +252,7 @@ async def _print_prompt(
 
 async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
     """Import a dialogue from a JSON file using the shared importer module."""
-    from mai_gram.core.importer import ImportError as ImportParseError
-    from mai_gram.core.importer import parse_import_json, save_imported_messages
+    from mai_gram.core.importer import ImportDataError as ImportParseError
 
     path = Path(json_path)
     if not path.exists():
@@ -271,25 +264,24 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
         raise SystemExit(f"Error: cannot read file: {exc}") from exc
 
     try:
-        messages_data = parse_import_json(file_data)
+        payload = parse_import_payload(file_data)
     except ImportParseError as exc:
         raise SystemExit(f"Error: {exc}") from exc
 
     async with get_session() as session:
-        result = await session.execute(select(Chat).where(Chat.id == chat_id))
-        chat = result.scalar_one_or_none()
-        if chat is None:
-            raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.")
-
-        message_store = MessageStore(session)
-        imported = await save_imported_messages(chat_id, messages_data, message_store)
-        if imported == 0:
+        try:
+            imported = await import_into_existing_chat(
+                session,
+                chat_id=chat_id,
+                payload=payload,
+            )
+        except LookupError as exc:
+            raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.") from exc
+        if imported.imported_count == 0:
             raise SystemExit("Error: no messages could be imported from the JSON file.")
-
-        chat.send_datetime = False
         await session.commit()
 
-    return imported
+    return imported.imported_count
 
 
 # -- Main --

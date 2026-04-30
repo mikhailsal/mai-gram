@@ -248,7 +248,7 @@ class SummaryStore:
     def _sort_key(self, summary_type: str, period: str) -> tuple[int, int, int]:
         if summary_type == "monthly":
             try:
-                dt = datetime.strptime(period, "%Y-%m")
+                dt = datetime.strptime(period, "%Y-%m").replace(tzinfo=timezone.utc)
                 return (dt.year, dt.month, 0)
             except ValueError:
                 return (9999, 99, 0)
@@ -261,7 +261,7 @@ class SummaryStore:
             except ValueError:
                 return (9999, 99, 0)
         try:
-            dt = datetime.strptime(period, "%Y-%m-%d")
+            dt = datetime.strptime(period, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             return (dt.year, dt.month, dt.day)
         except ValueError:
             return (9999, 99, 99)

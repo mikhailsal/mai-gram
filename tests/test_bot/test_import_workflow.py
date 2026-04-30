@@ -21,6 +21,9 @@ def _make_workflow() -> tuple[ImportWorkflow, MagicMock, MagicMock]:
     messenger = MagicMock()
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
     messenger.download_file = AsyncMock(return_value=b"[]")
+    messenger.build_inline_keyboard.return_value = {
+        "inline_keyboard": [[{"text": "Model", "callback_data": "import_model:test"}]]
+    }
 
     settings = MagicMock()
     settings.get_default_model.return_value = "openai/test-model"
@@ -129,7 +132,8 @@ class TestImportWorkflow:
         assert await_args is not None
         sent = cast("OutgoingMessage", await_args.args[0])
         assert "Import Mode" in sent.text
-        assert sent.keyboard is not None
+        assert sent.keyboard == messenger.build_inline_keyboard.return_value
+        messenger.build_inline_keyboard.assert_called_once()
 
     async def test_handle_import_callback_rejects_disallowed_model(self) -> None:
         workflow, messenger, _ = _make_workflow()

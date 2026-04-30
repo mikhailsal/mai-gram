@@ -322,7 +322,7 @@ class ResponseRenderer:
         raw_parts = split_html_safe(raw_text, max_len=max_first)
         if len(raw_parts) > 1:
             rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
-            raw_parts = [raw_parts[0]] + rest
+            raw_parts = [raw_parts[0], *rest]
 
         for index, raw_part in enumerate(raw_parts):
             is_last = index == len(raw_parts) - 1
@@ -396,7 +396,7 @@ class ResponseRenderer:
         raw_parts = split_html_safe(raw_text, max_len=max_first)
         if len(raw_parts) > 1:
             rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
-            raw_parts = [raw_parts[0]] + rest
+            raw_parts = [raw_parts[0], *rest]
 
         first_html = markdown_to_html(raw_parts[0])
         if header_html:

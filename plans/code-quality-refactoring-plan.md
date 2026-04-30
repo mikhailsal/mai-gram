@@ -24,7 +24,7 @@ The current codebase already has useful guardrails: Ruff, strict mypy, a pre-com
 - [x] Import `ai-proxy2` code-size limits into local quality gates.
   Apply a `500` line file limit and `60` line Python function limit, with explicit exclusions only for migrations or similarly generated code. Start in report-only mode if necessary, then make the check blocking once the first decomposition pass lands.
 
-- [ ] Expand Ruff to match the `ai-proxy2` backend rule categories.
+- [x] Expand Ruff to match the `ai-proxy2` backend rule categories.
   Add `C4`, `DTZ`, `T20`, `RUF`, `S`, and `PTH` to the existing selection set. Fix violations in production code first, then add narrow per-file ignores only when a rule is genuinely incompatible with the project.
 
 - [x] Make mypy strictness explicit instead of relying only on `strict = true`.
@@ -40,7 +40,7 @@ The current codebase already has useful guardrails: Ruff, strict mypy, a pre-com
 
 ### 1. Foundation: import the missing quality guardrails
 
-- [ ] Adopt the missing `ai-proxy2` static-analysis and maintainability gates.
+- [x] Adopt the missing `ai-proxy2` static-analysis and maintainability gates.
 
 Issue:
 
@@ -68,7 +68,7 @@ Run `make check`, `make precommit`, and verify the new size checker reports curr
 
 Status:
 
-The repository now has an explicit mypy policy and a tracked code-size audit wired into `make check` and the local pre-commit hook in report-only mode. Coverage tightening has restored `src/mai_gram/core/prompt_builder.py`, `src/mai_gram/debug/cost_tracker.py`, `src/mai_gram/mcp_servers/external.py`, `src/mai_gram/messenger/telegram.py`, `src/mai_gram/core/md_to_telegram.py`, `src/mai_gram/mcp_servers/bridge.py`, `src/mai_gram/messenger/console.py`, `src/mai_gram/config.py`, and `src/mai_gram/main.py` to the thresholded set. The follow-on test passes now lift `src/mai_gram/mcp_servers/bridge.py` and `src/mai_gram/messenger/console.py` to `100%` direct coverage and `src/mai_gram/main.py` to `95%` direct coverage, and the full `make precommit` gate remains green above the 90% floor. Ruff rule expansion and the remaining omit-list cleanup still require additional violation and coverage work rather than a safe configuration-only change.
+The repository now has an explicit mypy policy and a tracked code-size audit wired into `make check` and the local pre-commit hook in report-only mode. Coverage tightening has restored `src/mai_gram/core/prompt_builder.py`, `src/mai_gram/debug/cost_tracker.py`, `src/mai_gram/mcp_servers/external.py`, `src/mai_gram/messenger/telegram.py`, `src/mai_gram/core/md_to_telegram.py`, `src/mai_gram/mcp_servers/bridge.py`, `src/mai_gram/messenger/console.py`, `src/mai_gram/config.py`, and `src/mai_gram/main.py` to the thresholded set. The follow-on test passes now lift `src/mai_gram/mcp_servers/bridge.py` and `src/mai_gram/messenger/console.py` to `100%` direct coverage and `src/mai_gram/main.py` to `95%` direct coverage, and the full `make precommit` gate remains green above the 90% floor. Ruff expansion is now fully staged in `C4`, `PTH`, `DTZ`, `T20`, `RUF`, and `S`; the `T20` rollout uses narrow per-file ignores for the intentional CLI and startup entrypoints that are expected to print user-facing output, the `RUF` rollout cleaned up stale suppressions plus a small set of maintainability issues in production and tests, and the `S` rollout fixed the remaining production security-style findings while keeping tests green through targeted test rewrites instead of widening ignores. The full repository gate now passes with `ruff check .`, `ruff format --check .`, `mypy src/mai_gram`, the code-size audit, repository tests, and the functional CLI suite all green.
 
 ### 2. Decompose `BotHandler` into transport-facing dispatch plus application services
 
@@ -164,7 +164,8 @@ Run the CLI functional suite and targeted Telegram-facing tests after each extra
 
 Status:
 
-The CLI prompt-preview path now uses `src/mai_gram/core/prompt_preview_service.py`, which reuses the shared MCP manager factory instead of rebuilding prompt tool filtering inline, and `src/mai_gram/console_runner.py` now delegates parser/state handling plus debug-output formatting to `src/mai_gram/console_cli.py` and `src/mai_gram/console_output.py` with direct unit coverage. `console_runner.py` is no longer a file-size violation, though broader CLI and Telegram workflow convergence is still pending.
+The CLI prompt-preview path now uses `src/mai_gram/core/prompt_preview_service.py`, which reuses the shared MCP manager factory instead of rebuilding prompt tool filtering inline, and `src/mai_gram/console_runner.py` now delegates parser/state handling plus debug-output formatting to `src/mai_gram/console_cli.py` and `src/mai_gram/console_output.py` with direct unit coverage. The JSON import persistence path is now shared between `src/mai_gram/console_runner.py` and `src/mai_gram/bot/import_workflow.py` through `src/mai_gram/core/import_chat_service.py`, so CLI and Telegram imports no longer duplicate prompt extraction, chat creation, or imported-message persistence. `console_runner.py` is no longer a file-size violation, though broader CLI and Telegram workflow convergence is still pending.
+The CLI history and wiki inspection paths now also delegate their DB/wiki-store reads through `src/mai_gram/core/chat_inspection_service.py`, so adapter-owned inspection logic is narrower and future Telegram-facing inspection features can reuse the same application service.
 
 ### 5. Tighten the messenger boundary and stop leaking Telegram details into core logic
 
@@ -192,6 +193,10 @@ This task maps to the `ai-proxy2` preference for typed boundaries and low `Any` 
 Validation:
 
 Verify that the console adapter can exercise the same core services without Telegram-specific conditionals and that Telegram tests still cover callback and edit behavior.
+
+Status:
+
+Inline keyboard construction for setup, import, resend, conversation follow-up actions, and confirmation dialogs now goes through the messenger interface instead of importing Telegram helpers directly inside shared workflows. The Telegram adapter still provides the concrete markup, but transport-facing services now request UI objects from the messenger boundary rather than depending on `mai_gram.messenger.telegram`.
 
 ### 6. Split configuration loading into typed loaders and remove global singleton behavior from runtime code
 

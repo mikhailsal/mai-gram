@@ -184,7 +184,7 @@ class TestWikiSync:
         assert len(report.created) == 2
         assert "human_name" in report.created
         assert "favorite_color" in report.created
-        entries, total = await store.list_entries_sorted(chat.id)
+        _entries, total = await store.list_entries_sorted(chat.id)
         assert total == 2
 
     async def test_sync_removes_orphaned_db_rows(
@@ -197,7 +197,7 @@ class TestWikiSync:
         report = await store.sync_from_disk(chat.id)
 
         assert "old_fact" in report.db_rows_deleted
-        entries, total = await store.list_entries_sorted(chat.id)
+        _entries, total = await store.list_entries_sorted(chat.id)
         assert total == 0
 
     async def test_sync_updates_content_from_disk(

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -32,6 +32,13 @@ _LIVE_OUTPUT_PROVIDER_ERROR_RE = re.compile(
     r"(?:ai provider error|something went wrong with the ai provider|tap regenerate to retry)",
     re.IGNORECASE,
 )
+
+
+class _CliTimeoutError(Exception):
+    def __init__(self, stdout: bytes | None, stderr: bytes | None) -> None:
+        super().__init__("CLI command timed out")
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,16 +95,15 @@ class CliHarness:
                         merged_env[key] = value
 
             try:
-                completed = subprocess.run(
-                    command,
-                    cwd=self.root,
-                    env=merged_env,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
+                returncode, stdout, stderr = asyncio.run(
+                    _run_cli_command(
+                        command,
+                        cwd=self.root,
+                        env=merged_env,
+                        timeout=timeout,
+                    )
                 )
-            except subprocess.TimeoutExpired as exc:
+            except _CliTimeoutError as exc:
                 return CompletedCliRun(
                     command=command,
                     returncode=124,
@@ -108,9 +114,9 @@ class CliHarness:
 
             result = CompletedCliRun(
                 command=command,
-                returncode=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
                 root=self.root,
             )
             if not allow_retry or result.returncode == 0:
@@ -283,6 +289,30 @@ class CliHarness:
 
     def chat_wiki_dir(self, chat_id: str) -> Path:
         return self.chat_data_dir(chat_id) / "wiki"
+
+
+async def _run_cli_command(
+    command: tuple[str, ...],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+) -> tuple[int, str, str]:
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        cwd=str(cwd),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        process.kill()
+        stdout, stderr = await process.communicate()
+        raise _CliTimeoutError(stdout, stderr) from exc
+
+    return process.returncode or 0, _coerce_cli_text(stdout), _coerce_cli_text(stderr)
 
 
 def _retry_delay(output: str, transient_retries: int, deadline: float) -> float | None:

@@ -389,9 +389,7 @@ class ConversationExecutor:
         sent_msg_ids: list[str],
         error_text: str,
     ) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        error_keyboard = build_inline_keyboard([[("🔄 Regenerate", "regen")]])
+        error_keyboard = self._messenger.build_inline_keyboard([[("🔄 Regenerate", "regen")]])
         await self._renderer._deliver_error(
             request.telegram_chat_id,
             error_text,
@@ -407,12 +405,10 @@ class ConversationExecutor:
         outcome: _StreamOutcome,
         saved_msg_id: int,
     ) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
         keyboard_buttons = [
             [("🔄 Regenerate", "regen"), ("✂ Cut this & above", f"cut:{saved_msg_id}")]
         ]
-        action_keyboard = build_inline_keyboard(keyboard_buttons)
+        action_keyboard = self._messenger.build_inline_keyboard(keyboard_buttons)
         usage_footer = self._renderer._format_usage_footer(
             outcome.usage,
             outcome.cost,

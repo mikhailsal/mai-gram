@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
@@ -201,10 +201,10 @@ def _parse_optional_iso_date(value: Any) -> tuple[str | None, date | None]:
 def _build_time_range_query(arguments: dict[str, Any]) -> MessageTimeRangeQuery:
     raw_start_date = arguments.get("start_date")
     start_date = _parse_iso_date(raw_start_date, field_name="start_date")
-    assert isinstance(raw_start_date, str)
+    start_date_str = cast("str", raw_start_date)
     end_date_str, end_date = _parse_optional_iso_date(arguments.get("end_date"))
     return MessageTimeRangeQuery(
-        start_date_str=raw_start_date,
+        start_date_str=start_date_str,
         start_date=start_date,
         end_date_str=end_date_str,
         end_date=end_date,

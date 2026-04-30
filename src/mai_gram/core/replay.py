@@ -345,7 +345,7 @@ def _format_assistant_message(content: str, reasoning: str | None = None) -> lis
 
     if result and len(result[0]) > TELEGRAM_MAX_LENGTH:
         first = result[0]
-        result = [header.rstrip(), markdown_to_html(content_chunks[0])] + result[1:]
+        result = [header.rstrip(), markdown_to_html(content_chunks[0]), *result[1:]]
         if len(result[0]) > TELEGRAM_MAX_LENGTH:
             result[0] = result[0][:SAFE_MAX_LENGTH] + "..."
         logger.debug("First chunk was %d chars after HTML; split header from body", len(first))

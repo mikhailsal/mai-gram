@@ -114,7 +114,7 @@ class RegenerateService:
     @staticmethod
     def _get_trailing_assistant_chain(recent: list[Message]) -> list[Message]:
         trailing: list[Message] = []
-        for message in reversed(sorted(recent, key=lambda item: item.id)):
+        for message in sorted(recent, key=lambda item: item.id, reverse=True):
             if message.role in ("assistant", "tool"):
                 trailing.append(message)
             else:

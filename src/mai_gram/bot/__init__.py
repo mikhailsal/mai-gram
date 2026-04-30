@@ -11,7 +11,7 @@ from mai_gram.bot.middleware import (
 __all__ = [
     "BotHandler",
     "MessageLogger",
-    "RateLimiter",
     "RateLimitConfig",
+    "RateLimiter",
     "RequestContext",
 ]

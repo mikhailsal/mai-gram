@@ -135,8 +135,6 @@ class SetupWorkflow:
         return all_prompts
 
     async def _show_model_selection(self, session: SetupSession) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
         session.state = SetupState.CHOOSING_MODEL
         keyboard_rows = []
         allowed_models = self._get_allowed_models_for_bot()
@@ -150,13 +148,11 @@ class SetupWorkflow:
             OutgoingMessage(
                 text="Choose an LLM model:",
                 chat_id=session.chat_id,
-                keyboard=build_inline_keyboard(keyboard_rows),
+                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
             )
         )
 
     async def _show_prompt_selection(self, session: SetupSession) -> None:
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
         session.state = SetupState.CHOOSING_PROMPT
         keyboard_rows = []
         for name in self._get_available_prompts_for_bot():
@@ -168,7 +164,7 @@ class SetupWorkflow:
             OutgoingMessage(
                 text=f"Model: {session.selected_model}\n\nNow choose a system prompt:",
                 chat_id=session.chat_id,
-                keyboard=build_inline_keyboard(keyboard_rows),
+                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
             )
         )
 

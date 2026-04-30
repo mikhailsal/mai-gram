@@ -429,9 +429,7 @@ class BotHandler:
         cancel_data: str,
     ) -> None:
         """Send a confirmation dialog with Yes/Cancel buttons."""
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
-        kb = build_inline_keyboard(
+        kb = self._messenger.build_inline_keyboard(
             [
                 [("Yes", confirm_data), ("Cancel", cancel_data)],
             ]

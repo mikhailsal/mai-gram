@@ -9,7 +9,7 @@ Defines all database tables:
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003 — needed at runtime for SQLAlchemy Mapped[datetime]
+from datetime import datetime
 
 from sqlalchemy import (
     Boolean,

@@ -8,12 +8,14 @@ keyboard building, and bot lifecycle management.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
 from mai_gram.messenger.base import (
+    InlineKeyboardSpec,
     MessageHandler,
     Messenger,
     MessengerError,
@@ -115,8 +117,10 @@ class TelegramMessenger(Messenger):
         await register_bot_commands(self._app, self._command_descriptions, logger=logger)
 
         # Start polling in the background
-        assert self._app.updater is not None
-        await self._app.updater.start_polling(drop_pending_updates=True)
+        updater = self._app.updater
+        if updater is None:
+            raise MessengerError("Telegram application is missing an updater")
+        await updater.start_polling(drop_pending_updates=True)
 
         logger.info("Telegram messenger started successfully")
 
@@ -231,6 +235,10 @@ class TelegramMessenger(Messenger):
         """Register a handler for incoming document uploads."""
         self._document_handlers.append(handler)
 
+    def build_inline_keyboard(self, buttons: InlineKeyboardSpec) -> Any:
+        """Build Telegram inline keyboard markup for shared workflows."""
+        return build_inline_keyboard(buttons)
+
     async def download_file(self, file_id: str) -> bytes:
         """Download a file from Telegram servers by file_id."""
         if self._app is None:
@@ -246,7 +254,7 @@ class TelegramMessenger(Messenger):
             return False
 
         try:
-            with open(photo_path, "rb") as photo:
+            with Path(photo_path).open("rb") as photo:
                 await self._app.bot.set_chat_photo(
                     chat_id=self._app.bot.id,
                     photo=photo,

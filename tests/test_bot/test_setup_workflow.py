@@ -16,6 +16,10 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
+def _fake_secret(label: str) -> str:
+    return f"test-{label}-value"
+
+
 def _make_workflow(
     *,
     settings: MagicMock | None = None,
@@ -23,6 +27,9 @@ def _make_workflow(
 ) -> SetupWorkflow:
     messenger = MagicMock()
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+    messenger.build_inline_keyboard.return_value = {
+        "inline_keyboard": [[{"text": "One", "callback_data": "model:test"}]]
+    }
 
     workflow_settings = settings if settings is not None else MagicMock()
     if settings is None:
@@ -120,7 +127,8 @@ class TestHandleStart:
 
         sent_msg = _last_sent_message(workflow)
         assert sent_msg.text == "Choose an LLM model:"
-        assert sent_msg.keyboard is not None
+        assert sent_msg.keyboard == workflow._messenger.build_inline_keyboard.return_value
+        workflow._messenger.build_inline_keyboard.assert_called_once()
 
 
 class TestSetupCallbacks:
@@ -170,7 +178,12 @@ class TestSetupCallbacks:
         assert "Now choose a system prompt:" in sent_msg.text
 
     async def test_custom_prompt_is_blocked_when_bot_restricts_prompts(self) -> None:
-        workflow = _make_workflow(bot_config=BotConfig(token="token", allowed_prompts=["default"]))
+        workflow = _make_workflow(
+            bot_config=BotConfig(
+                token=_fake_secret("bot-token"),
+                allowed_prompts=["default"],
+            )
+        )
         workflow._sessions["test-user"] = SetupSession(
             user_id="test-user",
             chat_id="tg-chat",

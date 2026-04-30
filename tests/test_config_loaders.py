@@ -7,6 +7,10 @@ import json
 from mai_gram.config_loaders import BotsConfigLoader, ModelsConfigLoader, PromptConfigLoader
 
 
+def _fake_secret(label: str) -> str:
+    return f"test-{label}-value"
+
+
 class TestModelsConfigLoader:
     def test_reads_tools_and_external_mcp_config(self, tmp_path) -> None:
         mcp_path = tmp_path / "mcp.json"
@@ -65,12 +69,18 @@ class TestBotsConfigLoader:
             encoding="utf-8",
         )
 
+        token = _fake_secret("bot-token-1")
+        bots_path.write_text(
+            bots_path.read_text(encoding="utf-8").replace("token-1", token),
+            encoding="utf-8",
+        )
+
         loader = BotsConfigLoader(str(bots_path))
         configs = loader.get_bot_configs()
 
         assert len(configs) == 1
-        assert configs[0].token == "token-1"
-        assert loader.get_bot_config_by_token("token-1") == configs[0]
+        assert configs[0].token == token
+        assert loader.get_bot_config_by_token(token) == configs[0]
         assert loader.get_bot_config_by_token("missing") is None
 
 

@@ -418,7 +418,7 @@ class TestConversationExecutor:
         assert sent_msg_ids == ["overflow-id", "placeholder-1"]
 
     async def test_finalize_response_appends_usage_footer_without_placeholder(self) -> None:
-        executor, _, renderer = _make_executor()
+        executor, messenger, renderer = _make_executor()
         request = _make_request(show_reasoning=False)
         outcome = _StreamOutcome(
             response_text="Final answer",
@@ -440,8 +440,9 @@ class TestConversationExecutor:
             response_text="Final answer\n\n1/2 tokens",
             response_reasoning=None,
             show_reasoning=False,
-            keyboard=renderer._send_response.await_args.kwargs["keyboard"],
+            keyboard=messenger.build_inline_keyboard.return_value,
         )
+        messenger.build_inline_keyboard.assert_called_once()
         assert sent_msg_ids == ["final-id"]
 
     def test_helper_formatters_cover_tool_and_render_paths(self) -> None:

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ImportError(Exception):  # noqa: A001
+class ImportDataError(Exception):
     """Raised when import data cannot be parsed or validated."""
 
 
@@ -138,11 +138,11 @@ def _extract_messages_from_proxy_request(data: dict[str, Any]) -> list[dict[str,
     """
     request_body = data.get("request_body") or data.get("client_request_body")
     if not isinstance(request_body, dict):
-        raise ImportError("Proxy request JSON has no request_body.")
+        raise ImportDataError("Proxy request JSON has no request_body.")
 
     messages = request_body.get("messages")
     if not isinstance(messages, list):
-        raise ImportError("Proxy request_body has no messages array.")
+        raise ImportDataError("Proxy request_body has no messages array.")
 
     result = list(messages)
 
@@ -171,23 +171,23 @@ def parse_import_json(data: str | bytes) -> list[dict[str, Any]]:
     2. AI Proxy v2 request JSON (object with request_body.messages)
 
     Returns the normalized list of message dicts.
-    Raises ImportError on parsing failures.
+    Raises ImportDataError on parsing failures.
     """
     try:
         parsed = json.loads(data)
     except json.JSONDecodeError as exc:
-        raise ImportError(f"Invalid JSON: {exc}") from exc
+        raise ImportDataError(f"Invalid JSON: {exc}") from exc
 
     if isinstance(parsed, dict):
         if "request_body" in parsed or "client_request_body" in parsed:
             return _extract_messages_from_proxy_request(parsed)
-        raise ImportError(
+        raise ImportDataError(
             "JSON object does not look like a proxy request. "
             "Expected a JSON array or an object with request_body."
         )
 
     if not isinstance(parsed, list):
-        raise ImportError("Expected a JSON array of message objects.")
+        raise ImportDataError("Expected a JSON array of message objects.")
 
     return parsed
 

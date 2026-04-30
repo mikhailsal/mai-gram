@@ -123,7 +123,7 @@ def test_message_to_chat_message_covers_datetime_tool_and_tool_call_parsing(
     builder._chat_timezone = "Bad/Timezone"
 
     dated_message = _make_message(1, "user", "hello", show_datetime=True)
-    dated_message.timestamp = datetime(2024, 1, 2, 3, 4)
+    dated_message.timestamp = datetime(2024, 1, 2, 3, 4, tzinfo=timezone.utc)
     user_chat_message = builder._message_to_chat_message(dated_message)
 
     tool_chat_message = builder._message_to_chat_message(

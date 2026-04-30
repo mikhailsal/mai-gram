@@ -1,6 +1,6 @@
 """Tests for the OpenRouter LLM provider.
 
-All tests use mocked HTTP responses – no real API calls are made.
+All tests use mocked HTTP responses - no real API calls are made.
 """
 
 from __future__ import annotations
@@ -520,7 +520,7 @@ class TestRetryLogic:
         with pytest.raises(LLMAuthenticationError):
             await provider.generate(sample_messages)
 
-        # Should have been called only once – no retry
+        # Should have been called only once - no retry
         assert call_count == 1
         await provider.close()
 

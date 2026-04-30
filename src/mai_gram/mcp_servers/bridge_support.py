@@ -314,7 +314,7 @@ def reassemble_tool_calls_from_deltas(
                 by_index[idx] = {"id": "", "name": "", "arguments": ""}
 
             entry = by_index[idx]
-            if "id" in item and item["id"]:
+            if item.get("id"):
                 entry["id"] = item["id"]
             func = item.get("function") or {}
             if func.get("name"):

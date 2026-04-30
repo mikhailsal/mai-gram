@@ -74,11 +74,9 @@ class ResendService:
         for old_id in previous_response_ids:
             await self._messenger.delete_message(tg_chat_id, old_id)
 
-        from mai_gram.messenger.telegram import build_inline_keyboard
-
         kb_buttons = [[("🔄 Regenerate", "regen")]]
         kb_buttons[0].append(("✂ Cut this & above", f"cut:{last_msg.id}"))
-        action_kb = build_inline_keyboard(kb_buttons)
+        action_kb = self._messenger.build_inline_keyboard(kb_buttons)
 
         reasoning = last_msg.reasoning if last_msg.reasoning else None
         sent_ids = await self._renderer._send_response(

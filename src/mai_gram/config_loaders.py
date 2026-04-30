@@ -61,7 +61,7 @@ class ModelsConfigLoader:
             return {}
 
         if mtime != self._mtime:
-            with open(config_path, "rb") as f:
+            with config_path.open("rb") as f:
                 self._cache = tomllib.load(f)
             self._mtime = mtime
             logger.info("Config reloaded: %s (mtime=%.3f)", config_path, mtime)
@@ -101,7 +101,7 @@ class ModelsConfigLoader:
         if not json_path.exists():
             return {}
 
-        with open(json_path, encoding="utf-8") as f:
+        with json_path.open(encoding="utf-8") as f:
             mcp_data = _json.load(f)
 
         servers_raw = mcp_data.get("mcpServers", {})
@@ -131,7 +131,7 @@ class BotsConfigLoader:
             return []
 
         if mtime != self._mtime or self._cache is None:
-            with open(config_path, "rb") as f:
+            with config_path.open("rb") as f:
                 data = tomllib.load(f)
             self._mtime = mtime
 
@@ -187,7 +187,7 @@ class PromptConfigLoader:
         if not config_path.exists():
             return PromptConfig()
         try:
-            with open(config_path, "rb") as f:
+            with config_path.open("rb") as f:
                 data = tomllib.load(f)
 
             tools = data.get("tools", {})

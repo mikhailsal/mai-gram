@@ -6,6 +6,7 @@ import asyncio
 import re
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from telegram import (
@@ -256,7 +257,8 @@ def is_flood_control_error(error_text: str) -> bool:
 
 def _convert_callback_query(update: Update, *, bot_id: str) -> IncomingMessage:
     query = update.callback_query
-    assert query is not None
+    if query is None:
+        raise ValueError("Callback query update is missing callback_query")
     return IncomingMessage(
         platform="telegram",
         chat_id=str(query.message.chat_id) if query.message else "",  # type: ignore[attr-defined]
@@ -307,7 +309,7 @@ async def _send_once(
     reply_to_message_id: int | None,
 ) -> int:
     if message.photo_path:
-        with open(message.photo_path, "rb") as photo:
+        with Path(message.photo_path).open("rb") as photo:
             sent = await bot.send_photo(
                 chat_id=int(message.chat_id),
                 photo=photo,

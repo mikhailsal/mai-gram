@@ -27,6 +27,10 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 _DEFAULT_MAX_XDIST_WORKERS = 6
 
 
+def _fake_secret(label: str) -> str:
+    return f"test-{label}-value"
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Add project-specific pytest CLI options."""
     parser.addoption(
@@ -83,8 +87,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def settings() -> Settings:
     """Return a Settings instance configured for testing."""
     return Settings(
-        telegram_bot_token="test-token-123",
-        openrouter_api_key="test-api-key-456",
+        telegram_bot_token=_fake_secret("telegram-bot-token"),
+        openrouter_api_key=_fake_secret("openrouter-api-key"),
         database_url=TEST_DATABASE_URL,
         log_level="DEBUG",
         debug=True,

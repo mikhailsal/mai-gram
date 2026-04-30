@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
 from typing import TYPE_CHECKING
 
+from tests.functional.helpers import cli as cli_helpers
 from tests.functional.helpers.cli import CliHarness, CompletedCliRun
 
 if TYPE_CHECKING:
@@ -27,15 +27,10 @@ def _build_harness(root: Path) -> CliHarness:
 def test_run_cli_decodes_timeout_output(monkeypatch, tmp_path) -> None:
     harness = _build_harness(tmp_path)
 
-    def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(
-            cmd=("mai-chat", "hello"),
-            timeout=kwargs["timeout"],
-            output=b"partial stdout",
-            stderr=b"partial stderr",
-        )
+    async def fake_run_cli_command(*args, **kwargs):
+        raise cli_helpers._CliTimeoutError(b"partial stdout", b"partial stderr")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_helpers, "_run_cli_command", fake_run_cli_command)
 
     result = harness.run_cli("hello", timeout=12, allow_retry=False)
 

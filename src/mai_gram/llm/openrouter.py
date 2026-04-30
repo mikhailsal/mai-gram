@@ -212,7 +212,7 @@ class OpenRouterProvider(LLMProvider):
         total_chars = 0
         for msg in messages:
             # ~4 tokens of overhead per message (role, delimiters)
-            total_chars += 16  # 4 tokens × 4 chars/token
+            total_chars += 16  # 4 tokens x 4 chars/token
             total_chars += len(msg.content)
         return total_chars // 4
 
@@ -465,8 +465,8 @@ class OpenRouterProvider(LLMProvider):
             try:
                 if response.text:
                     msg = response.text[:500]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read error response body text", exc_info=exc)
 
         if status == 401:
             raise LLMAuthenticationError(f"Authentication failed: {msg}")

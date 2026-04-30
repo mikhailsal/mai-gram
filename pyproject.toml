@@ -39,7 +39,17 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH"]
+select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH", "C4", "PTH", "DTZ", "T20", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/check_code_limits.py" = ["T201"]
+"src/mai_gram/db/models.py" = ["TC003"]
+"src/mai_gram/console_output.py" = ["T201"]
+"src/mai_gram/console_runner.py" = ["T201"]
+"src/mai_gram/main.py" = ["T201"]
+"src/mai_gram/messenger/console.py" = ["T201"]
+"tests/functional/conftest.py" = ["T201"]
+"tests/**/*.py" = ["S101"]
 
 [tool.pytest.ini_options]
 addopts = "--dist worksteal -n auto"
