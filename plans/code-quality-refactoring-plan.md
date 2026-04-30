@@ -196,7 +196,7 @@ Verify that the console adapter can exercise the same core services without Tele
 
 Status:
 
-Inline keyboard construction for setup, import, resend, conversation follow-up actions, and confirmation dialogs now goes through the messenger interface instead of importing Telegram helpers directly inside shared workflows. The Telegram adapter still provides the concrete markup, but transport-facing services now request UI objects from the messenger boundary rather than depending on `mai_gram.messenger.telegram`.
+Inline keyboard construction for setup, import, resend, conversation follow-up actions, and confirmation dialogs now goes through the messenger interface instead of importing Telegram helpers directly inside shared workflows. The Telegram adapter still provides the concrete markup, but transport-facing services now request UI objects from the messenger boundary rather than depending on `mai_gram.messenger.telegram`. The latest callback-boundary pass also moved callback-origin message lookup and deletion behind new messenger helpers, so `BotHandler` and `CallbackRouter` no longer reach through `IncomingMessage.raw.callback_query.message` directly when deleting confirmation prompts or caching the original callback message body for cut-above confirmation flows. Further transport-neutral callback and follow-up operations are still pending.
 
 ### 6. Split configuration loading into typed loaders and remove global singleton behavior from runtime code
 

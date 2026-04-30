@@ -12,7 +12,14 @@ from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRem
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
 
-from mai_gram.messenger.base import MessageType, MessengerError, OutgoingMessage, SendResult
+from mai_gram.messenger.base import (
+    CallbackSourceMessage,
+    IncomingMessage,
+    MessageType,
+    MessengerError,
+    OutgoingMessage,
+    SendResult,
+)
 from mai_gram.messenger.telegram import TelegramMessenger, answer_callback_query
 from mai_gram.messenger.telegram_support import (
     build_inline_keyboard,
@@ -468,3 +475,40 @@ async def test_telegram_messenger_internal_handlers_and_callback_helper(
 
     empty_update: Any = SimpleNamespace(callback_query=None)
     await answer_callback_query(empty_update, text="noop")
+
+
+def test_get_callback_source_message_prefers_html_snapshot() -> None:
+    messenger = TelegramMessenger("token")
+    callback_message = SimpleNamespace(message_id=77, text_html="<b>Hello</b>", text="Hello")
+    incoming = IncomingMessage(
+        platform="telegram",
+        chat_id="42",
+        user_id="7",
+        message_id="cb-1",
+        message_type=MessageType.CALLBACK,
+        raw=SimpleNamespace(callback_query=SimpleNamespace(message=callback_message)),
+    )
+
+    result = messenger.get_callback_source_message(incoming)
+
+    assert result == CallbackSourceMessage(message_id="77", text="<b>Hello</b>", parse_mode="html")
+
+
+@pytest.mark.asyncio
+async def test_delete_callback_source_message_deletes_origin_message() -> None:
+    messenger = TelegramMessenger("token")
+    messenger.delete_message = AsyncMock(return_value=True)
+    callback_message = SimpleNamespace(message_id=88, text_html=None, text="Hello")
+    incoming = IncomingMessage(
+        platform="telegram",
+        chat_id="42",
+        user_id="7",
+        message_id="cb-1",
+        message_type=MessageType.CALLBACK,
+        raw=SimpleNamespace(callback_query=SimpleNamespace(message=callback_message)),
+    )
+
+    result = await messenger.delete_callback_source_message(incoming)
+
+    assert result is True
+    messenger.delete_message.assert_awaited_once_with("42", "88")

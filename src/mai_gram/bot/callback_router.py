@@ -33,7 +33,6 @@ class CallbackRouter:
         history_actions: HistoryActions,
         regenerate_service: RegenerateService,
         show_confirmation: Callable[..., Awaitable[None]],
-        delete_callback_message: Callable[[IncomingMessage], Awaitable[None]],
         cut_original_html: dict[str, tuple[str, str | None]],
         response_message_ids: dict[str, list[str]],
     ) -> None:
@@ -44,7 +43,6 @@ class CallbackRouter:
         self._history_actions = history_actions
         self._regenerate_service = regenerate_service
         self._show_confirmation = show_confirmation
-        self._delete_callback_message = delete_callback_message
         self._cut_original_html = cut_original_html
         self._response_message_ids = response_message_ids
 
@@ -105,12 +103,12 @@ class CallbackRouter:
             await self._confirm_reset(message, data)
             return True
         if data == "cancel_action":
-            await self._delete_callback_message(message)
+            await self._messenger.delete_callback_source_message(message)
             return True
         return False
 
     async def _confirm_regenerate(self, message: IncomingMessage) -> None:
-        await self._delete_callback_message(message)
+        await self._messenger.delete_callback_source_message(message)
         sent_ids = await self._regenerate_service.handle_regenerate(
             message,
             previous_response_ids=self._response_message_ids.get(message.chat_id, []),
@@ -121,7 +119,7 @@ class CallbackRouter:
         parts = data.split(":", 2)
         cut_msg_id_str = parts[1]
         original_tg_msg_id = parts[2] if len(parts) > 2 else ""
-        await self._delete_callback_message(message)
+        await self._messenger.delete_callback_source_message(message)
         cached_original = None
         if original_tg_msg_id:
             cache_key = f"{message.chat_id}:{original_tg_msg_id}"
@@ -135,7 +133,7 @@ class CallbackRouter:
 
     async def _confirm_reset(self, message: IncomingMessage, data: str) -> None:
         chat_id = data.split(":", 1)[1]
-        await self._delete_callback_message(message)
+        await self._messenger.delete_callback_source_message(message)
         await self._reset_workflow.execute_reset(message, chat_id)
 
     async def _handle_cut_confirmation(self, message: IncomingMessage, data: str) -> None:
@@ -148,16 +146,14 @@ class CallbackRouter:
             confirm_text += f'\n\nMessage: "{preview}"'
 
         tg_msg_id = ""
-        if message.raw and hasattr(message.raw, "callback_query"):
-            callback_message = message.raw.callback_query.message
-            if callback_message:
-                tg_msg_id = str(callback_message.message_id)
-                original_html = getattr(callback_message, "text_html", None)
-                original_parse = "html" if original_html else None
-                if original_html is None:
-                    original_html = callback_message.text or ""
-                cache_key = f"{message.chat_id}:{tg_msg_id}"
-                self._cut_original_html[cache_key] = (original_html, original_parse)
+        source_message = self._messenger.get_callback_source_message(message)
+        if source_message is not None:
+            tg_msg_id = source_message.message_id
+            cache_key = f"{message.chat_id}:{tg_msg_id}"
+            self._cut_original_html[cache_key] = (
+                source_message.text,
+                source_message.parse_mode,
+            )
 
         await self._show_confirmation(
             message,

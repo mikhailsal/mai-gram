@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 from mai_gram.bot.callback_router import CallbackRouter
-from mai_gram.messenger.base import IncomingMessage, MessageType, SendResult
+from mai_gram.messenger.base import CallbackSourceMessage, IncomingMessage, MessageType, SendResult
 
 
 def _make_message(
@@ -53,9 +52,11 @@ def _make_router() -> tuple[
     regenerate_service.handle_regenerate = AsyncMock(return_value=["new-msg"])
 
     show_confirmation = AsyncMock()
-    delete_callback_message = AsyncMock()
     cut_original_html: dict[str, tuple[str, str | None]] = {}
     response_message_ids: dict[str, list[str]] = {"tg-chat": ["old-msg"]}
+
+    messenger.get_callback_source_message.return_value = None
+    messenger.delete_callback_source_message = AsyncMock(return_value=True)
 
     router = CallbackRouter(
         messenger,
@@ -65,7 +66,6 @@ def _make_router() -> tuple[
         history_actions=history_actions,
         regenerate_service=regenerate_service,
         show_confirmation=show_confirmation,
-        delete_callback_message=delete_callback_message,
         cut_original_html=cut_original_html,
         response_message_ids=response_message_ids,
     )
@@ -96,13 +96,13 @@ class TestCallbackRouter:
 
     async def test_cut_callback_caches_original_message_and_confirms(self) -> None:
         router, _, cut_original_html = _make_router()
-        raw = SimpleNamespace(
-            callback_query=SimpleNamespace(
-                message=SimpleNamespace(message_id=77, text_html=None, text="Original text")
-            )
+        router._messenger.get_callback_source_message.return_value = CallbackSourceMessage(
+            message_id="77",
+            text="Original text",
+            parse_mode=None,
         )
 
-        await router.handle_callback(_make_message("cut:12", raw=raw))
+        await router.handle_callback(_make_message("cut:12"))
 
         assert cut_original_html["tg-chat:77"] == ("Original text", None)
         show_confirmation = cast("AsyncMock", router._show_confirmation)
@@ -115,7 +115,7 @@ class TestCallbackRouter:
 
         await router.handle_callback(_make_message("confirm_regen"))
 
-        cast("AsyncMock", router._delete_callback_message).assert_awaited_once()
+        cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
         cast("AsyncMock", router._regenerate_service.handle_regenerate).assert_awaited_once()
         assert response_message_ids["tg-chat"] == ["new-msg"]
 
@@ -125,7 +125,7 @@ class TestCallbackRouter:
 
         await router.handle_callback(_make_message("confirm_cut:12:77"))
 
-        cast("AsyncMock", router._delete_callback_message).assert_awaited_once()
+        cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
         history_actions = cast("AsyncMock", router._history_actions.handle_cut_above)
         await_args = history_actions.await_args
         assert await_args is not None
@@ -137,7 +137,7 @@ class TestCallbackRouter:
 
         await router.handle_callback(_make_message("confirm_reset:test-user@test-bot"))
 
-        cast("AsyncMock", router._delete_callback_message).assert_awaited_once()
+        cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
         reset_workflow = cast("AsyncMock", router._reset_workflow.execute_reset)
         await_args = reset_workflow.await_args
         assert await_args is not None

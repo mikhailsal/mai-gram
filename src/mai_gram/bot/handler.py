@@ -126,7 +126,6 @@ class BotHandler:
             resolve_chat_id=self._chat_id_for,
             clear_setup_session=self.clear_setup_session,
             show_confirmation=self._show_confirmation,
-            delete_callback_message=self._delete_callback_message,
             cut_original_html=self._cut_original_html,
             response_message_ids=self._response_message_ids,
             memory_data_dir=self._memory_data_dir,
@@ -441,13 +440,6 @@ class BotHandler:
     async def _get_message_preview(self, db_message_id: int, max_len: int = 80) -> str:
         """Fetch a truncated preview of a stored message by its DB id."""
         return await self._history_actions.get_message_preview(db_message_id, max_len=max_len)
-
-    async def _delete_callback_message(self, message: IncomingMessage) -> None:
-        """Delete the message that contained the callback button."""
-        if message.raw and hasattr(message.raw, "callback_query"):
-            cb_msg = message.raw.callback_query.message
-            if cb_msg:
-                await self._messenger.delete_message(message.chat_id, str(cb_msg.message_id))
 
     async def _handle_cut_above(
         self,

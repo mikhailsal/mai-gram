@@ -85,7 +85,6 @@ def build_handler_services(
     resolve_chat_id: Callable[[IncomingMessage], str],
     clear_setup_session: Callable[[str], None],
     show_confirmation: Callable[..., Awaitable[None]],
-    delete_callback_message: Callable[[IncomingMessage], Awaitable[None]],
     cut_original_html: dict[str, tuple[str, str | None]],
     response_message_ids: dict[str, list[str]],
     memory_data_dir: str,
@@ -116,7 +115,6 @@ def build_handler_services(
         resolve_chat_id=resolve_chat_id,
         clear_setup_session=clear_setup_session,
         show_confirmation=show_confirmation,
-        delete_callback_message=delete_callback_message,
         cut_original_html=cut_original_html,
         response_message_ids=response_message_ids,
         memory_data_dir=memory_data_dir,
@@ -185,7 +183,6 @@ def _build_workflow_services(
     resolve_chat_id: Callable[[IncomingMessage], str],
     clear_setup_session: Callable[[str], None],
     show_confirmation: Callable[..., Awaitable[None]],
-    delete_callback_message: Callable[[IncomingMessage], Awaitable[None]],
     cut_original_html: dict[str, tuple[str, str | None]],
     response_message_ids: dict[str, list[str]],
     memory_data_dir: str,
@@ -222,7 +219,6 @@ def _build_workflow_services(
         history_actions=bases.history_actions,
         regenerate_service=regenerate_service,
         show_confirmation=show_confirmation,
-        delete_callback_message=delete_callback_message,
         cut_original_html=cut_original_html,
         response_message_ids=response_message_ids,
     )
@@ -303,7 +299,6 @@ def _build_callback_router(
     history_actions: HistoryActions,
     regenerate_service: RegenerateService,
     show_confirmation: Callable[..., Awaitable[None]],
-    delete_callback_message: Callable[[IncomingMessage], Awaitable[None]],
     cut_original_html: dict[str, tuple[str, str | None]],
     response_message_ids: dict[str, list[str]],
 ) -> CallbackRouter:
@@ -315,7 +310,6 @@ def _build_callback_router(
         history_actions=history_actions,
         regenerate_service=regenerate_service,
         show_confirmation=show_confirmation,
-        delete_callback_message=delete_callback_message,
         cut_original_html=cut_original_html,
         response_message_ids=response_message_ids,
     )

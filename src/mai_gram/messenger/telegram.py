@@ -15,6 +15,8 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 
 from mai_gram.messenger.base import (
+    CallbackSourceMessage,
+    IncomingMessage,
     InlineKeyboardSpec,
     MessageHandler,
     Messenger,
@@ -247,6 +249,26 @@ class TelegramMessenger(Messenger):
         tg_file = await self._app.bot.get_file(file_id)
         byte_array = await tg_file.download_as_bytearray()
         return bytes(byte_array)
+
+    def get_callback_source_message(self, message: IncomingMessage) -> CallbackSourceMessage | None:
+        callback_query = getattr(message.raw, "callback_query", None)
+        callback_message = getattr(callback_query, "message", None)
+        if callback_message is None:
+            return None
+
+        original_html = getattr(callback_message, "text_html", None)
+        if original_html is not None:
+            return CallbackSourceMessage(
+                message_id=str(callback_message.message_id),
+                text=original_html,
+                parse_mode="html",
+            )
+
+        return CallbackSourceMessage(
+            message_id=str(callback_message.message_id),
+            text=getattr(callback_message, "text", "") or "",
+            parse_mode=None,
+        )
 
     async def set_profile_photo(self, photo_path: str) -> bool:
         """Set the bot's profile photo."""

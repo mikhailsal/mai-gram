@@ -138,6 +138,15 @@ class SendResult:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CallbackSourceMessage:
+    """Transport-neutral snapshot of the message that spawned a callback."""
+
+    message_id: str
+    text: str
+    parse_mode: str | None = None
+
+
 class MessengerError(Exception):
     """Base exception for messenger-related errors."""
 
@@ -317,6 +326,18 @@ class Messenger(ABC):
             The raw file content.
         """
         raise NotImplementedError("This platform does not support file downloads")
+
+    def get_callback_source_message(self, message: IncomingMessage) -> CallbackSourceMessage | None:
+        """Return the message snapshot that produced a callback, if available."""
+        del message
+        return None
+
+    async def delete_callback_source_message(self, message: IncomingMessage) -> bool:
+        """Delete the message that contained the callback button, if available."""
+        source_message = self.get_callback_source_message(message)
+        if source_message is None:
+            return False
+        return await self.delete_message(message.chat_id, source_message.message_id)
 
     async def set_profile_photo(self, photo_path: str) -> bool:
         """Set the bot's profile photo.
