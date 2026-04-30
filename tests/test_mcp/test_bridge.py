@@ -22,6 +22,7 @@ from mai_gram.mcp_servers.bridge import (
     run_with_tools,
     run_with_tools_stream,
 )
+from mai_gram.mcp_servers.bridge_support import _execute_tool_call
 from mai_gram.mcp_servers.manager import MCPManager, RegisteredTool
 from mai_gram.mcp_servers.messages_server import MCPToolSpec
 
@@ -400,6 +401,27 @@ class TestRunWithTools:
             message.role == MessageRole.TOOL and "Tool execution error" in message.content
             for message in second_call_messages
         )
+
+    async def test_execute_tool_call_propagates_unexpected_exceptions(self) -> None:
+        """Unexpected exceptions should propagate instead of being converted to tool errors."""
+        from unittest.mock import AsyncMock, patch
+
+        manager = MCPManager()
+        tool_call = ToolCall(id="call_1", name="search_messages", arguments='{"query":"Paris"}')
+
+        with (
+            patch(
+                "mai_gram.mcp_servers.bridge_support.openai_tool_call_to_mcp",
+                new_callable=AsyncMock,
+            ) as mock_convert,
+            pytest.raises(TypeError, match="unexpected bug"),
+        ):
+            mock_convert.side_effect = TypeError("unexpected bug")
+            await _execute_tool_call(
+                tool_call,
+                manager,
+                on_tool_result=None,
+            )
 
 
 class TestRunWithToolsStream:

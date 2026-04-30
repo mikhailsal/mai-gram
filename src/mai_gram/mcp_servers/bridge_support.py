@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -221,7 +222,14 @@ async def _execute_tool_call(
         )
         tool_content = mcp_result_to_openai(raw_result)
         tool_error = None
-    except Exception as exc:  # pragma: no cover - exercised in tests
+    except (
+        ValueError,
+        RuntimeError,
+        OSError,
+        LookupError,
+        json.JSONDecodeError,
+        asyncio.TimeoutError,
+    ) as exc:
         tool_content = f"Tool execution error: {exc}"
         raw_result = None
         resolved = None

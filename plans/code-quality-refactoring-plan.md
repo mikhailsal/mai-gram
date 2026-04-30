@@ -333,6 +333,7 @@ The next external-cleanup pass narrows `ExternalMCPPool.stop_all()` from a catch
 The latest import-workflow pass now narrows JSON-upload download and replay-task recovery catches to expected runtime/transient failures (`RuntimeError`, `OSError`, `asyncio.TimeoutError`) and adds direct tests that expected failures still produce user-facing fallback behavior while unexpected exceptions propagate for visibility.
 The latest reset-backup pass narrows `ResetWorkflow.create_reset_backup()` cleanup handling from a catch-all to expected filesystem/runtime failures (`OSError`, `RuntimeError`, `ValueError`) and adds coverage that unexpected exceptions now propagate instead of being hidden.
 The latest conversation-executor pass narrows assistant-turn fallback handling to expected runtime/tool/provider failures (`LLMProviderError`, `RuntimeError`, `OSError`, `asyncio.TimeoutError`) and adds regression coverage that unexpected exceptions propagate instead of being converted to generic user-facing errors.
+The latest bridge-support pass narrows MCP tool execution fallback handling to expected conversion/execution/runtime failures (`ValueError`, `RuntimeError`, `OSError`, `LookupError`, `json.JSONDecodeError`, `asyncio.TimeoutError`) and adds regression coverage that unexpected exceptions propagate instead of being silently converted to tool error messages.
 
 ### 10. Decide the fate of the summarization subsystem and stop carrying unowned complexity
 
