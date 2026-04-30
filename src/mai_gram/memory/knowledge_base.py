@@ -66,19 +66,20 @@ class WikiStore:
         chat_id: str,
         key: str,
         content: str,
-        importance: int | float,
+        importance: int,
         *,
         category: str = "wiki",
     ) -> KnowledgeEntry:
         """Create a new wiki entry on disk and in the database."""
         safe_key = self._sanitize_key(key)
+        normalized_importance = self._normalize_importance(importance)
         existing = await self._get_entry(chat_id, safe_key)
         if existing is not None:
             raise ValueError(f"Wiki entry with key '{safe_key}' already exists")
 
         wiki_dir = self._wiki_dir(chat_id)
         wiki_dir.mkdir(parents=True, exist_ok=True)
-        target_file = wiki_dir / self._filename(importance, safe_key)
+        target_file = wiki_dir / self._filename(normalized_importance, safe_key)
         if target_file.exists():
             raise ValueError(f"Wiki file already exists for key '{safe_key}'")
 
@@ -88,7 +89,7 @@ class WikiStore:
             category=category,
             key=safe_key,
             value=content,
-            importance=float(importance),
+            importance=float(normalized_importance),
         )
         self._session.add(entry)
         await self._session.flush()
@@ -100,7 +101,7 @@ class WikiStore:
         key: str,
         *,
         content: str | None = None,
-        importance: int | float | None = None,
+        importance: int | None = None,
     ) -> KnowledgeEntry | None:
         """Edit an existing wiki entry's content and/or importance."""
         safe_key = self._sanitize_key(key)
@@ -112,11 +113,11 @@ class WikiStore:
         if content is not None:
             entry.value = content
         if importance is not None:
-            entry.importance = float(importance)
+            entry.importance = float(self._normalize_importance(importance))
 
         wiki_dir = self._wiki_dir(chat_id)
         wiki_dir.mkdir(parents=True, exist_ok=True)
-        target_file = wiki_dir / self._filename(entry.importance, safe_key)
+        target_file = wiki_dir / self._filename(int(entry.importance), safe_key)
 
         if current_file is not None and current_file != target_file:
             current_file.rename(target_file)
@@ -328,7 +329,7 @@ class WikiStore:
         chat_id: str,
         key: str,
         *,
-        amount: int | float = 100,
+        amount: int = 100,
     ) -> KnowledgeEntry | None:
         """Decrease importance and rename file accordingly.
 
@@ -339,7 +340,8 @@ class WikiStore:
         if entry is None:
             return None
 
-        new_importance = entry.importance - float(amount)
+        normalized_amount = self._normalize_importance(amount)
+        new_importance = int(entry.importance) - normalized_amount
         if new_importance <= 0:
             await self.delete_entry(chat_id, safe_key)
             return None
@@ -369,8 +371,14 @@ class WikiStore:
             return None
         return matches[0]
 
-    def _filename(self, importance: int | float, safe_key: str) -> str:
-        return f"{int(float(importance)):04d}_{safe_key}.md"
+    def _filename(self, importance: int, safe_key: str) -> str:
+        return f"{importance:04d}_{safe_key}.md"
+
+    @staticmethod
+    def _normalize_importance(importance: int) -> int:
+        if importance <= 0:
+            raise ValueError("Importance must be a positive integer")
+        return importance
 
     @staticmethod
     def _sanitize_key(key: str) -> str:

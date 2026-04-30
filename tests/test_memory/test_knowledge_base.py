@@ -39,12 +39,16 @@ class TestWikiCreate:
         entry = await store.create_entry(chat.id, key="name", content="Alice", importance=9000)
         assert entry.key == "name"
         assert entry.value == "Alice"
-        assert entry.importance == 9000.0
+        assert int(entry.importance) == 9000
 
     async def test_duplicate_key_raises(self, store: WikiStore, chat: Chat) -> None:
         await store.create_entry(chat.id, key="name", content="Alice", importance=9000)
         with pytest.raises(ValueError, match="already exists"):
             await store.create_entry(chat.id, key="name", content="Bob", importance=9000)
+
+    async def test_non_positive_importance_raises(self, store: WikiStore, chat: Chat) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            await store.create_entry(chat.id, key="name", content="Alice", importance=0)
 
 
 class TestWikiRead:
@@ -86,7 +90,7 @@ class TestWikiEdit:
         await store.create_entry(chat.id, key="city", content="Paris", importance=5000)
         entry = await store.edit_entry(chat.id, "city", importance=9000)
         assert entry is not None
-        assert entry.importance == 9000.0
+        assert int(entry.importance) == 9000
 
     async def test_edit_nonexistent_returns_none(self, store: WikiStore, chat: Chat) -> None:
         result = await store.edit_entry(chat.id, "nope", content="x")
@@ -150,7 +154,7 @@ class TestWikiDecay:
         await store.create_entry(chat.id, key="fact", content="Test", importance=500)
         result = await store.decay_importance(chat.id, "fact", amount=100)
         assert result is not None
-        assert result.importance == 400.0
+        assert int(result.importance) == 400
 
     async def test_decay_to_zero_deletes(self, store: WikiStore, chat: Chat) -> None:
         await store.create_entry(chat.id, key="weak", content="Gone", importance=50)
@@ -162,6 +166,16 @@ class TestWikiDecay:
     async def test_decay_nonexistent(self, store: WikiStore, chat: Chat) -> None:
         result = await store.decay_importance(chat.id, "nope")
         assert result is None
+
+    async def test_decay_with_non_positive_amount_raises(
+        self,
+        store: WikiStore,
+        chat: Chat,
+    ) -> None:
+        await store.create_entry(chat.id, key="fact", content="Test", importance=500)
+
+        with pytest.raises(ValueError, match="positive integer"):
+            await store.decay_importance(chat.id, "fact", amount=0)
 
 
 class TestWikiSanitizeKey:
@@ -224,7 +238,7 @@ class TestWikiSync:
 
         assert "fact" in report.updated
         entries, _ = await store.list_entries_sorted(chat.id)
-        assert entries[0].importance == 9000.0
+        assert int(entries[0].importance) == 9000
 
     async def test_sync_noop_when_already_in_sync(
         self, store: WikiStore, chat: Chat, tmp_path: Path

@@ -30,7 +30,7 @@ class WikiEntryView:
 
     key: str
     value: str
-    importance: float
+    importance: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +79,7 @@ class ChatInspectionService:
                 WikiEntryView(
                     key=entry.key,
                     value=entry.value,
-                    importance=entry.importance,
+                    importance=int(entry.importance),
                 )
                 for entry in entries
             ],

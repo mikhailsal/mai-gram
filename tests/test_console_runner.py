@@ -183,7 +183,7 @@ async def test_print_wiki_handles_sync_and_empty_entries(
         list_wiki=AsyncMock(
             side_effect=[
                 SimpleNamespace(
-                    entries=[SimpleNamespace(key="topic", value="value", importance=1.0)],
+                    entries=[SimpleNamespace(key="topic", value="value", importance=1)],
                     sync_report=SimpleNamespace(total_changes=1, summary=lambda: "updated 1"),
                 ),
                 SimpleNamespace(
