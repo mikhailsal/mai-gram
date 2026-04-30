@@ -70,7 +70,11 @@ class ChatInspectionService:
         *,
         chat_id: str,
     ) -> WikiInspectionResult:
-        """Sync wiki entries from disk and return the sorted listing."""
+        """Sync wiki entries from disk and return the sorted listing.
+
+        ``sync_from_disk`` may change DB rows; callers should commit when
+        ``result.sync_report.total_changes > 0`` to persist reconciliation.
+        """
         wiki_store = WikiStore(session, data_dir=self._data_dir)
         sync_report = await wiki_store.sync_from_disk(chat_id)
         entries, _ = await wiki_store.list_entries_sorted(chat_id)
@@ -92,6 +96,10 @@ class ChatInspectionService:
         *,
         chat_id: str,
     ) -> SyncReport:
-        """Sync wiki entries from disk and return the applied repair report."""
+        """Sync wiki entries from disk and return the applied repair report.
+
+        This is an explicit mutating workflow; callers should commit after
+        invocation to persist any created/updated/deleted rows.
+        """
         wiki_store = WikiStore(session, data_dir=self._data_dir)
         return await wiki_store.sync_from_disk(chat_id)

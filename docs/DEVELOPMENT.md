@@ -86,9 +86,28 @@ restoring from a backup).
 - **DB row exists, no file on disk** → deletes the orphaned DB row.
 - **Files that don't match the `NNNN_key.md` pattern** → skipped (logged).
 
-This sync runs automatically at two points:
-1. **Before building the LLM context** (`PromptBuilder.build_context()`)
-2. **Before any wiki MCP tool call** (once per `WikiMCPServer` instance)
+This sync runs automatically at explicit workflow boundaries:
+1. **Before assistant-turn context assembly**
+  (`AssistantTurnBuilder._build_request()`)
+2. **Before prompt preview assembly**
+  (`PromptPreviewService.build_preview()`)
+3. **Before any wiki MCP tool call** (once per `WikiMCPServer` instance)
+4. **Before CLI wiki list/repair inspection output**
+  (`ChatInspectionService.list_wiki()` / `repair_wiki()`)
+
+### Sync transaction boundary
+
+`sync_from_disk` can create, update, or delete `KnowledgeEntry` rows in the
+current DB session. The caller owns transaction control:
+
+- **Mutating workflows** should commit after sync (for example, CLI
+  `--repair-wiki` always commits).
+- **Read-oriented workflows** that trigger sync should commit only when the
+  returned `SyncReport` has changes (for example, CLI `--wiki` commits when
+  `total_changes > 0`).
+
+Keeping this boundary explicit avoids hidden writes and makes read-only
+prompt-building code easier to reason about.
 
 ### Manual repair
 

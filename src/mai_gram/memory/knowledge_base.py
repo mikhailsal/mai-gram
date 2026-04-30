@@ -210,6 +210,10 @@ class WikiStore:
     async def sync_from_disk(self, chat_id: str) -> SyncReport:
         """Synchronise DB rows with .md files on disk (disk is source of truth).
 
+        This operation may mutate the current SQLAlchemy session by creating,
+        updating, or deleting ``KnowledgeEntry`` rows. Callers own transaction
+        control and should commit when they want these changes persisted.
+
         For each wiki file on disk:
         - If no DB row exists, create one from the file content and filename.
         - If a DB row exists but content or importance differs, update it.
