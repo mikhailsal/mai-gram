@@ -107,7 +107,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
-        except Exception:
+        except Exception:  # intentional: standard session rollback-then-re-raise
             await session.rollback()
             raise
 

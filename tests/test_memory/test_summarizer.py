@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
-from mai_gram.memory.summaries import StoredSummary
-from mai_gram.memory.summarizer import MemorySummarizer
-from mai_gram.memory.summarizer_support import (
+from mai_gram.memory.consolidation.summaries import StoredSummary
+from mai_gram.memory.consolidation.summarizer import MemorySummarizer
+from mai_gram.memory.consolidation.summarizer_support import (
     backfill_missing_summaries,
     generate_monthly_for_period,
     generate_weekly_for_period,
@@ -20,9 +20,9 @@ from mai_gram.memory.summarizer_support import (
 
 if TYPE_CHECKING:
     from mai_gram.llm.provider import LLMProvider
+    from mai_gram.memory.consolidation.summaries import SummaryStore
     from mai_gram.memory.knowledge_base import WikiStore
     from mai_gram.memory.messages import MessageStore
-    from mai_gram.memory.summaries import SummaryStore
 
 
 class _RecordingSummarizer(MemorySummarizer):

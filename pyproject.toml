@@ -62,9 +62,7 @@ testpaths = ["tests"]
 source = ["mai_gram"]
 omit = [
     "src/mai_gram/__main__.py",
-    "src/mai_gram/memory/forgetting.py",
-    "src/mai_gram/memory/summarizer.py",
-    "src/mai_gram/memory/summaries.py",
+    "src/mai_gram/memory/consolidation/*",
     "src/mai_gram/db/migrations.py",
 ]
 

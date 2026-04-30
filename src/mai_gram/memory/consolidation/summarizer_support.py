@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, TypeVar
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from mai_gram.memory.consolidation.summaries import StoredSummary, SummaryStore
     from mai_gram.memory.knowledge_base import WikiStore
     from mai_gram.memory.messages import MessageStore
-    from mai_gram.memory.summaries import StoredSummary, SummaryStore
 
 PeriodT = TypeVar("PeriodT", date, str)
 

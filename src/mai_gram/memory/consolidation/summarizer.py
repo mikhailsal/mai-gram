@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole
-from mai_gram.memory.summarizer_support import (
+from mai_gram.memory.consolidation.summarizer_support import (
     ConsolidationContext,
     backfill_missing_summaries,
     build_daily_context,
@@ -38,9 +38,9 @@ from mai_gram.memory.summarizer_support import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from mai_gram.memory.consolidation.summaries import SummaryStore
     from mai_gram.memory.knowledge_base import WikiStore
     from mai_gram.memory.messages import MessageStore
-    from mai_gram.memory.summaries import SummaryStore
 
 
 class MemorySummarizer:

@@ -328,8 +328,7 @@ class TelegramMessenger(Messenger):
             if update.callback_query:
                 try:
                     await update.callback_query.answer()
-                except Exception as e:
-                    # Network timeouts can happen - log and continue
+                except (TelegramError, OSError) as e:
                     logger.warning("Failed to answer callback query: %s", e)
 
             for handler in self._callback_handlers:

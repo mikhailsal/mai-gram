@@ -5,8 +5,12 @@ Active modules:
 - knowledge_base: wiki-style fact storage
 - manager: high-level orchestrator
 
-Inactive (kept for future use):
+Quarantined (see ``consolidation/`` subpackage):
 - summarizer: daily/weekly/monthly summarization
 - forgetting: summary consolidation engine
 - summaries: summary file storage
+
+The consolidation subsystem is architecturally complete and tested but not
+invoked from production paths.  It is isolated in its own subpackage so that
+the active memory core remains small and coverage-enforced.
 """

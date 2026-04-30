@@ -12,6 +12,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from mai_gram.db.models import SchemaVersion
@@ -162,7 +163,7 @@ async def get_current_version(engine: AsyncEngine) -> int:
             )
             row = result.scalar_one_or_none()
             return row if row is not None else 0
-        except Exception:
+        except (OperationalError, ProgrammingError):
             return 0
 
 

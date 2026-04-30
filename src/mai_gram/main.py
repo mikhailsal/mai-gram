@@ -271,7 +271,7 @@ async def run() -> None:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-    except Exception:
+    except Exception:  # intentional: process boundary; log then shut down cleanly
         logger.exception("Unexpected error")
     finally:
         await shutdown(runtime)

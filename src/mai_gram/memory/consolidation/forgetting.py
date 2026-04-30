@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from mai_gram.memory.summaries import SummaryStore
-    from mai_gram.memory.summarizer import MemorySummarizer
+    from mai_gram.memory.consolidation.summaries import SummaryStore
+    from mai_gram.memory.consolidation.summarizer import MemorySummarizer
 
 
 class ForgettingEngine:

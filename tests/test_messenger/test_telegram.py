@@ -455,7 +455,7 @@ async def test_telegram_messenger_internal_handlers_and_callback_helper(
     messenger.register_message_handler(message_handler)
     messenger.register_callback_handler(callback_handler)
 
-    callback_query = SimpleNamespace(answer=AsyncMock(side_effect=RuntimeError("boom")))
+    callback_query = SimpleNamespace(answer=AsyncMock(side_effect=TelegramError("boom")))
     update: Any = SimpleNamespace(callback_query=callback_query)
 
     await wrapper(update, None)
