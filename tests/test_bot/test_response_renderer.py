@@ -19,6 +19,7 @@ from mai_gram.messenger.base import SendResult
 
 def _make_renderer() -> tuple[ResponseRenderer, MagicMock, MagicMock]:
     messenger = MagicMock()
+    messenger.max_message_length = 4000
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="msg-1"))
     messenger.edit_message = AsyncMock(return_value=SendResult(success=True))
     message_logger = MagicMock()
@@ -125,11 +126,11 @@ class TestResponseRenderer:
         assert second_call.parse_mode is None
 
     async def test_send_long_message_sends_header_as_separate_part_when_needed(self) -> None:
-        renderer, _, _ = _make_renderer()
+        renderer, messenger, _ = _make_renderer()
+        messenger.max_message_length = 15
         renderer._send_part = AsyncMock(side_effect=["header-id", "part-1", "part-2"])
 
         with (
-            patch("mai_gram.core.telegram_limits.SAFE_MAX_LENGTH", 15),
             patch(
                 "mai_gram.core.telegram_limits.split_html_safe",
                 side_effect=[["first", "second"], ["second"]],
@@ -190,12 +191,12 @@ class TestResponseRenderer:
         renderer._send_part.assert_awaited_once_with("test-chat", "<second>", keyboard="kbd")
 
     async def test_finalize_placeholder_keeps_header_in_placeholder_when_it_overflows(self) -> None:
-        renderer, _, _ = _make_renderer()
+        renderer, messenger, _ = _make_renderer()
+        messenger.max_message_length = 10
         renderer._edit_part = AsyncMock(return_value=True)
         renderer._send_part = AsyncMock(return_value="part-1")
 
         with (
-            patch("mai_gram.core.telegram_limits.SAFE_MAX_LENGTH", 10),
             patch("mai_gram.core.telegram_limits.split_html_safe", return_value=["first"]),
             patch("mai_gram.core.md_to_telegram.markdown_to_html", side_effect=lambda text: text),
         ):
@@ -213,6 +214,7 @@ class TestResponseRenderer:
 
     async def test_commit_overflow_commits_chunks_and_creates_new_placeholder(self) -> None:
         renderer, messenger, _ = _make_renderer()
+        messenger.max_message_length = 220
         renderer._edit_part = AsyncMock(return_value=True)
         renderer._send_part = AsyncMock(return_value="sent-1")
         messenger.send_message = AsyncMock(
@@ -222,7 +224,6 @@ class TestResponseRenderer:
         current_content = "12345678901234567890123456789012345"
 
         with (
-            patch("mai_gram.core.telegram_limits.SAFE_MAX_LENGTH", 220),
             patch("mai_gram.core.md_to_telegram.markdown_to_html", side_effect=lambda text: text),
         ):
             offset, new_placeholder = await renderer._commit_overflow(

@@ -63,6 +63,7 @@ def _make_request(
 
 def _make_executor() -> tuple[ConversationExecutor, MagicMock, MagicMock]:
     messenger = MagicMock()
+    messenger.max_message_length = 4000
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="sent-1"))
     messenger.edit_message = AsyncMock(return_value=SendResult(success=True, message_id="edited-1"))
 
@@ -467,7 +468,8 @@ class TestConversationExecutor:
         assert sent_msg_ids == ["final-id"]
 
     def test_helper_formatters_cover_tool_and_render_paths(self) -> None:
-        live_text, fallback, header_html, remaining = ConversationExecutor._render_live_text(
+        executor, _, _ = _make_executor()
+        live_text, fallback, header_html, remaining = executor._render_live_text(
             current_reasoning="Reasoning",
             current_content="Answer",
             committed_content_offset=0,
@@ -480,7 +482,7 @@ class TestConversationExecutor:
         assert fallback.endswith(" ▍")
         assert live_text.endswith(" ▍")
         assert (
-            ConversationExecutor._render_live_text(
+            executor._render_live_text(
                 current_reasoning="Only reasoning",
                 current_content="",
                 committed_content_offset=0,
@@ -490,7 +492,7 @@ class TestConversationExecutor:
             or ("", "", "", "")
         )[0].endswith(" ▍")
         assert (
-            ConversationExecutor._render_live_text(
+            executor._render_live_text(
                 current_reasoning="",
                 current_content="Only content",
                 committed_content_offset=0,
@@ -500,7 +502,7 @@ class TestConversationExecutor:
             or ("", "", "", "")
         )[0].endswith(" ▍")
         assert (
-            ConversationExecutor._render_live_text(
+            executor._render_live_text(
                 current_reasoning="",
                 current_content="   ",
                 committed_content_offset=0,

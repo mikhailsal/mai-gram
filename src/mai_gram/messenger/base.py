@@ -169,6 +169,14 @@ class Messenger(ABC):
     def platform_name(self) -> str:
         """Return the name of this messaging platform."""
 
+    @property
+    def max_message_length(self) -> int:
+        """Maximum safe length for a single outgoing message.
+
+        Subclasses should override to reflect platform-specific limits.
+        """
+        return 4000
+
     @abstractmethod
     async def start(self) -> None:
         """Start the messenger (connect, authenticate, begin polling/webhooks).

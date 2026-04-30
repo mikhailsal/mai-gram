@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Protocol
 
 from sqlalchemy import func, select
 
-from mai_gram.config import get_settings
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
 from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
@@ -46,12 +45,14 @@ class ResetWorkflow:
         resolve_chat_id: Callable[[IncomingMessage], str],
         clear_setup_session: Callable[[str], None],
         memory_data_dir: str,
+        database_url: str = "",
     ) -> None:
         self._messenger = messenger
         self._presenter = presenter
         self._resolve_chat_id = resolve_chat_id
         self._clear_setup_session = clear_setup_session
         self._memory_data_dir = memory_data_dir
+        self._database_url = database_url
 
     async def handle_reset(self, message: IncomingMessage) -> None:
         """Prepare the reset confirmation or report when no chat exists."""
@@ -94,8 +95,7 @@ class ResetWorkflow:
         import shutil
         import tempfile
 
-        settings = get_settings()
-        data_dir = Path(settings.memory_data_dir)
+        data_dir = Path(self._memory_data_dir)
         backups_dir = data_dir / "backups"
         backups_dir.mkdir(parents=True, exist_ok=True)
 
@@ -108,9 +108,8 @@ class ResetWorkflow:
                 staging = Path(tmp_dir) / archive_name
                 staging.mkdir()
 
-                db_url = settings.database_url
-                if "sqlite" in db_url:
-                    db_path = Path(db_url.split("///")[-1])
+                if "sqlite" in self._database_url:
+                    db_path = Path(self._database_url.split("///")[-1])
                     if db_path.exists():
                         shutil.copy2(db_path, staging / db_path.name)
 

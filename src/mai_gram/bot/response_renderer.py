@@ -149,7 +149,7 @@ class ResponseRenderer:
         committed_content_offset: int,
     ) -> tuple[int, str | None]:
         """Commit overflowing streamed content into finalized messages."""
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+        max_len = self._messenger.max_message_length
 
         if header_html and not reasoning_committed:
             if placeholder_msg_id:
@@ -165,7 +165,7 @@ class ResponseRenderer:
             if placeholder_msg_id:
                 chunk_text = self._overflow_chunk_text(
                     remaining_content,
-                    max_length=SAFE_MAX_LENGTH,
+                    max_length=max_len,
                 )
                 await self._commit_overflow_chunk(
                     tg_chat_id,
@@ -177,7 +177,7 @@ class ResponseRenderer:
             else:
                 chunk_text = self._overflow_chunk_text(
                     remaining_content,
-                    max_length=SAFE_MAX_LENGTH,
+                    max_length=max_len,
                 )
                 await self._commit_overflow_chunk(
                     tg_chat_id,
@@ -189,7 +189,7 @@ class ResponseRenderer:
             committed_content_offset += len(chunk_text)
             remaining_content = current_content[committed_content_offset:]
 
-            if len(remaining_content) <= SAFE_MAX_LENGTH - 200:
+            if len(remaining_content) <= max_len - 200:
                 break
 
         new_placeholder = await self._create_overflow_placeholder(tg_chat_id, remaining_content)
@@ -215,11 +215,11 @@ class ResponseRenderer:
         sent_msg_ids: list[str],
     ) -> None:
         from mai_gram.core.md_to_telegram import markdown_to_html
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
 
+        max_len = self._messenger.max_message_length
         chunk_html = markdown_to_html(chunk_text)
-        if len(chunk_html) > SAFE_MAX_LENGTH:
-            chunk_html = chunk_html[: SAFE_MAX_LENGTH - 10]
+        if len(chunk_html) > max_len:
+            chunk_html = chunk_html[: max_len - 10]
         if message_id:
             await self._edit_part(chat_id, message_id, chunk_html)
             sent_msg_ids.append(message_id)
@@ -255,8 +255,7 @@ class ResponseRenderer:
         keyboard: object = None,
     ) -> str | None:
         """Send one message part, falling back to plain text if HTML fails."""
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
-
+        max_len = self._messenger.max_message_length
         result = await self._messenger.send_message(
             OutgoingMessage(text=text, chat_id=chat_id, parse_mode="html", keyboard=keyboard)
         )
@@ -268,7 +267,7 @@ class ResponseRenderer:
             return await self._send_part_split(chat_id, text, keyboard=keyboard)
         if "parse entities" in error or "can't find end tag" in error:
             plain = re.sub(r"<[^>]+>", "", text)
-            if len(plain) > SAFE_MAX_LENGTH:
+            if len(plain) > max_len:
                 return await self._send_part_split(chat_id, text, keyboard=keyboard)
             result = await self._messenger.send_message(
                 OutgoingMessage(text=plain, chat_id=chat_id, keyboard=keyboard)
@@ -285,10 +284,11 @@ class ResponseRenderer:
         keyboard: object = None,
     ) -> str | None:
         """Emergency split when a rendered part still exceeds the platform limit."""
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH, split_html_safe
+        from mai_gram.core.telegram_limits import split_html_safe
 
+        max_len = self._messenger.max_message_length
         plain = re.sub(r"<[^>]+>", "", text)
-        chunks = split_html_safe(plain, max_len=SAFE_MAX_LENGTH)
+        chunks = split_html_safe(plain, max_len=max_len)
         last_id: str | None = None
         for index, chunk in enumerate(chunks):
             is_last = index == len(chunks) - 1
@@ -313,15 +313,16 @@ class ResponseRenderer:
     ) -> list[str]:
         """Send markdown content as one or more independently rendered HTML parts."""
         from mai_gram.core.md_to_telegram import markdown_to_html
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH, split_html_safe
+        from mai_gram.core.telegram_limits import split_html_safe
 
+        max_len = self._messenger.max_message_length
         sent_ids: list[str] = []
         header_sent = False
 
-        max_first = SAFE_MAX_LENGTH // 2 if header_html else SAFE_MAX_LENGTH
+        max_first = max_len // 2 if header_html else max_len
         raw_parts = split_html_safe(raw_text, max_len=max_first)
         if len(raw_parts) > 1:
-            rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
+            rest = split_html_safe("".join(raw_parts[1:]), max_len=max_len)
             raw_parts = [raw_parts[0], *rest]
 
         for index, raw_part in enumerate(raw_parts):
@@ -330,7 +331,7 @@ class ResponseRenderer:
 
             if index == 0 and header_html and not header_sent:
                 combined = header_html + "\n\n" + html_part
-                if len(combined) <= SAFE_MAX_LENGTH:
+                if len(combined) <= max_len:
                     html_part = combined
                     header_sent = True
                 else:
@@ -390,18 +391,19 @@ class ResponseRenderer:
     ) -> list[str]:
         """Edit the placeholder with the first chunk and send the remainder."""
         from mai_gram.core.md_to_telegram import markdown_to_html
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH, split_html_safe
+        from mai_gram.core.telegram_limits import split_html_safe
 
-        max_first = SAFE_MAX_LENGTH // 2 if header_html else SAFE_MAX_LENGTH
+        max_len = self._messenger.max_message_length
+        max_first = max_len // 2 if header_html else max_len
         raw_parts = split_html_safe(raw_text, max_len=max_first)
         if len(raw_parts) > 1:
-            rest = split_html_safe("".join(raw_parts[1:]), max_len=SAFE_MAX_LENGTH)
+            rest = split_html_safe("".join(raw_parts[1:]), max_len=max_len)
             raw_parts = [raw_parts[0], *rest]
 
         first_html = markdown_to_html(raw_parts[0])
         if header_html:
             combined = header_html + "\n\n" + first_html
-            if len(combined) <= SAFE_MAX_LENGTH:
+            if len(combined) <= max_len:
                 first_html = combined
             else:
                 await self._edit_part(chat_id, placeholder_msg_id, header_html)

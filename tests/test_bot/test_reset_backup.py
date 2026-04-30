@@ -56,6 +56,7 @@ def _make_handler(*, memory_data_dir: str = "./data") -> BotHandler:
 def _make_reset_workflow(
     *,
     memory_data_dir: str = "./data",
+    database_url: str = "sqlite+aiosqlite:///./data/test.db",
 ) -> tuple[ResetWorkflow, MagicMock, MagicMock]:
     messenger = MagicMock()
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
@@ -71,6 +72,7 @@ def _make_reset_workflow(
         ),
         clear_setup_session=clear_setup_session,
         memory_data_dir=memory_data_dir,
+        database_url=database_url,
     )
     return workflow, presenter, clear_setup_session
 
@@ -110,15 +112,12 @@ class TestCreateResetBackup:
         wiki_dir.mkdir(parents=True)
         (wiki_dir / "note.md").write_text("# Test wiki entry")
 
-        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(
+            memory_data_dir=str(data_dir),
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
 
-        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
-            settings = MagicMock()
-            settings.memory_data_dir = str(data_dir)
-            settings.database_url = f"sqlite+aiosqlite:///{db_path}"
-            mock_settings.return_value = settings
-
-            result = await workflow.create_reset_backup(chat_id)
+        result = await workflow.create_reset_backup(chat_id)
 
         assert result is not None
         assert result.exists()
@@ -142,15 +141,12 @@ class TestCreateResetBackup:
         db_path = data_dir / "test.db"
         db_path.write_text("fake database content")
 
-        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(
+            memory_data_dir=str(data_dir),
+            database_url=f"sqlite+aiosqlite:///{db_path}",
+        )
 
-        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
-            settings = MagicMock()
-            settings.memory_data_dir = str(data_dir)
-            settings.database_url = f"sqlite+aiosqlite:///{db_path}"
-            mock_settings.return_value = settings
-
-            result = await workflow.create_reset_backup("plain-chat@bot")
+        result = await workflow.create_reset_backup("plain-chat@bot")
 
         assert result is not None
         assert result.exists()
@@ -165,15 +161,13 @@ class TestCreateResetBackup:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(
+            memory_data_dir=str(data_dir),
+            database_url=f"sqlite+aiosqlite:///{data_dir / 'test.db'}",
+        )
 
-        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
-            settings = MagicMock()
-            settings.memory_data_dir = str(data_dir)
-            settings.database_url = f"sqlite+aiosqlite:///{data_dir / 'test.db'}"
-            mock_settings.return_value = settings
-            with patch("shutil.make_archive", side_effect=OSError("disk full")):
-                result = await workflow.create_reset_backup("test@bot")
+        with patch("shutil.make_archive", side_effect=OSError("disk full")):
+            result = await workflow.create_reset_backup("test@bot")
 
         assert result is None
 
@@ -182,18 +176,16 @@ class TestCreateResetBackup:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
 
-        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
+        workflow, _, _ = _make_reset_workflow(
+            memory_data_dir=str(data_dir),
+            database_url=f"sqlite+aiosqlite:///{data_dir / 'test.db'}",
+        )
 
-        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
-            settings = MagicMock()
-            settings.memory_data_dir = str(data_dir)
-            settings.database_url = f"sqlite+aiosqlite:///{data_dir / 'test.db'}"
-            mock_settings.return_value = settings
-            with (
-                patch("shutil.make_archive", side_effect=TypeError("bug")),
-                pytest.raises(TypeError, match="bug"),
-            ):
-                await workflow.create_reset_backup("test@bot")
+        with (
+            patch("shutil.make_archive", side_effect=TypeError("bug")),
+            pytest.raises(TypeError, match="bug"),
+        ):
+            await workflow.create_reset_backup("test@bot")
 
 
 class TestResetConfirmation:

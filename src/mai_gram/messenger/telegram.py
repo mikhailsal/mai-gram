@@ -86,6 +86,10 @@ class TelegramMessenger(Messenger):
         return "telegram"
 
     @property
+    def max_message_length(self) -> int:
+        return 4000
+
+    @property
     def bot_id(self) -> str:
         """Return the bot identifier (username)."""
         return self._bot_id

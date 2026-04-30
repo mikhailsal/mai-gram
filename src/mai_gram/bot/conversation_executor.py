@@ -288,9 +288,9 @@ class ConversationExecutor:
             return
 
         live_text, fallback, header_html, remaining_content = rendered
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
+        max_len = self._messenger.max_message_length
 
-        if len(live_text) > SAFE_MAX_LENGTH:
+        if len(live_text) > max_len:
             (
                 state.committed_content_offset,
                 state.placeholder_msg_id,
@@ -317,8 +317,8 @@ class ConversationExecutor:
         state.last_edit_time = now_mono
         state.last_display_len = display_len
 
-    @staticmethod
     def _render_live_text(
+        self,
         *,
         current_reasoning: str,
         current_content: str,
@@ -342,10 +342,9 @@ class ConversationExecutor:
         else:
             return None
 
-        from mai_gram.core.telegram_limits import SAFE_MAX_LENGTH
-
+        max_len = self._messenger.max_message_length
         raw_fallback = remaining_content or current_reasoning
-        fallback = raw_fallback[:SAFE_MAX_LENGTH] + " ▍"
+        fallback = raw_fallback[:max_len] + " ▍"
         return live_text, fallback, header_html, remaining_content
 
     async def _send_or_edit_placeholder(

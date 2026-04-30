@@ -260,6 +260,7 @@ def _build_workflow_bases(
             resolve_chat_id=resolve_chat_id,
             clear_setup_session=clear_setup_session,
             memory_data_dir=memory_data_dir,
+            database_url=settings.database_url,
         ),
         setup_workflow=SetupWorkflow(
             messenger,
