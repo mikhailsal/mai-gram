@@ -334,6 +334,7 @@ The latest import-workflow pass now narrows JSON-upload download and replay-task
 The latest reset-backup pass narrows `ResetWorkflow.create_reset_backup()` cleanup handling from a catch-all to expected filesystem/runtime failures (`OSError`, `RuntimeError`, `ValueError`) and adds coverage that unexpected exceptions now propagate instead of being hidden.
 The latest conversation-executor pass narrows assistant-turn fallback handling to expected runtime/tool/provider failures (`LLMProviderError`, `RuntimeError`, `OSError`, `asyncio.TimeoutError`) and adds regression coverage that unexpected exceptions propagate instead of being converted to generic user-facing errors.
 The latest bridge-support pass narrows MCP tool execution fallback handling to expected conversion/execution/runtime failures (`ValueError`, `RuntimeError`, `OSError`, `LookupError`, `json.JSONDecodeError`, `asyncio.TimeoutError`) and adds regression coverage that unexpected exceptions propagate instead of being silently converted to tool error messages.
+The latest config-loaders pass narrows prompt config TOML parsing failure handling to expected parse/type/value errors (`TOMLDecodeError`, `ValueError`, `TypeError`, `AttributeError`) and adds regression coverage that truly unexpected exceptions propagate instead of silently falling back to defaults.
 
 ### 10. Decide the fate of the summarization subsystem and stop carrying unowned complexity
 

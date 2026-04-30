@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
+
+import pytest
 
 from mai_gram.config_loaders import BotsConfigLoader, ModelsConfigLoader, PromptConfigLoader
 
@@ -119,3 +122,21 @@ class TestPromptConfigLoader:
 
         assert prompt_config.show_reasoning is True
         assert prompt_config.tools_enabled is None
+
+    def test_unexpected_exception_in_prompt_config_propagates(self, tmp_path) -> None:
+        """Unexpected exceptions should propagate instead of being caught."""
+        (tmp_path / "valid.toml").write_text(
+            "\n".join(
+                [
+                    "show_reasoning = true",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        loader = PromptConfigLoader(str(tmp_path))
+
+        with (
+            patch("mai_gram.config_loaders.tomllib.load", side_effect=RuntimeError("unexpected")),
+            pytest.raises(RuntimeError, match="unexpected"),
+        ):
+            loader.get_prompt_config("valid")

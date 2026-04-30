@@ -10,8 +10,12 @@ from typing import Any
 
 if sys.version_info >= (3, 11):
     import tomllib
+
+    TOMLDecodeError = tomllib.TOMLDecodeError
 else:
     import tomli as tomllib
+
+    TOMLDecodeError = tomllib.TOMLDecodeError
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +205,6 @@ class PromptConfigLoader:
                 mcp_servers_enabled=mcp.get("enabled"),
                 mcp_servers_disabled=mcp.get("disabled"),
             )
-        except Exception:
+        except (TOMLDecodeError, ValueError, TypeError, AttributeError):
             logger.warning("Failed to parse prompt config: %s", config_path)
             return PromptConfig()
