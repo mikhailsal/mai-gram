@@ -392,6 +392,37 @@ async def test_watch_config_refreshes_models_on_change(monkeypatch, tmp_path) ->
         await task
 
 
+async def test_watch_config_recovers_from_value_error(monkeypatch, tmp_path) -> None:
+    models_path = tmp_path / "models.toml"
+    models_path.write_text("[models]\nallowed=['openrouter/free']\n", encoding="utf-8")
+    settings = FakeSettings(["token-1"])
+    settings.models_config_path = str(models_path)
+    real_sleep = asyncio.sleep
+
+    def refresh_models_config() -> None:
+        raise ValueError("invalid models config")
+
+    settings.refresh_models_config = refresh_models_config
+
+    async def fast_sleep(delay: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr(main.asyncio, "sleep", fast_sleep)
+
+    task = asyncio.create_task(main._watch_config(settings))
+    await real_sleep(0)
+
+    current_mtime = models_path.stat().st_mtime
+    os.utime(models_path, (current_mtime + 1, current_mtime + 1))
+    await real_sleep(0.01)
+
+    assert not task.done()
+
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
 async def test_run_registers_signals_and_shuts_down_cleanly(monkeypatch) -> None:
     runtime = main.AppRuntime()
     registered_signals: list[object] = []

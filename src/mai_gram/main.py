@@ -214,8 +214,8 @@ async def _watch_config(settings: Settings) -> None:
                     "Config file changed -- reloaded. Models: %s",
                     ", ".join(m.split("/")[-1] for m in models),
                 )
-        except Exception:
-            logger.debug("Config watcher error", exc_info=True)
+        except (OSError, ValueError):
+            logger.debug("Config watcher transient error", exc_info=True)
 
 
 async def shutdown(runtime: AppRuntime) -> None:
