@@ -6,6 +6,7 @@ import zipfile
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy import select
 
 from mai_gram.bot.conversation_executor import AssistantTurnResult
@@ -175,6 +176,24 @@ class TestCreateResetBackup:
                 result = await workflow.create_reset_backup("test@bot")
 
         assert result is None
+
+    async def test_backup_propagates_unexpected_errors(self, tmp_path: Path) -> None:
+        """Unexpected errors should not be swallowed by backup creation."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        workflow, _, _ = _make_reset_workflow(memory_data_dir=str(data_dir))
+
+        with patch("mai_gram.bot.reset_workflow.get_settings") as mock_settings:
+            settings = MagicMock()
+            settings.memory_data_dir = str(data_dir)
+            settings.database_url = f"sqlite+aiosqlite:///{data_dir / 'test.db'}"
+            mock_settings.return_value = settings
+            with (
+                patch("shutil.make_archive", side_effect=TypeError("bug")),
+                pytest.raises(TypeError, match="bug"),
+            ):
+                await workflow.create_reset_backup("test@bot")
 
 
 class TestResetConfirmation:

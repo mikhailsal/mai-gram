@@ -128,7 +128,7 @@ class ResetWorkflow:
                     result.stat().st_size / 1024,
                 )
                 return result
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             logger.exception("Failed to create reset backup for chat %s", chat_id)
             return None
 
