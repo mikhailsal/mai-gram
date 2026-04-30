@@ -339,5 +339,5 @@ class ExternalMCPPool:
         for server in self._servers.values():
             try:
                 await server.stop()
-            except Exception:
+            except (RuntimeError, OSError, ProcessLookupError, asyncio.TimeoutError):
                 logger.exception("Error stopping MCP server '%s'", server.name)

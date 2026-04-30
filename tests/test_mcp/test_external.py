@@ -276,3 +276,14 @@ async def test_external_helper_methods_and_pool_management(
     assert pool.server_names == ["one"]
     assert pool.get_all_servers()["one"] is server_one
     assert "Error stopping MCP server 'one'" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_pool_stop_all_propagates_unexpected_errors() -> None:
+    pool = ExternalMCPPool({"one": {"command": "cmd"}})
+    server = pool.get_server("one")
+    assert server is not None
+    server.stop = AsyncMock(side_effect=ValueError("bug"))
+
+    with pytest.raises(ValueError, match="bug"):
+        await pool.stop_all()

@@ -329,6 +329,7 @@ Status:
 
 `src/mai_gram/core/replay.py` now routes import replay through focused helpers for retry classification, per-role replay, and intro/progress/summary delivery, so `replay_imported_messages` and `_send_with_retry` no longer appear in the size audit while the direct replay test suite still passes. Broader shared retry-policy consolidation across the rest of the runtime remains follow-on work.
 The latest runtime-boundary pass narrows `src/mai_gram/main.py` config watcher handling from a broad catch-all to expected transient `OSError`/`ValueError` failures and adds direct regression coverage that watcher loops continue running across invalid-models parse cycles. The process-boundary catch in `run()` remains intentionally broad with full exception logging, while this change removes one recurring internal catch-all from startup/runtime internals.
+The next external-cleanup pass narrows `ExternalMCPPool.stop_all()` from a catch-all to expected shutdown failures (`RuntimeError`, `OSError`, `ProcessLookupError`, `asyncio.TimeoutError`) and adds regression coverage that unexpected exceptions now propagate instead of being silently swallowed.
 
 ### 10. Decide the fate of the summarization subsystem and stop carrying unowned complexity
 
