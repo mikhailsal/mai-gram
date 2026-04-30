@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -164,7 +165,7 @@ class ConversationExecutor:
                 timezone_name=request.timezone_name,
                 show_datetime=request.show_datetime,
             )
-        except Exception as exc:
+        except (LLMProviderError, RuntimeError, OSError, asyncio.TimeoutError) as exc:
             logger.exception(request.failure_log_message)
             error_text = self._renderer._user_friendly_error(exc)
             await self._deliver_error(request, sent_msg_ids, error_text)

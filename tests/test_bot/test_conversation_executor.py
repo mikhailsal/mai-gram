@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from mai_gram.bot.conversation_executor import (
     AssistantTurnRequest,
     ConversationExecutor,
@@ -130,6 +132,22 @@ class TestConversationExecutor:
 
         renderer._deliver_error.assert_awaited_once()
         assert result.sent_message_ids == []
+
+    async def test_execute_propagates_unexpected_exceptions(self) -> None:
+        executor, _, renderer = _make_executor()
+        request = _make_request()
+
+        with (
+            patch.object(
+                executor,
+                "_stream_response",
+                AsyncMock(side_effect=ValueError("bug")),
+            ),
+            pytest.raises(ValueError, match="bug"),
+        ):
+            await executor.execute(request)
+
+        renderer._deliver_error.assert_not_called()
 
     async def test_tool_callbacks_persist_and_display_activity(self) -> None:
         executor, messenger, _ = _make_executor()
