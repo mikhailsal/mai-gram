@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy import select
 
 from mai_gram.bot.import_workflow import ImportSession, ImportState, ImportWorkflow
@@ -254,6 +255,56 @@ class TestImportWorkflow:
             for call in send_message.await_args_list
         )
 
+    async def test_handle_document_reports_expected_download_failures(self) -> None:
+        workflow, messenger, _ = _make_workflow()
+        workflow._sessions["test-user"] = ImportSession(
+            user_id="test-user",
+            chat_id="test-chat",
+            state=ImportState.AWAITING_FILE,
+            selected_model="openai/test-model",
+            created_at=time.monotonic(),
+        )
+        messenger.download_file = AsyncMock(side_effect=RuntimeError("telegram unavailable"))
+
+        await workflow.handle_document(
+            _make_message(
+                chat_id="test-chat",
+                message_type=MessageType.DOCUMENT,
+                document_file_id="file-1",
+                document_file_name="import.json",
+                document_file_size=10,
+            )
+        )
+
+        send_message = cast("AsyncMock", messenger.send_message)
+        assert any(
+            "Failed to download the file from Telegram"
+            in cast("OutgoingMessage", call.args[0]).text
+            for call in send_message.await_args_list
+        )
+
+    async def test_handle_document_propagates_unexpected_download_failures(self) -> None:
+        workflow, messenger, _ = _make_workflow()
+        workflow._sessions["test-user"] = ImportSession(
+            user_id="test-user",
+            chat_id="test-chat",
+            state=ImportState.AWAITING_FILE,
+            selected_model="openai/test-model",
+            created_at=time.monotonic(),
+        )
+        messenger.download_file = AsyncMock(side_effect=ValueError("bug"))
+
+        with pytest.raises(ValueError, match="bug"):
+            await workflow.handle_document(
+                _make_message(
+                    chat_id="test-chat",
+                    message_type=MessageType.DOCUMENT,
+                    document_file_id="file-1",
+                    document_file_name="import.json",
+                    document_file_size=10,
+                )
+            )
+
     async def test_handle_document_creates_chat_and_messages(self, session: AsyncSession) -> None:
         workflow, messenger, settings = _make_workflow()
         workflow._sessions["test-user"] = ImportSession(
@@ -319,3 +370,79 @@ class TestImportWorkflow:
             cast("OutgoingMessage", call.args[0]).text for call in send_message.await_args_list
         ]
         assert any("Saved 2 messages" in text for text in texts)
+
+    async def test_start_replay_task_handles_expected_failures(self, session: AsyncSession) -> None:
+        workflow, messenger, _ = _make_workflow()
+        chat_id = "test-import-chat"
+        session.add(
+            Chat(
+                id=chat_id,
+                user_id="test-user",
+                bot_id="",
+                llm_model="openai/test-model",
+                system_prompt="prompt",
+            )
+        )
+        session.add(Message(chat_id=chat_id, role="user", content="hello"))
+        await session.commit()
+
+        with (
+            patch(
+                "mai_gram.bot.import_workflow.get_session",
+            ) as mock_get_session,
+            patch(
+                "mai_gram.core.replay.replay_imported_messages",
+                AsyncMock(side_effect=RuntimeError("replay failed")),
+            ),
+        ):
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await workflow._start_replay_task("tg-chat", chat_id)
+            task = workflow._replay_tasks["tg-chat"]
+            await task
+
+        assert "tg-chat" not in workflow._replay_tasks
+        send_message = cast("AsyncMock", messenger.send_message)
+        assert any(
+            "Replay was interrupted" in cast("OutgoingMessage", call.args[0]).text
+            for call in send_message.await_args_list
+        )
+
+    async def test_start_replay_task_propagates_unexpected_failures(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        workflow, messenger, _ = _make_workflow()
+        chat_id = "test-import-chat-2"
+        session.add(
+            Chat(
+                id=chat_id,
+                user_id="test-user",
+                bot_id="",
+                llm_model="openai/test-model",
+                system_prompt="prompt",
+            )
+        )
+        session.add(Message(chat_id=chat_id, role="user", content="hello"))
+        await session.commit()
+
+        with (
+            patch(
+                "mai_gram.bot.import_workflow.get_session",
+            ) as mock_get_session,
+            patch(
+                "mai_gram.core.replay.replay_imported_messages",
+                AsyncMock(side_effect=ValueError("bug")),
+            ),
+        ):
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await workflow._start_replay_task("tg-chat", chat_id)
+            task = workflow._replay_tasks["tg-chat"]
+            with pytest.raises(ValueError, match="bug"):
+                await task
+
+        assert "tg-chat" not in workflow._replay_tasks
+        cast("AsyncMock", messenger.send_message).assert_not_awaited()

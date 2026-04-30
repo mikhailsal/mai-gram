@@ -287,7 +287,7 @@ class ImportWorkflow:
 
         try:
             file_data = await self._messenger.download_file(document.file_id)
-        except Exception:
+        except (RuntimeError, OSError, asyncio.TimeoutError):
             logger.exception("Failed to download file %s", document.file_id)
             await self._send_import_outcome(
                 message.chat_id,
@@ -368,7 +368,7 @@ class ImportWorkflow:
                     tg_chat_id,
                     all_messages,
                 )
-            except Exception:
+            except (RuntimeError, OSError, asyncio.TimeoutError):
                 logger.exception("Replay task failed for chat %s", chat_id)
                 await self._messenger.send_message(
                     OutgoingMessage(
