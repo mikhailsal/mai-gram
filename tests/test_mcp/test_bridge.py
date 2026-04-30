@@ -489,14 +489,14 @@ class TestRunWithToolsStream:
         manager.register_server("sleep", server)
 
         delivered: list[str] = []
-        assistant_tool_calls: list[tuple[str, str]] = []
+        assistant_tool_calls: list[tuple[str, list[ToolCall]]] = []
         tool_results: list[str] = []
 
         async def on_intermediate_content(text: str) -> None:
             delivered.append(text)
 
-        async def on_assistant_tool_call(*, content: str, tool_calls_json: str) -> None:
-            assistant_tool_calls.append((content, tool_calls_json))
+        async def on_assistant_tool_call(*, content: str, tool_calls: list[ToolCall]) -> None:
+            assistant_tool_calls.append((content, tool_calls))
 
         async def on_tool_result(**kwargs: Any) -> None:
             tool_results.append(kwargs["content"])
@@ -516,7 +516,10 @@ class TestRunWithToolsStream:
         assert server.calls == [("sleep", {"duration": 0})]
         assert delivered == ["Working"]
         assert assistant_tool_calls == [
-            ("Working", '[{"id": "call_1", "name": "sleep", "arguments": "{\\"duration\\":0}"}]')
+            (
+                "Working",
+                [ToolCall(id="call_1", name="sleep", arguments='{"duration":0}')],
+            )
         ]
         assert tool_results == ["ok"]
         assert any(chunk.turn_complete for chunk in chunks)

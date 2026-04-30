@@ -55,8 +55,12 @@ class TestAssistantTurnBuilder:
         session.add(chat)
         await session.commit()
         now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
 
-        with patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as prompt_builder_cls:
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as prompt_builder_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
             prompt_builder_cls.return_value.build_context = AsyncMock(return_value=["ctx"])
 
             request = await builder.save_user_message_and_build_request(
@@ -82,14 +86,15 @@ class TestAssistantTurnBuilder:
         assert request.telegram_chat_id == "telegram-chat"
         assert request.extra_params == {"temperature": 0.2}
         build_mcp_manager.assert_called_once()
-        prompt_builder = prompt_builder_cls.return_value
-        prompt_builder.build_context.assert_awaited_once_with(
+        prompt_builder_cls.return_value.build_context.assert_awaited_once_with(
             chat,
             current_time=now,
             send_datetime=True,
             chat_timezone="UTC",
             cut_above_message_id=None,
         )
+        assert build_mcp_manager.call_args.args[2] is wiki_store
+        wiki_store.sync_from_disk.assert_awaited_once_with(chat.id)
 
     async def test_build_request_reuses_existing_chat_state(self, session: AsyncSession) -> None:
         builder = _make_builder()
@@ -97,8 +102,12 @@ class TestAssistantTurnBuilder:
         session.add(chat)
         session.add(Message(chat_id=chat.id, role="user", content="Stored question"))
         await session.commit()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
 
-        with patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as prompt_builder_cls:
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as prompt_builder_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
             prompt_builder_cls.return_value.build_context = AsyncMock(
                 return_value=[SimpleNamespace(role="user", content="Stored question")]
             )
@@ -115,3 +124,5 @@ class TestAssistantTurnBuilder:
         assert request.show_reasoning is True
         assert request.show_tool_calls is True
         prompt_builder_cls.return_value.build_context.assert_awaited_once()
+        assert builder._build_mcp_manager.call_args.args[2] is wiki_store
+        wiki_store.sync_from_disk.assert_awaited_once_with(chat.id)

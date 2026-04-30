@@ -113,6 +113,7 @@ class AssistantTurnBuilder:
             short_term_limit=self._short_term_limit,
             test_mode=self._test_mode,
         )
+        await wiki_store.sync_from_disk(chat.id)
         mcp_manager = self._build_mcp_manager(chat, message_store, wiki_store)
         llm_messages = await prompt_builder.build_context(
             chat,

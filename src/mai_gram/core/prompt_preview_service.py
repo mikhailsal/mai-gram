@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from mai_gram.config import Settings
     from mai_gram.llm.provider import ChatMessage, LLMProvider
+    from mai_gram.mcp_servers.external import ExternalMCPPool
     from mai_gram.mcp_servers.manager import RegisteredTool
 
 
@@ -40,6 +41,7 @@ class PromptPreviewService:
         wiki_context_limit: int = 20,
         short_term_limit: int = 500,
         test_mode: bool = True,
+        external_mcp_pool: ExternalMCPPool | None = None,
         mcp_manager_factory: MCPManagerFactory | None = None,
     ) -> None:
         self._llm = llm_provider
@@ -47,7 +49,10 @@ class PromptPreviewService:
         self._wiki_context_limit = wiki_context_limit
         self._short_term_limit = short_term_limit
         self._test_mode = test_mode
-        self._mcp_manager_factory = mcp_manager_factory or MCPManagerFactory(settings)
+        self._mcp_manager_factory = mcp_manager_factory or MCPManagerFactory(
+            settings,
+            external_mcp_pool=external_mcp_pool,
+        )
 
     async def build_preview(
         self,
@@ -70,6 +75,7 @@ class PromptPreviewService:
             short_term_limit=self._short_term_limit,
             test_mode=self._test_mode,
         )
+        await wiki_store.sync_from_disk(chat.id)
         context = await prompt_builder.build_context(
             chat,
             send_datetime=chat.send_datetime,

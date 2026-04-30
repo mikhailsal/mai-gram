@@ -41,11 +41,15 @@ class TestPromptPreviewService:
             return_value=[SimpleNamespace(name="wiki_search", description="Search wiki")]
         )
         factory = MagicMock(build_manager=MagicMock(return_value=mcp_manager))
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
 
-        with patch(
-            "mai_gram.core.prompt_preview_service.PromptBuilder",
-            return_value=prompt_builder,
-        ) as prompt_builder_cls:
+        with (
+            patch(
+                "mai_gram.core.prompt_preview_service.PromptBuilder",
+                return_value=prompt_builder,
+            ) as prompt_builder_cls,
+            patch("mai_gram.core.prompt_preview_service.WikiStore", return_value=wiki_store),
+        ):
             service = PromptPreviewService(
                 llm,
                 settings,
@@ -57,6 +61,8 @@ class TestPromptPreviewService:
 
         prompt_builder_cls.assert_called_once()
         factory.build_manager.assert_called_once()
+        assert factory.build_manager.call_args.args[2] is wiki_store
+        wiki_store.sync_from_disk.assert_awaited_once_with("test-user@test-bot")
         llm.count_tokens.assert_awaited_once_with(preview.context)
         assert preview.token_count == 42
         assert preview.context[0].content == "system prompt"
@@ -75,3 +81,43 @@ class TestPromptPreviewService:
 
         with pytest.raises(LookupError, match="missing-chat"):
             await service.build_preview(session, chat_id="missing-chat")
+
+    async def test_init_builds_mcp_factory_with_external_pool(self) -> None:
+        llm = MagicMock()
+        llm.count_tokens = AsyncMock(return_value=1)
+        settings = MagicMock()
+        session = MagicMock()
+        session.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=_make_chat()))
+        )
+        prompt_builder = MagicMock()
+        prompt_builder.build_context = AsyncMock(return_value=[SimpleNamespace(content="system")])
+        mcp_manager = MagicMock()
+        mcp_manager.list_all_tools = AsyncMock(return_value=[])
+        external_mcp_pool = MagicMock()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
+
+        with (
+            patch(
+                "mai_gram.core.prompt_preview_service.PromptBuilder",
+                return_value=prompt_builder,
+            ),
+            patch(
+                "mai_gram.core.prompt_preview_service.MCPManagerFactory",
+            ) as factory_cls,
+            patch("mai_gram.core.prompt_preview_service.WikiStore", return_value=wiki_store),
+        ):
+            factory = MagicMock(build_manager=MagicMock(return_value=mcp_manager))
+            factory_cls.return_value = factory
+
+            service = PromptPreviewService(
+                llm,
+                settings,
+                memory_data_dir="data",
+                external_mcp_pool=external_mcp_pool,
+            )
+            await service.build_preview(session, chat_id="test-user@test-bot")
+
+        factory_cls.assert_called_once_with(settings, external_mcp_pool=external_mcp_pool)
+        assert factory.build_manager.call_args.args[2] is wiki_store
+        wiki_store.sync_from_disk.assert_awaited_once_with("test-user@test-bot")

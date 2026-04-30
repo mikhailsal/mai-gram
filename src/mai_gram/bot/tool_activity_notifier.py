@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from mai_gram.bot.conversation_executor import AssistantTurnRequest
+    from mai_gram.llm.provider import ToolCall
     from mai_gram.messenger.base import Messenger
 
 
@@ -28,16 +29,16 @@ class ToolActivityNotifier:
         Callable[..., Awaitable[None]],
         Callable[..., Awaitable[None]],
     ]:
-        async def _on_tool_call_display(*, content: str, tool_calls_json: str) -> None:
+        async def _on_tool_call_display(*, content: str, tool_calls: list[ToolCall]) -> None:
             await request.message_store.save_message(
                 request.chat.id,
                 "assistant",
                 content or "",
-                tool_calls=tool_calls_json,
+                tool_calls=tool_calls,
                 timezone_name=request.timezone_name,
                 show_datetime=request.show_datetime,
             )
-            await self._maybe_send_tool_call_display(request, sent_msg_ids, tool_calls_json)
+            await self._maybe_send_tool_call_display(request, sent_msg_ids, tool_calls)
 
         async def _on_tool_result_display(
             *,
@@ -72,11 +73,11 @@ class ToolActivityNotifier:
         self,
         request: AssistantTurnRequest,
         sent_msg_ids: list[str],
-        tool_calls_json: str,
+        tool_calls: list[ToolCall],
     ) -> None:
         if not request.show_tool_calls:
             return
-        lines = self.tool_call_lines(tool_calls_json)
+        lines = self.tool_call_lines(tool_calls)
         if not lines:
             return
         result = await self._messenger.send_message(
@@ -86,15 +87,13 @@ class ToolActivityNotifier:
             sent_msg_ids.append(result.message_id)
 
     @staticmethod
-    def tool_call_lines(tool_calls_json: str) -> list[str]:
-        try:
-            calls = json.loads(tool_calls_json)
-        except (json.JSONDecodeError, TypeError):
+    def tool_call_lines(tool_calls: list[ToolCall]) -> list[str]:
+        if not tool_calls:
             return []
         lines: list[str] = []
-        for tool_call in calls:
-            name = tool_call.get("name", "?")
-            args = tool_call.get("arguments", "{}")
+        for tool_call in tool_calls:
+            name = tool_call.name
+            args = tool_call.arguments
             try:
                 args_dict = json.loads(args) if isinstance(args, str) else args
                 args_str = ", ".join(f"{key}={value!r}" for key, value in args_dict.items())

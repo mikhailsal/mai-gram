@@ -6,13 +6,13 @@ Wiki entries and raw message history are appended without summarization.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole, ToolCall
+from mai_gram.llm.provider import ChatMessage, LLMProvider, MessageRole
+from mai_gram.memory.messages import decode_persisted_message
 
 if TYPE_CHECKING:
     from mai_gram.db.models import Chat, KnowledgeEntry, Message
@@ -87,7 +87,6 @@ class PromptBuilder:
         return context
 
     async def _load_wiki_entries(self, chat_id: str) -> list[KnowledgeEntry]:
-        await self._wiki_store.sync_from_disk(chat_id)
         wiki_entries, _ = await self._wiki_store.list_entries_sorted(
             chat_id,
             sort_by="importance",
@@ -169,7 +168,9 @@ class PromptBuilder:
         flag, which was captured at the time the message was saved. This means
         toggling /datetime only affects future messages.
         """
-        if msg.role == "user":
+        persisted = decode_persisted_message(msg)
+
+        if persisted.role == MessageRole.USER:
             if getattr(msg, "show_datetime", False):
                 raw_tz = getattr(msg, "timezone", None) or getattr(self, "_chat_timezone", "UTC")
                 tz_name = str(raw_tz)
@@ -179,36 +180,23 @@ class PromptBuilder:
                     tz = timezone.utc
                     tz_name = "UTC"
                 ts = msg.timestamp.replace(tzinfo=timezone.utc).astimezone(tz)
-                content = f"[{ts.strftime('%Y-%m-%d %H:%M')} {tz_name}] {msg.content}"
+                content = f"[{ts.strftime('%Y-%m-%d %H:%M')} {tz_name}] {persisted.content}"
             else:
-                content = msg.content
+                content = persisted.content
             return ChatMessage(role=MessageRole.USER, content=content)
 
-        if msg.role == "tool":
+        if persisted.role == MessageRole.TOOL:
             return ChatMessage(
                 role=MessageRole.TOOL,
-                content=msg.content,
-                tool_call_id=msg.tool_call_id,
+                content=persisted.content,
+                tool_call_id=persisted.tool_call_id,
             )
-
-        content = msg.content
-        reasoning = msg.reasoning if msg.reasoning else None
-        tool_calls: list[ToolCall] | None = None
-        if msg.tool_calls:
-            try:
-                raw_calls = json.loads(msg.tool_calls)
-                tool_calls = [
-                    ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
-                    for tc in raw_calls
-                ]
-            except (json.JSONDecodeError, KeyError, TypeError):
-                logger.warning("Failed to parse tool_calls for message %s", msg.id)
 
         return ChatMessage(
             role=MessageRole.ASSISTANT,
-            content=content,
-            tool_calls=tool_calls,
-            reasoning=reasoning,
+            content=persisted.content,
+            tool_calls=persisted.tool_calls,
+            reasoning=persisted.reasoning,
         )
 
     def _build_system_prompt(

@@ -14,7 +14,7 @@ from mai_gram.bot.conversation_executor import (
 )
 from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.db.models import Chat
-from mai_gram.llm.provider import LLMProviderError
+from mai_gram.llm.provider import LLMProviderError, ToolCall
 from mai_gram.messenger.base import SendResult
 
 
@@ -153,7 +153,7 @@ class TestConversationExecutor:
 
         await tool_call_cb(
             content="",
-            tool_calls_json='[{"name":"wiki_create","arguments":{"title":"Test"}}]',
+            tool_calls=[ToolCall(id="call-1", name="wiki_create", arguments='{"title":"Test"}')],
         )
         await tool_result_cb(
             tool_call_id="call-1",
@@ -168,6 +168,9 @@ class TestConversationExecutor:
         assert save_message.await_count == 2
         roles = [call.args[1] for call in save_message.await_args_list]
         assert roles == ["assistant", "tool"]
+        assert save_message.await_args_list[0].kwargs["tool_calls"] == [
+            ToolCall(id="call-1", name="wiki_create", arguments='{"title":"Test"}')
+        ]
         assert sent_msg_ids == ["tool-call-id", "tool-result-id"]
 
     async def test_tool_display_helpers_cover_guard_and_fallback_branches(self) -> None:
@@ -179,7 +182,7 @@ class TestConversationExecutor:
         await executor._tool_activity._maybe_send_tool_call_display(
             hidden_request,
             sent_msg_ids,
-            "[]",
+            [],
         )
         await executor._tool_activity._maybe_send_tool_result_display(
             hidden_request,
@@ -191,12 +194,12 @@ class TestConversationExecutor:
         await executor._tool_activity._maybe_send_tool_call_display(
             visible_request,
             sent_msg_ids,
-            "[]",
+            [],
         )
 
         assert messenger.send_message.await_count == 0
         assert ToolActivityNotifier.tool_call_lines(
-            '[{"name":"wiki_create","arguments":"{bad json"}]'
+            [ToolCall(id="call-1", name="wiki_create", arguments="{bad json")]
         ) == ["🔧 wiki_create({bad json)"]
         assert (
             ToolActivityNotifier.tool_result_text(
@@ -488,7 +491,7 @@ class TestConversationExecutor:
             )
             is None
         )
-        assert ToolActivityNotifier.tool_call_lines("not-json") == []
+        assert ToolActivityNotifier.tool_call_lines([]) == []
         assert (
             ToolActivityNotifier.tool_result_text(
                 tool_name="wiki_create",

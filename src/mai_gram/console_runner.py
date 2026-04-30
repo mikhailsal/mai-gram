@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import func as sql_func
 from sqlalchemy import select
 
-from mai_gram.bot.handler import BotHandler
 from mai_gram.config import Settings, get_settings
 from mai_gram.console_cli import (
     ConsoleStateStore,
@@ -22,13 +21,17 @@ from mai_gram.console_cli import (
     resolve_user_id,
 )
 from mai_gram.console_output import print_debug_session_stats
+from mai_gram.core.adapter_runtime import (
+    build_bot_handler,
+    build_external_mcp_pool,
+    build_openrouter_provider,
+)
 from mai_gram.core.chat_inspection_service import ChatInspectionService
 from mai_gram.core.import_chat_service import import_into_existing_chat, parse_import_payload
 from mai_gram.core.prompt_preview_service import PromptPreviewService
 from mai_gram.db import close_db, get_session, init_db, run_migrations
 from mai_gram.db.models import Chat, Message
 from mai_gram.debug import LLMLoggerProvider
-from mai_gram.llm.openrouter import OpenRouterProvider
 from mai_gram.llm.provider import (
     ChatMessage,
     LLMAuthenticationError,
@@ -42,6 +45,9 @@ from mai_gram.messenger.console import ConsoleMessenger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from mai_gram.llm.openrouter import OpenRouterProvider
+    from mai_gram.mcp_servers.external import ExternalMCPPool
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +215,7 @@ async def _print_prompt(
     settings: Settings,
     *,
     test_mode: bool = True,
+    external_mcp_pool: ExternalMCPPool | None = None,
 ) -> None:
     async with get_session() as session:
         preview_service = PromptPreviewService(
@@ -216,6 +223,7 @@ async def _print_prompt(
             settings,
             memory_data_dir=data_dir,
             test_mode=test_mode,
+            external_mcp_pool=external_mcp_pool,
         )
         try:
             preview = await preview_service.build_preview(session, chat_id=chat_id)
@@ -330,10 +338,12 @@ async def _run(args: Any) -> None:
     await run_migrations(engine)
 
     llm: LLMProvider | None = None
+    external_mcp_pool: ExternalMCPPool | None = None
     try:
         if await _handle_console_inspection(args, chat_id, settings):
             return
 
+        external_mcp_pool = build_external_mcp_pool(settings)
         llm, logger_provider = _build_cli_llm(args, chat_id, settings)
 
         if args.show_prompt:
@@ -344,6 +354,7 @@ async def _run(args: Any) -> None:
                 llm,
                 settings,
                 test_mode=test_mode,
+                external_mcp_pool=external_mcp_pool,
             )
             return
 
@@ -353,11 +364,14 @@ async def _run(args: Any) -> None:
             user_id=user_id,
             llm=llm,
             settings=settings,
+            external_mcp_pool=external_mcp_pool,
         )
 
         if logger_provider is not None:
             print_debug_session_stats(logger_provider.get_session_stats())
     finally:
+        if external_mcp_pool is not None:
+            await external_mcp_pool.stop_all()
         if llm is not None:
             await llm.close()
         await close_db()
@@ -393,11 +407,7 @@ def _build_cli_llm(
         raise SystemExit("Error: OPENROUTER_API_KEY is required.")
 
     if settings.openrouter_api_key:
-        llm_base: OpenRouterProvider | _OfflineCLIProvider = OpenRouterProvider(
-            api_key=settings.openrouter_api_key,
-            default_model=settings.llm_model,
-            base_url=settings.openrouter_base_url,
-        )
+        llm_base: OpenRouterProvider | _OfflineCLIProvider = build_openrouter_provider(settings)
     else:
         llm_base = _OfflineCLIProvider()
 
@@ -419,16 +429,15 @@ async def _dispatch_console_runtime(
     user_id: str,
     llm: LLMProvider,
     settings: Settings,
+    external_mcp_pool: ExternalMCPPool | None = None,
 ) -> ConsoleMessenger:
     messenger = ConsoleMessenger(stream_debug=args.stream_debug)
-    BotHandler(
+    build_bot_handler(
         messenger,
         llm,
-        memory_data_dir=settings.memory_data_dir,
-        wiki_context_limit=settings.wiki_context_limit,
-        short_term_limit=settings.short_term_limit,
-        tool_max_iterations=settings.tool_max_iterations,
+        settings,
         test_mode=not args.real,
+        external_mcp_pool=external_mcp_pool,
     )
 
     if args.start:

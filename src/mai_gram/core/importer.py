@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from mai_gram.llm.provider import MessageRole, ToolCall
+
 if TYPE_CHECKING:
     from mai_gram.memory.messages import MessageStore
 
@@ -34,12 +36,12 @@ def _extract_reasoning_text(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def _normalize_tool_calls(entry: dict[str, Any], *, entry_index: int) -> str | None:
+def _normalize_tool_calls(entry: dict[str, Any], *, entry_index: int) -> list[ToolCall] | None:
     tool_calls_raw = entry.get("tool_calls")
     if not isinstance(tool_calls_raw, list) or not tool_calls_raw:
         return None
 
-    normalized_tool_calls: list[dict[str, Any]] = []
+    normalized_tool_calls: list[ToolCall] = []
     for tool_call in tool_calls_raw:
         if not isinstance(tool_call, dict):
             continue
@@ -48,17 +50,21 @@ def _normalize_tool_calls(entry: dict[str, Any], *, entry_index: int) -> str | N
         if not isinstance(function_payload, dict):
             continue
 
-        normalized_tool_calls.append(
-            {
-                "id": tool_call.get("id", f"import_{entry_index}"),
-                "name": function_payload.get("name", "unknown"),
-                "arguments": function_payload.get("arguments", "{}"),
-            }
-        )
+        tool_call_id = tool_call.get("id", f"import_{entry_index}")
+        name = function_payload.get("name", "unknown")
+        arguments = function_payload.get("arguments", "{}")
+        if not isinstance(tool_call_id, str):
+            tool_call_id = str(tool_call_id)
+        if not isinstance(name, str):
+            name = str(name)
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+
+        normalized_tool_calls.append(ToolCall(id=tool_call_id, name=name, arguments=arguments))
 
     if not normalized_tool_calls:
         return None
-    return json.dumps(normalized_tool_calls)
+    return normalized_tool_calls
 
 
 def _normalize_tool_call_id(entry: dict[str, Any]) -> str | None:
@@ -94,7 +100,7 @@ def _build_import_message_payload(
     timestamp: datetime,
 ) -> dict[str, Any]:
     return {
-        "role": entry["role"],
+        "role": MessageRole(entry["role"]),
         "content": _normalize_import_content(entry.get("content", "")),
         "timestamp": timestamp,
         "tool_calls": _normalize_tool_calls(entry, entry_index=entry_index),

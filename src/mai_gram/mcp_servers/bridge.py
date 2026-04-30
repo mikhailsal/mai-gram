@@ -30,9 +30,6 @@ from mai_gram.mcp_servers.bridge_support import (
 from mai_gram.mcp_servers.bridge_support import (
     openai_tool_call_to_mcp as openai_tool_call_to_mcp,
 )
-from mai_gram.mcp_servers.bridge_support import (
-    serialize_tool_calls as serialize_tool_calls,
-)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable

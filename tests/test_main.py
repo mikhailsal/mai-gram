@@ -195,11 +195,16 @@ def test_build_external_mcp_pool_handles_empty_and_configured(monkeypatch) -> No
             super().__init__(configs)
             created_configs.append(configs)
 
-    monkeypatch.setattr(main, "ExternalMCPPool", _CreatedPool)
+    monkeypatch.setattr(main, "shared_build_external_mcp_pool", lambda settings: None)
 
     assert main._build_external_mcp_pool(FakeSettings(["token-1"])) is None
 
     settings = FakeSettings(["token-1"], external_mcp_config={"wiki": {"url": "http://mcp"}})
+    monkeypatch.setattr(
+        main,
+        "shared_build_external_mcp_pool",
+        lambda current_settings: _CreatedPool(current_settings.get_external_mcp_config()),
+    )
     pool = main._build_external_mcp_pool(settings)
 
     assert isinstance(pool, _CreatedPool)
@@ -227,7 +232,7 @@ async def test_start_messengers_without_bot_config(monkeypatch) -> None:
     monkeypatch.setattr(main, "TelegramMessenger", FakeMessenger)
     monkeypatch.setattr(
         main,
-        "BotHandler",
+        "build_bot_handler",
         lambda *args, **kwargs: created_handlers.append(kwargs.get("bot_config")),
     )
 
@@ -277,10 +282,18 @@ async def test_startup_initializes_runtime_and_shutdown_cleans_resources(monkeyp
     monkeypatch.setattr(main, "init_db", fake_init_db)
     monkeypatch.setattr(main, "run_migrations", fake_run_migrations)
     monkeypatch.setattr(main, "close_db", fake_close_db)
-    monkeypatch.setattr(main, "OpenRouterProvider", FakeProvider)
-    monkeypatch.setattr(main, "ExternalMCPPool", FakePool)
+    monkeypatch.setattr(
+        main,
+        "build_openrouter_provider",
+        lambda current_settings: FakeProvider(
+            api_key=current_settings.openrouter_api_key,
+            default_model=current_settings.llm_model,
+            base_url=current_settings.openrouter_base_url,
+        ),
+    )
+    monkeypatch.setattr(main, "shared_build_external_mcp_pool", FakePool)
     monkeypatch.setattr(main, "TelegramMessenger", FakeMessenger)
-    monkeypatch.setattr(main, "BotHandler", fake_bot_handler)
+    monkeypatch.setattr(main, "build_bot_handler", fake_bot_handler)
     monkeypatch.setattr(main, "_watch_config", fake_watch_config)
 
     await main.startup(runtime)

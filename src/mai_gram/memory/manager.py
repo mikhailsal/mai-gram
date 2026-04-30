@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from mai_gram.db.models import KnowledgeEntry, Message
+    from mai_gram.llm.provider import MessageRole, ToolCall
     from mai_gram.memory.knowledge_base import WikiStore
     from mai_gram.memory.messages import MessageStore
 
@@ -30,11 +31,11 @@ class MemoryManager:
     async def save_message(
         self,
         chat_id: str,
-        role: str,
+        role: str | MessageRole,
         content: str,
         *,
         timestamp: datetime | None = None,
-        tool_calls: str | None = None,
+        tool_calls: str | list[ToolCall] | None = None,
         tool_call_id: str | None = None,
         timezone_name: str = "UTC",
     ) -> Message:

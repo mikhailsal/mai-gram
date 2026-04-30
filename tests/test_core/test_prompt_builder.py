@@ -55,7 +55,7 @@ async def test_build_context_loads_history_and_prepends_system_prompt() -> None:
 
     context = await builder.build_context(chat, cut_above_message_id=77)
 
-    wiki_store.sync_from_disk.assert_awaited_once_with("test-chat")
+    wiki_store.sync_from_disk.assert_not_called()
     message_store.get_recent.assert_awaited_once_with(
         "test-chat",
         limit=500,

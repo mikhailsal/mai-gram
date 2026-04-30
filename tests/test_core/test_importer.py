@@ -18,7 +18,8 @@ from mai_gram.core.importer import (
     save_imported_messages,
 )
 from mai_gram.db.models import Chat, Message
-from mai_gram.memory.messages import MessageStore
+from mai_gram.llm.provider import ToolCall
+from mai_gram.memory.messages import MessageStore, decode_persisted_message
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,7 +239,39 @@ class TestSaveImportedMessages:
         saved = list(result.scalars().all())
         assistant_msg = next(m for m in saved if m.role == "assistant")
         assert assistant_msg.tool_calls is not None
-        assert "wiki_create" in assistant_msg.tool_calls
+        assert decode_persisted_message(assistant_msg).tool_calls == [
+            ToolCall(id="tc1", name="wiki_create", arguments='{"key":"test"}')
+        ]
+
+    async def test_normalizes_non_string_tool_arguments(
+        self,
+        session: AsyncSession,
+        chat: Chat,
+    ) -> None:
+        messages_data = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "function": {
+                            "name": "wiki_create",
+                            "arguments": {"key": "test"},
+                        },
+                    }
+                ],
+            }
+        ]
+        store = MessageStore(session)
+
+        await save_imported_messages(chat.id, messages_data, store)
+
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        saved = list(result.scalars().all())
+        assert decode_persisted_message(saved[0]).tool_calls == [
+            ToolCall(id="tc1", name="wiki_create", arguments='{"key": "test"}')
+        ]
 
     async def test_saves_reasoning(self, session: AsyncSession, chat: Chat) -> None:
         messages_data = [

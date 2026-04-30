@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from mai_gram.db.models import Chat
-from mai_gram.memory.messages import MessageStore
+from mai_gram.llm.provider import MessageRole, ToolCall
+from mai_gram.memory.messages import (
+    MessageStore,
+    decode_persisted_message,
+    parse_persisted_tool_calls,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,11 +60,38 @@ class TestSaveMessage:
     async def test_save_with_tool_calls(self, store: MessageStore, chat: Chat) -> None:
         msg = await store.save_message(
             chat.id,
-            "assistant",
+            MessageRole.ASSISTANT,
             "Checking...",
-            tool_calls='[{"id":"tc1","name":"search","arguments":"{}"}]',
+            tool_calls=[ToolCall(id="tc1", name="search", arguments="{}")],
         )
         assert msg.tool_calls is not None
+        assert "search" in msg.tool_calls
+
+    async def test_decode_persisted_message_round_trips_tool_calls(
+        self,
+        store: MessageStore,
+        chat: Chat,
+    ) -> None:
+        saved = await store.save_message(
+            chat.id,
+            MessageRole.ASSISTANT,
+            "Checking...",
+            tool_calls=[ToolCall(id="tc1", name="search", arguments='{"q":"cats"}')],
+            reasoning="thinking",
+        )
+
+        decoded = decode_persisted_message(saved)
+
+        assert decoded.role == MessageRole.ASSISTANT
+        assert decoded.tool_calls == [ToolCall(id="tc1", name="search", arguments='{"q":"cats"}')]
+        assert decoded.reasoning == "thinking"
+
+    def test_parse_persisted_tool_calls_returns_none_for_invalid_json(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        assert parse_persisted_tool_calls("not-json", message_id=7) is None
+        assert "Failed to parse tool_calls for message 7" in caplog.text
 
 
 class TestGetRecent:

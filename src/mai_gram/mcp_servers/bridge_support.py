@@ -159,13 +159,6 @@ def mcp_result_to_openai(result: Any) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
-def serialize_tool_calls(tool_calls: list[ToolCall]) -> str:
-    return json.dumps(
-        [{"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in tool_calls],
-        ensure_ascii=False,
-    )
-
-
 async def _maybe_await(result: Awaitable[None] | None) -> None:
     if inspect.isawaitable(result):
         await result
@@ -191,7 +184,7 @@ async def _emit_assistant_tool_call(
     await _maybe_await(
         callback(
             content=content,
-            tool_calls_json=serialize_tool_calls(tool_calls),
+            tool_calls=tool_calls,
         )
     )
 

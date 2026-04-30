@@ -2,15 +2,107 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, asc, desc, func, select
 
 from mai_gram.db.models import Message
+from mai_gram.llm.provider import MessageRole, ToolCall
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PersistedMessagePayload:
+    """Typed view of a stored message row."""
+
+    role: MessageRole
+    content: str
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    reasoning: str | None = None
+
+
+def _serialize_tool_calls(tool_calls: str | list[ToolCall] | None) -> str | None:
+    if tool_calls is None or isinstance(tool_calls, str):
+        return tool_calls
+    return json.dumps(
+        [
+            {
+                "id": tool_call.id,
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+            }
+            for tool_call in tool_calls
+        ],
+        ensure_ascii=False,
+    )
+
+
+def parse_persisted_tool_calls(
+    tool_calls: str | None,
+    *,
+    message_id: int | None = None,
+) -> list[ToolCall] | None:
+    if not tool_calls:
+        return None
+
+    try:
+        raw_calls = json.loads(tool_calls)
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse tool_calls for message %s", message_id)
+        return None
+
+    if not isinstance(raw_calls, list):
+        logger.warning("Failed to parse tool_calls for message %s", message_id)
+        return None
+
+    parsed_calls: list[ToolCall] = []
+    for raw_call in raw_calls:
+        if not isinstance(raw_call, dict):
+            logger.warning("Failed to parse tool_calls for message %s", message_id)
+            return None
+
+        tool_call_id = raw_call.get("id")
+        name = raw_call.get("name")
+        arguments = raw_call.get("arguments")
+        if not (
+            isinstance(tool_call_id, str) and isinstance(name, str) and isinstance(arguments, str)
+        ):
+            logger.warning("Failed to parse tool_calls for message %s", message_id)
+            return None
+        parsed_calls.append(ToolCall(id=tool_call_id, name=name, arguments=arguments))
+
+    return parsed_calls or None
+
+
+def _persisted_role_value(role: str | MessageRole) -> str:
+    if isinstance(role, MessageRole):
+        return role.value
+    return MessageRole(role).value
+
+
+def decode_persisted_message(message: Message) -> PersistedMessagePayload:
+    try:
+        role = MessageRole(message.role)
+    except ValueError:
+        logger.warning("Unknown stored role %r for message %s", message.role, message.id)
+        role = MessageRole.ASSISTANT
+
+    return PersistedMessagePayload(
+        role=role,
+        content=message.content,
+        tool_calls=parse_persisted_tool_calls(message.tool_calls, message_id=message.id),
+        tool_call_id=message.tool_call_id,
+        reasoning=message.reasoning or None,
+    )
 
 
 def _escape_like_pattern(query: str) -> str:
@@ -34,11 +126,11 @@ class MessageStore:
     async def save_message(
         self,
         chat_id: str,
-        role: str,
+        role: str | MessageRole,
         content: str,
         *,
         timestamp: datetime | None = None,
-        tool_calls: str | None = None,
+        tool_calls: str | list[ToolCall] | None = None,
         tool_call_id: str | None = None,
         reasoning: str | None = None,
         timezone_name: str = "UTC",
@@ -64,9 +156,9 @@ class MessageStore:
 
         message = Message(
             chat_id=chat_id,
-            role=role,
+            role=_persisted_role_value(role),
             content=content,
-            tool_calls=tool_calls,
+            tool_calls=_serialize_tool_calls(tool_calls),
             tool_call_id=tool_call_id,
             reasoning=reasoning,
             timezone=timezone_name,

@@ -15,14 +15,22 @@ import signal
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mai_gram.bot.handler import BotHandler
 from mai_gram.config import Settings, get_settings
+from mai_gram.core.adapter_runtime import (
+    build_bot_handler,
+    build_openrouter_provider,
+)
+from mai_gram.core.adapter_runtime import (
+    build_external_mcp_pool as shared_build_external_mcp_pool,
+)
 from mai_gram.db import close_db, init_db, run_migrations
-from mai_gram.llm.openrouter import OpenRouterProvider
-from mai_gram.mcp_servers.external import ExternalMCPPool
 from mai_gram.messenger.telegram import TelegramMessenger
+
+if TYPE_CHECKING:
+    from mai_gram.llm.openrouter import OpenRouterProvider
+    from mai_gram.mcp_servers.external import ExternalMCPPool
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +114,10 @@ def _get_bot_tokens(settings: Settings) -> list[str]:
 
 def _build_external_mcp_pool(settings: Settings) -> ExternalMCPPool | None:
     external_mcp_configs = settings.get_external_mcp_config()
-    if not external_mcp_configs:
+    pool = shared_build_external_mcp_pool(settings)
+    if pool is None:
         return None
 
-    pool = ExternalMCPPool(external_mcp_configs)
     logger.info(
         "External MCP pool: %d server(s) configured: %s",
         len(external_mcp_configs),
@@ -130,13 +138,11 @@ async def _start_messengers(runtime: AppRuntime, bot_tokens: list[str]) -> None:
         messenger = TelegramMessenger(token)
         bot_config = settings.get_bot_config_by_token(token) if bot_configs else None
 
-        _handler = BotHandler(
+        build_bot_handler(
             messenger,
             llm_provider,
-            memory_data_dir=settings.memory_data_dir,
-            wiki_context_limit=settings.wiki_context_limit,
-            short_term_limit=settings.short_term_limit,
-            tool_max_iterations=settings.tool_max_iterations,
+            settings,
+            test_mode=False,
             external_mcp_pool=runtime.external_mcp_pool,
             bot_config=bot_config,
         )
@@ -162,11 +168,7 @@ async def startup(runtime: AppRuntime) -> None:
     await run_migrations(engine)
     logger.info("Database ready")
 
-    runtime.llm_provider = OpenRouterProvider(
-        api_key=settings.openrouter_api_key,
-        default_model=settings.llm_model,
-        base_url=settings.openrouter_base_url,
-    )
+    runtime.llm_provider = build_openrouter_provider(settings)
     logger.info(
         "LLM provider initialized (model: %s, base_url: %s)",
         settings.llm_model,
