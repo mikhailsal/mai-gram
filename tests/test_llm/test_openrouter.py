@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import PropertyMock, patch
 
 import httpx
 import pytest
@@ -465,6 +466,54 @@ class TestHttpErrorMapping:
         provider = await self._make_provider_with_status(422)
         with pytest.raises(LLMProviderError, match="Request failed"):
             await provider.generate(sample_messages)
+        await provider.close()
+
+    async def test_malformed_json_response_extracts_text(
+        self, sample_messages: list[ChatMessage]
+    ) -> None:
+        """When error response is not JSON, use text content."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(500, text="Internal Server Error")
+        )
+        provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
+        provider._client = httpx.AsyncClient(
+            transport=transport,
+            base_url=provider._base_url,
+            headers=provider._client.headers,
+        )
+
+        with pytest.raises(LLMProviderError, match="Internal Server Error"):
+            await provider.generate(sample_messages)
+        await provider.close()
+
+    async def test_unexpected_exception_in_error_handling_propagates(
+        self, sample_messages: list[ChatMessage]
+    ) -> None:
+        """Truly unexpected exceptions in error handling should propagate."""
+        provider = OpenRouterProvider(api_key=API_KEY, max_retries=0)
+
+        with (
+            patch.object(
+                httpx.Response,
+                "json",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            patch.object(
+                httpx.Response,
+                "text",
+                PropertyMock(side_effect=RuntimeError("unexpected")),
+            ),
+        ):
+            transport = httpx.MockTransport(
+                lambda request: httpx.Response(500, json={"error": "test"})
+            )
+            provider._client = httpx.AsyncClient(
+                transport=transport,
+                base_url=provider._base_url,
+                headers=provider._client.headers,
+            )
+            with pytest.raises(RuntimeError, match="unexpected"):
+                await provider.generate(sample_messages)
         await provider.close()
 
 

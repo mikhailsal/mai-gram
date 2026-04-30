@@ -8,6 +8,7 @@ Implements the ``LLMProvider`` interface using the OpenRouter service
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -461,12 +462,12 @@ class OpenRouterProvider(LLMProvider):
             body = response.json()
             error = body.get("error", {})
             msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        except Exception:
+        except (ValueError, json.JSONDecodeError):
             try:
                 if response.text:
                     msg = response.text[:500]
-            except Exception as exc:
-                logger.debug("Failed to read error response body text", exc_info=exc)
+            except (UnicodeDecodeError, AttributeError):
+                logger.debug("Failed to read error response body text")
 
         if status == 401:
             raise LLMAuthenticationError(f"Authentication failed: {msg}")
