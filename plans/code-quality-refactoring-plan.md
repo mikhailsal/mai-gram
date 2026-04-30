@@ -30,7 +30,7 @@ The current codebase already has useful guardrails: Ruff, strict mypy, a pre-com
 - [x] Make mypy strictness explicit instead of relying only on `strict = true`.
   Add `warn_return_any`, `warn_unused_configs`, `disallow_untyped_defs`, `disallow_incomplete_defs`, `check_untyped_defs`, and `no_implicit_optional` as explicit policy, mirroring `ai-proxy2` so the intended bar remains visible even if mypy changes the meaning of `strict` later.
 
-- [ ] Move toward the `ai-proxy2` coverage posture.
+- [x] Move toward the `ai-proxy2` coverage posture.
   `ai-proxy2` enforces `95%` coverage with minimal omissions. `mai-gram` should not jump straight to `95%` while major modules are still monoliths, but it should first shrink the omit list, then raise `fail_under` in steps until it reaches `95%`.
 
 - [x] Add a repository-owned pre-commit quality gate for maintainability, not only correctness.
@@ -72,7 +72,7 @@ The repository now has an explicit mypy policy and a tracked code-size audit wir
 
 ### 2. Decompose `BotHandler` into transport-facing dispatch plus application services
 
-- [ ] Split `BotHandler` into focused services and reduce the class below the size-limit threshold.
+- [x] Split `BotHandler` into focused services and reduce the class below the size-limit threshold.
 
 Issue:
 
@@ -137,7 +137,7 @@ Ordinary conversation and regenerate now share a dedicated `ConversationExecutor
 
 ### 4. Create shared application services for CLI and Telegram adapters
 
-- [ ] Remove duplicated business logic between `console_runner.py` and the Telegram runtime.
+- [x] Remove duplicated business logic between `console_runner.py` and the Telegram runtime.
 
 Issue:
 
@@ -170,7 +170,7 @@ The CLI history and wiki inspection paths now also delegate their DB/wiki-store 
 
 ### 5. Tighten the messenger boundary and stop leaking Telegram details into core logic
 
-- [ ] Make transport abstractions real by moving Telegram-specific behavior behind the messenger adapter.
+- [x] Make transport abstractions real by moving Telegram-specific behavior behind the messenger adapter.
 
 Issue:
 
@@ -201,7 +201,7 @@ Inline keyboard construction for setup, import, resend, conversation follow-up a
 
 ### 6. Split configuration loading into typed loaders and remove global singleton behavior from runtime code
 
-- [ ] Replace the overloaded `Settings` singleton with explicit configuration and runtime composition.
+- [x] Replace the overloaded `Settings` singleton with explicit configuration and runtime composition.
 
 Issue:
 
@@ -234,7 +234,7 @@ Status:
 
 ### 7. Replace weakly typed MCP and LLM boundaries with validated domain models
 
-- [ ] Remove `dict[str, Any]` and ad hoc JSON handling from the core tool-calling path.
+- [x] Remove `dict[str, Any]` and ad hoc JSON handling from the core tool-calling path.
 
 Issue:
 
@@ -266,7 +266,7 @@ Status:
 
 ### 8. Normalize persistence semantics and make wiki synchronization explicit
 
-- [ ] Align database types and workflow semantics with the actual domain model.
+- [x] Align database types and workflow semantics with the actual domain model.
 
 Issue:
 
@@ -299,7 +299,7 @@ The latest wiki-importance pass now normalizes `WikiStore` and `ChatInspectionSe
 
 ### 9. Reduce broad exception handling and centralize retry and error translation policy
 
-- [ ] Replace catch-all exception blocks with typed failure handling and shared retry policy.
+- [x] Replace catch-all exception blocks with typed failure handling and shared retry policy.
 
 Issue:
 
@@ -339,7 +339,7 @@ The latest openrouter pass narrows HTTP error response parsing failure handling 
 
 ### 10. Decide the fate of the summarization subsystem and stop carrying unowned complexity
 
-- [ ] Either fully integrate or explicitly quarantine the large summarization codepath.
+- [x] Either fully integrate or explicitly quarantine the large summarization codepath.
 
 Issue:
 
@@ -366,7 +366,7 @@ The module should either pass the same quality gates as the rest of the project 
 
 ### 11. Rebuild the coverage strategy around services and shrink the omit list
 
-- [ ] Move test coverage onto the refactoring seams so the omit list can be reduced safely.
+- [x] Move test coverage onto the refactoring seams so the omit list can be reduced safely.
 
 Issue:
 
@@ -406,11 +406,11 @@ Direct unit coverage now exercises `src/mai_gram/core/prompt_builder.py`, `src/m
 
 ## Definition Of Done
 
-- [ ] No production Python file exceeds the adopted line-limit policy unless there is a documented exception.
-- [ ] No production Python function exceeds the adopted function-length limit unless there is a documented exception.
-- [ ] Ruff and mypy settings are at least as explicit as the `ai-proxy2` backend baseline.
-- [ ] Coverage omissions no longer include the main orchestration paths without a documented architectural reason.
+- [x] No production Python file exceeds the adopted line-limit policy unless there is a documented exception.
+- [x] No production Python function exceeds the adopted function-length limit unless there is a documented exception.
+- [x] Ruff and mypy settings are at least as explicit as the `ai-proxy2` backend baseline.
+- [x] Coverage omissions no longer include the main orchestration paths without a documented architectural reason.
 - [x] Ordinary conversation and regenerate share one canonical execution pipeline.
-- [ ] CLI and Telegram adapters call the same core services for shared behavior.
-- [ ] Core workflows no longer depend on raw Telegram objects or `dict[str, Any]` payloads when a typed domain model is available.
-- [ ] Wiki synchronization and summarization behavior are explicit, owned, and testable.
+- [x] CLI and Telegram adapters call the same core services for shared behavior.
+- [x] Core workflows no longer depend on raw Telegram objects or `dict[str, Any]` payloads when a typed domain model is available.
+- [x] Wiki synchronization and summarization behavior are explicit, owned, and testable.
