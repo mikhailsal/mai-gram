@@ -234,10 +234,22 @@ async def test_external_helper_methods_and_pool_management(
     assert server._decode_matching_response(b"not-json", 1) is None
     assert server._decode_matching_response(json.dumps([1]).encode("utf-8"), 1) is None
     assert server._decode_matching_response(json.dumps({"id": 2}).encode("utf-8"), 1) is None
-    assert server._extract_result({"result": "not-a-dict"}) == {}
+
+    parsed = server._decode_matching_response(
+        json.dumps({"id": 1, "result": "not-a-dict"}).encode("utf-8"),
+        1,
+    )
+    assert parsed is not None
+    assert parsed.result == {}
+    assert server._extract_result(parsed) == {}
 
     with pytest.raises(RuntimeError, match="boom"):
-        server._extract_result({"error": {"message": "boom"}})
+        error_response = server._decode_matching_response(
+            json.dumps({"id": 1, "error": {"message": "boom"}}).encode("utf-8"),
+            1,
+        )
+        assert error_response is not None
+        server._extract_result(error_response)
 
     await server._send_notification("notifications/test", {})
 
@@ -251,7 +263,7 @@ async def test_external_helper_methods_and_pool_management(
 
     pool = ExternalMCPPool(
         {
-            "one": {"command": "cmd", "args": ["--ok"], "env": {"ENV": "1"}},
+            "one": {"command": "cmd", "args": ["--ok", 7], "env": {"ENV": 1}},
             "two": {"command": ""},
         }
     )

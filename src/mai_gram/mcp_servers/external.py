@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Any
 
 from mai_gram.mcp_servers.messages_server import MCPToolSpec
@@ -18,6 +19,62 @@ from mai_gram.mcp_servers.messages_server import MCPToolSpec
 logger = logging.getLogger(__name__)
 
 _JSONRPC_VERSION = "2.0"
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonRpcError:
+    message: str
+
+    @classmethod
+    def from_payload(cls, payload: object) -> _JsonRpcError:
+        message = payload.get("message", payload) if isinstance(payload, dict) else payload
+        return cls(message=str(message))
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonRpcResponse:
+    request_id: int
+    result: dict[str, Any] = field(default_factory=dict)
+    error: _JsonRpcError | None = None
+
+    @classmethod
+    def parse(cls, raw_line: bytes, request_id: int) -> _JsonRpcResponse | None:
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(payload, dict) or payload.get("id") != request_id:
+            return None
+
+        result_payload = payload.get("result", {})
+        result = result_payload if isinstance(result_payload, dict) else {}
+        error_payload = payload.get("error")
+        error = _JsonRpcError.from_payload(error_payload) if error_payload is not None else None
+        return cls(request_id=request_id, result=result, error=error)
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalServerConfig:
+    command: str
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] | None = None
+
+    @classmethod
+    def from_mapping(cls, config: dict[str, Any]) -> _ExternalServerConfig | None:
+        command = config.get("command", "")
+        if not isinstance(command, str) or not command:
+            return None
+
+        args_raw = config.get("args", [])
+        args = [str(arg) for arg in args_raw] if isinstance(args_raw, list) else []
+
+        env_raw = config.get("env")
+        env = None
+        if isinstance(env_raw, dict):
+            env = {str(key): str(value) for key, value in env_raw.items()}
+
+        return cls(command=command, args=args, env=env)
 
 
 class ExternalMCPServer:
@@ -227,24 +284,13 @@ class ExternalMCPServer:
         return ""
 
     @staticmethod
-    def _decode_matching_response(raw_line: bytes, request_id: int) -> dict[str, Any] | None:
-        try:
-            response = json.loads(raw_line)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(response, dict) or "id" not in response:
-            return None
-        if response.get("id") != request_id:
-            return None
-        return response
+    def _decode_matching_response(raw_line: bytes, request_id: int) -> _JsonRpcResponse | None:
+        return _JsonRpcResponse.parse(raw_line, request_id)
 
-    def _extract_result(self, response: dict[str, Any]) -> dict[str, Any]:
-        if "error" in response:
-            err = response["error"]
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            raise RuntimeError(f"MCP server '{self._name}' error: {msg}")
-        result = response.get("result", {})
-        return result if isinstance(result, dict) else {}
+    def _extract_result(self, response: _JsonRpcResponse) -> dict[str, Any]:
+        if response.error is not None:
+            raise RuntimeError(f"MCP server '{self._name}' error: {response.error.message}")
+        return response.result
 
     async def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no response expected)."""
@@ -268,16 +314,15 @@ class ExternalMCPPool:
     def __init__(self, server_configs: dict[str, dict[str, Any]]) -> None:
         self._servers: dict[str, ExternalMCPServer] = {}
         for name, config in server_configs.items():
-            command = config.get("command", "")
-            args = config.get("args", [])
-            env = config.get("env")
-            if command:
-                self._servers[name] = ExternalMCPServer(
-                    name=name,
-                    command=command,
-                    args=args,
-                    env=env,
-                )
+            parsed_config = _ExternalServerConfig.from_mapping(config)
+            if parsed_config is None:
+                continue
+            self._servers[name] = ExternalMCPServer(
+                name=name,
+                command=parsed_config.command,
+                args=parsed_config.args,
+                env=parsed_config.env,
+            )
 
     @property
     def server_names(self) -> list[str]:
