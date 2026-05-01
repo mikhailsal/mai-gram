@@ -100,8 +100,8 @@ test: ## Run all tests
 test-v: ## Run all tests with verbose output
 	pytest -v
 
-test-cov: ## Run tests with coverage report (enforces 90% minimum)
-	pytest --cov=mai_gram --cov-report=term-missing --cov-config=pyproject.toml --cov-fail-under=90
+test-cov: ## Run tests with coverage report (enforces minimum from pyproject.toml)
+	pytest --cov=mai_gram --cov-report=term-missing --cov-config=pyproject.toml
 
 test-cov-html: ## Run tests with HTML coverage report
 	pytest --cov=mai_gram --cov-report=html --cov-config=pyproject.toml

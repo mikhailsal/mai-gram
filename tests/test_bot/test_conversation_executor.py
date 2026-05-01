@@ -417,6 +417,23 @@ class TestConversationExecutor:
         assert placeholder == "fallback-id"
         assert messenger.send_message.await_count == 2
 
+    async def test_send_or_edit_placeholder_returns_none_when_both_edits_fail(self) -> None:
+        executor, messenger, _ = _make_executor()
+        request = _make_request()
+        messenger.edit_message = AsyncMock(
+            return_value=SendResult(success=False, error="permanently broken")
+        )
+
+        placeholder = await executor._send_or_edit_placeholder(
+            request,
+            placeholder_msg_id="dead-placeholder",
+            live_text="<b>html</b>",
+            fallback="plain text",
+        )
+
+        assert placeholder is None
+        assert messenger.edit_message.await_count == 2
+
     async def test_finalize_response_updates_existing_placeholder(self) -> None:
         executor, _, renderer = _make_executor()
         request = _make_request(show_reasoning=True)

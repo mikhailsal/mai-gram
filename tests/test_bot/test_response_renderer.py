@@ -243,6 +243,126 @@ class TestResponseRenderer:
         renderer._edit_part.assert_awaited_once_with("test-chat", "placeholder-1", "HEADER")
         renderer._send_part.assert_awaited_once_with("test-chat", current_content[:20])
 
+    async def test_commit_overflow_falls_back_to_send_when_header_edit_fails(self) -> None:
+        renderer, messenger, _ = _make_renderer()
+        messenger.max_message_length = 220
+        renderer._edit_part = AsyncMock(return_value=False)
+        renderer._send_part = AsyncMock(side_effect=["header-sent", "sent-1"])
+        messenger.send_message = AsyncMock(
+            return_value=SendResult(success=True, message_id="placeholder-2")
+        )
+        sent_msg_ids: list[str] = []
+        content = "12345678901234567890123456789012345"
+
+        with (
+            patch("mai_gram.core.md_to_telegram.markdown_to_html", side_effect=lambda text: text),
+        ):
+            _offset, new_placeholder = await renderer._commit_overflow(
+                tg_chat_id="test-chat",
+                header_html="HEADER",
+                reasoning_committed=False,
+                placeholder_msg_id="placeholder-1",
+                sent_msg_ids=sent_msg_ids,
+                remaining_content=content,
+                current_content=content,
+                committed_content_offset=0,
+            )
+
+        assert "header-sent" in sent_msg_ids
+        assert "placeholder-1" not in sent_msg_ids
+        assert new_placeholder == "placeholder-2"
+
+    async def test_commit_overflow_chunk_falls_back_to_send_when_edit_fails(self) -> None:
+        renderer, _, _ = _make_renderer()
+        renderer._edit_part = AsyncMock(return_value=False)
+        renderer._send_part = AsyncMock(return_value="fallback-chunk")
+        sent_msg_ids: list[str] = []
+
+        with (
+            patch("mai_gram.core.md_to_telegram.markdown_to_html", side_effect=lambda text: text),
+        ):
+            await renderer._commit_overflow_chunk(
+                "test-chat",
+                chunk_text="some chunk",
+                message_id="old-placeholder",
+                sent_msg_ids=sent_msg_ids,
+            )
+
+        renderer._edit_part.assert_awaited_once()
+        renderer._send_part.assert_awaited_once()
+        assert sent_msg_ids == ["fallback-chunk"]
+
+    async def test_finalize_placeholder_falls_back_to_send_when_single_part_edit_fails(
+        self,
+    ) -> None:
+        renderer, _, _ = _make_renderer()
+        renderer._edit_part = AsyncMock(return_value=False)
+        renderer._send_part = AsyncMock(return_value="sent-fallback")
+
+        with (
+            patch("mai_gram.core.telegram_limits.split_html_safe", return_value=["only-part"]),
+            patch("mai_gram.core.md_to_telegram.markdown_to_html", side_effect=lambda text: text),
+        ):
+            extra_ids = await renderer._finalize_placeholder(
+                "test-chat",
+                "placeholder-1",
+                "ignored raw text",
+                keyboard="kbd",
+            )
+
+        assert extra_ids == ["sent-fallback"]
+        renderer._send_part.assert_awaited_once_with("test-chat", "only-part", keyboard="kbd")
+
+    async def test_finalize_placeholder_falls_back_to_send_when_multi_part_edit_fails(
+        self,
+    ) -> None:
+        renderer, _, _ = _make_renderer()
+        renderer._edit_part = AsyncMock(return_value=False)
+        renderer._send_part = AsyncMock(side_effect=["first-fallback", "second-id"])
+
+        with (
+            patch(
+                "mai_gram.core.telegram_limits.split_html_safe",
+                side_effect=[["first", "second"], ["second"]],
+            ),
+            patch(
+                "mai_gram.core.md_to_telegram.markdown_to_html",
+                side_effect=lambda text: f"<{text}>",
+            ),
+        ):
+            extra_ids = await renderer._finalize_placeholder(
+                "test-chat",
+                "placeholder-1",
+                "ignored raw text",
+                keyboard="kbd",
+            )
+
+        assert extra_ids == ["first-fallback", "second-id"]
+        assert renderer._send_part.await_count == 2
+
+    async def test_finalize_placeholder_header_edit_failure_sends_header_as_new_message(
+        self,
+    ) -> None:
+        renderer, messenger, _ = _make_renderer()
+        messenger.max_message_length = 10
+        renderer._edit_part = AsyncMock(return_value=False)
+        renderer._send_part = AsyncMock(side_effect=["header-new", "part-1"])
+
+        with (
+            patch("mai_gram.core.telegram_limits.split_html_safe", return_value=["first"]),
+            patch("mai_gram.core.md_to_telegram.markdown_to_html", side_effect=lambda text: text),
+        ):
+            extra_ids = await renderer._finalize_placeholder(
+                "test-chat",
+                "placeholder-1",
+                "ignored raw text",
+                header_html="HEADER-LONG",
+                keyboard="kbd",
+            )
+
+        assert extra_ids == ["header-new", "part-1"]
+        assert renderer._send_part.await_args_list[0].args == ("test-chat", "HEADER-LONG")
+
     async def test_send_response_formats_reasoning_header_and_logs_outgoing(self) -> None:
         renderer, _, message_logger = _make_renderer()
         renderer._send_long_message = AsyncMock(return_value=["msg-1", "msg-2"])

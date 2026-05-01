@@ -376,11 +376,13 @@ class ConversationExecutor:
             parse_mode="html",
         )
         if not edit_result.success:
-            await self._messenger.edit_message(
+            fallback_result = await self._messenger.edit_message(
                 request.telegram_chat_id,
                 placeholder_msg_id,
                 fallback,
             )
+            if not fallback_result.success:
+                return None
         return placeholder_msg_id
 
     async def _deliver_error(

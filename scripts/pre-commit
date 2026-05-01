@@ -57,10 +57,10 @@ fi
 
 # ── 5. Tests + coverage ─────────────────────────────────────────
 step "Running tests with coverage"
-if pytest --cov=mai_gram --cov-config=pyproject.toml --cov-fail-under=90 -q 2>&1; then
-    pass "All tests passed with coverage ≥ 90%"
+if pytest --cov=mai_gram --cov-config=pyproject.toml -q 2>&1; then
+    pass "All tests passed with required coverage"
 else
-    fail "Tests failed or coverage below 90%"
+    fail "Tests failed or coverage below threshold"
 fi
 
 # ── 6. Live functional tests ────────────────────────────────────
