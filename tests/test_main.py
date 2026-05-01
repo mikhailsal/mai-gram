@@ -543,7 +543,8 @@ def test_run_with_reload_invokes_watchfiles(monkeypatch, tmp_path, capsys) -> No
         pass
 
     class _PythonFilter:
-        allowed_extensions = (".py",)
+        def __init__(self) -> None:
+            self.extensions = (".py",)
 
     def fake_run_process(*watch_dirs: object, **kwargs: object) -> None:
         captured["watch_dirs"] = watch_dirs
@@ -572,6 +573,51 @@ def test_run_with_reload_invokes_watchfiles(monkeypatch, tmp_path, capsys) -> No
     output = capsys.readouterr().out
     assert "Auto-reload enabled" in output
     assert "Detected changes in: config/models.toml" in output
+
+
+def test_reload_filter_uses_real_pythonfilter_api(monkeypatch, tmp_path) -> None:
+    """PythonFilter exposes extensions as an *instance* attribute, not a class attribute.
+
+    The production code must not access PythonFilter.allowed_extensions (doesn't exist);
+    it should use PythonFilter().extensions instead.  This test mocks PythonFilter to
+    match the real watchfiles API so we catch the mismatch.
+    """
+    src_dir = tmp_path / "src"
+    package_dir = src_dir / "mai_gram"
+    package_dir.mkdir(parents=True)
+    (tmp_path / "config").mkdir()
+    fake_file = package_dir / "main.py"
+    fake_file.write_text("# test\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class _DefaultFilter:
+        pass
+
+    class _PythonFilter:
+        def __init__(self) -> None:
+            self.extensions = (".py", ".pyx", ".pyd")
+
+    def fake_run_process(*watch_dirs: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "watchfiles",
+        SimpleNamespace(
+            DefaultFilter=_DefaultFilter,
+            PythonFilter=_PythonFilter,
+            run_process=fake_run_process,
+        ),
+    )
+    monkeypatch.setattr(main, "__file__", str(fake_file))
+
+    main._run_with_reload()
+
+    watch_filter = captured["watch_filter"]
+    assert ".py" in watch_filter.allowed_extensions
+    assert ".pyx" in watch_filter.allowed_extensions
+    assert ".toml" in watch_filter.allowed_extensions
+    assert ".md" in watch_filter.allowed_extensions
 
 
 def test_parse_args_and_main_dispatch(monkeypatch) -> None:

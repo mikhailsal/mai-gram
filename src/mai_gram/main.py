@@ -308,7 +308,7 @@ def _run_with_reload() -> None:
 
     class _CodeAndConfigFilter(DefaultFilter):
         allowed_extensions = (
-            *PythonFilter.allowed_extensions,  # type: ignore[attr-defined]
+            *PythonFilter().extensions,
             ".toml",
             ".txt",
             ".md",
