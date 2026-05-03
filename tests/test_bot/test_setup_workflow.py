@@ -43,6 +43,7 @@ def _make_workflow(
             "support": "Support prompt",
         }
         workflow_settings.get_prompt_config.return_value = None
+        workflow_settings.get_available_templates.return_value = ["empty"]
         workflow_settings.default_timezone = "UTC"
 
     return SetupWorkflow(
@@ -138,6 +139,7 @@ class TestSetupCallbacks:
         settings.get_default_model.return_value = "openrouter/free"
         settings.get_available_prompts.return_value = {"default": "Default prompt"}
         settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty"]
         settings.default_timezone = "UTC"
 
         workflow = _make_workflow(settings=settings)
@@ -232,6 +234,7 @@ class TestSetupCallbacks:
         settings.get_default_model.return_value = "openrouter/free"
         settings.get_available_prompts.return_value = {"default": "Default prompt"}
         settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty"]
         settings.default_timezone = "UTC"
 
         workflow = _make_workflow(settings=settings)
@@ -267,6 +270,7 @@ class TestFinishSetup:
             show_tool_calls=False,
             send_datetime=False,
         )
+        settings.get_available_templates.return_value = ["empty"]
         settings.default_timezone = "Europe/Moscow"
 
         workflow = _make_workflow(settings=settings)

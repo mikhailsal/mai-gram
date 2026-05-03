@@ -33,7 +33,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 def register_migration(version: int, description: str) -> Callable[[MigrationFunc], MigrationFunc]:
@@ -152,6 +152,21 @@ async def _migrate_v6(conn: AsyncConnection) -> None:
             )
         )
         logger.info("Backfilled messages.show_datetime from chat send_datetime settings")
+
+
+@register_migration(7, "Add response_template and hidden_template_fields columns to chats")
+async def _migrate_v7(conn: AsyncConnection) -> None:
+    """Version 7: add Chat.response_template and Chat.hidden_template_fields."""
+    result = await conn.execute(text("PRAGMA table_info(chats)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "response_template" not in existing_cols:
+        await conn.execute(text("ALTER TABLE chats ADD COLUMN response_template VARCHAR(100)"))
+        logger.info("Added chats.response_template column")
+
+    if "hidden_template_fields" not in existing_cols:
+        await conn.execute(text("ALTER TABLE chats ADD COLUMN hidden_template_fields TEXT"))
+        logger.info("Added chats.hidden_template_fields column")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

@@ -79,7 +79,8 @@ class CallbackRouter:
         logger.debug("Unhandled callback: %s", data)
 
     async def _handle_stale_setup_callback(self, message: IncomingMessage, data: str) -> bool:
-        if not (data.startswith("model:") or data.startswith("prompt:")):
+        setup_prefixes = ("model:", "prompt:", "template:")
+        if not any(data.startswith(p) for p in setup_prefixes):
             return False
         await self._messenger.send_message(
             OutgoingMessage(

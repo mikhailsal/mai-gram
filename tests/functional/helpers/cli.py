@@ -147,10 +147,21 @@ class CliHarness:
         *,
         prompt: str = "default",
         model: str = FREE_MODEL,
+        template: str = "empty",
         user_id: str | None = None,
         env_overrides: dict[str, str | None] | None = None,
     ) -> CompletedCliRun:
-        args = ["-c", chat_id, "--start", "--model", model, "--prompt", prompt]
+        args = [
+            "-c",
+            chat_id,
+            "--start",
+            "--model",
+            model,
+            "--prompt",
+            prompt,
+            "--template",
+            template,
+        ]
         if user_id is not None:
             args.extend(["--user-id", user_id])
         return self.run_cli(*args, env_overrides=env_overrides)

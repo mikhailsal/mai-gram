@@ -37,6 +37,8 @@ def test_callback_setup_matches_one_shot_setup(functional_cli) -> None:
         f"model:{FREE_MODEL}",
         "--cb",
         "prompt:default",
+        "--cb",
+        "template:empty",
     ).require_ok()
 
     direct_row = fetch_chat(functional_cli.db_path, direct_chat)
@@ -70,6 +72,8 @@ def test_custom_prompt_setup_works_with_setup_text(functional_cli) -> None:
         f"model:{FREE_MODEL}",
         "--cb",
         "prompt:__custom__",
+        "--cb",
+        "template:empty",
         "You are a custom prompt for integration tests.",
     )
 

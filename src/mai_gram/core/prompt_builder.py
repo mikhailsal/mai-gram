@@ -223,4 +223,26 @@ class PromptBuilder:
                 "or get_messages_by_timerange tools to retrieve them."
             )
 
-        return f"{test_section}{chat.system_prompt}{cut_notice}"
+        template_section = self._build_template_section(chat)
+
+        return f"{test_section}{chat.system_prompt}{cut_notice}{template_section}"
+
+    @staticmethod
+    def _build_template_section(chat: Chat) -> str:
+        """Append response format instructions from the chat's template."""
+        from mai_gram.response_templates.registry import get_template
+
+        template = get_template(getattr(chat, "response_template", None))
+        instruction = template.format_instruction()
+        if not instruction:
+            return ""
+
+        examples = template.examples()
+        if not examples:
+            return instruction
+
+        parts = [instruction, "\n\nExamples:"]
+        for ex in examples:
+            label = "CORRECT" if ex.is_positive else "INCORRECT"
+            parts.append(f"\n[{label}]\n{ex.text}")
+        return "".join(parts)

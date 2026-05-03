@@ -703,7 +703,7 @@ async def test_dispatch_console_runtime_covers_start_command_callbacks_and_noop(
     )
 
     assert messenger.dispatch_message.await_count == 2
-    assert messenger.dispatch_callback.await_count == 4
+    assert messenger.dispatch_callback.await_count == 5
     messenger.dispatch_text.assert_awaited_once_with(
         chat_id="chat-1",
         user_id="user-1",

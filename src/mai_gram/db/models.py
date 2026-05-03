@@ -110,6 +110,24 @@ class Chat(Base):
             "are excluded from LLM context but remain searchable."
         ),
     )
+    response_template: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        default=None,
+        doc=(
+            "Name of the response template (e.g. 'xml', 'json'). "
+            "NULL means the empty template (no format constraints)."
+        ),
+    )
+    hidden_template_fields: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        doc=(
+            "JSON-encoded list of template field names hidden from display. "
+            "NULL means all fields visible."
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,

@@ -41,6 +41,7 @@ class BotConfig:
     allowed_users: list[int] | None = None
     allowed_models: list[str] | None = None
     allowed_prompts: list[str] | None = None
+    allowed_templates: list[str] | None = None
 
 
 class ModelsConfigLoader:
@@ -151,6 +152,7 @@ class BotsConfigLoader:
                         allowed_users=entry.get("allowed_users"),
                         allowed_models=entry.get("allowed_models"),
                         allowed_prompts=entry.get("allowed_prompts"),
+                        allowed_templates=entry.get("allowed_templates"),
                     )
                 )
             self._cache = configs

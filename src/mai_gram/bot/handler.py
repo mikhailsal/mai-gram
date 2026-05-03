@@ -171,6 +171,7 @@ class BotHandler:
             ("reasoning", self._handle_reasoning_toggle, "Toggle reasoning display"),
             ("toolcalls", self._handle_toolcalls_toggle, "Toggle tool call display"),
             ("import", self._handle_import, "Import conversation from JSON file"),
+            ("toggle", self._handle_toggle, "Toggle template field visibility"),
             (
                 "resend_last",
                 self._handle_resend_last,
@@ -248,7 +249,7 @@ class BotHandler:
 
         msg = (
             "Available commands:\n\n"
-            "/start - Set up a new chat (choose model + prompt)\n"
+            "/start - Set up a new chat (choose model + prompt + template)\n"
             "/import - Import conversation from JSON file\n"
             "/reset - Delete current chat and history\n"
             "/model - Show current model\n"
@@ -256,6 +257,7 @@ class BotHandler:
             "/datetime - Toggle date/time in messages sent to LLM\n"
             "/reasoning - Toggle display of LLM reasoning\n"
             "/toolcalls - Toggle display of tool call details\n"
+            "/toggle - Toggle template field (e.g. /toggle thought)\n"
             "/resend_last - Re-send last AI message (if truncated)\n"
             "/help - Show this help message\n\n"
             "Just send a message to chat!"
@@ -302,6 +304,86 @@ class BotHandler:
 
     async def _handle_toolcalls_toggle(self, message: IncomingMessage) -> None:
         await self._toggle_chat_flag(message, "show_tool_calls", "Tool call display")
+
+    async def _handle_toggle(self, message: IncomingMessage) -> None:
+        """Handle /toggle command -- show/hide a template field."""
+        import json as _json
+
+        from mai_gram.response_templates.registry import get_template
+
+        self._message_logger.log_incoming(message)
+        if not await self._access_control.check_access(message):
+            return
+
+        field_arg = (message.command_args or "").strip().lower()
+        chat_id = self._chat_id_for(message)
+
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="No chat exists yet. Use /start to create one.",
+                        chat_id=message.chat_id,
+                    )
+                )
+                return
+
+            template = get_template(chat.response_template)
+            hideable = [f for f in template.get_fields() if f.user_can_hide]
+
+            if not hideable:
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text="This template has no toggleable fields.",
+                        chat_id=message.chat_id,
+                    )
+                )
+                return
+
+            if not field_arg:
+                names = ", ".join(f.name for f in hideable)
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text=f"Usage: /toggle <field_name>\nToggleable fields: {names}",
+                        chat_id=message.chat_id,
+                    )
+                )
+                return
+
+            hideable_names = {f.name.lower(): f.name for f in hideable}
+            if field_arg not in hideable_names:
+                names = ", ".join(f.name for f in hideable)
+                await self._messenger.send_message(
+                    OutgoingMessage(
+                        text=f"Unknown or non-toggleable field: {field_arg}\nToggleable: {names}",
+                        chat_id=message.chat_id,
+                    )
+                )
+                return
+
+            canonical_name = hideable_names[field_arg]
+            try:
+                hidden = set(_json.loads(chat.hidden_template_fields or "[]"))
+            except (_json.JSONDecodeError, TypeError):
+                hidden = set()
+
+            if canonical_name in hidden:
+                hidden.discard(canonical_name)
+                status = "VISIBLE"
+            else:
+                hidden.add(canonical_name)
+                status = "HIDDEN"
+
+            chat.hidden_template_fields = _json.dumps(sorted(hidden)) if hidden else None
+            await session.commit()
+
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=f"Field '{canonical_name}': {status}",
+                chat_id=message.chat_id,
+            )
+        )
 
     async def _handle_timezone(self, message: IncomingMessage) -> None:
         """Handle /timezone command -- show or set the chat's timezone."""

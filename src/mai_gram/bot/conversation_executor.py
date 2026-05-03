@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.llm.provider import LLMProviderError
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.messenger.base import OutgoingMessage
+from mai_gram.response_templates.registry import get_template
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
     from mai_gram.mcp_servers.manager import MCPManager
     from mai_gram.memory.messages import MessageStore
     from mai_gram.messenger.base import Messenger
+    from mai_gram.response_templates.base import ParsedResponse, ResponseTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -146,14 +149,23 @@ class ConversationExecutor:
         self._renderer = renderer
         self._tool_activity = ToolActivityNotifier(messenger)
 
-    async def execute(self, request: AssistantTurnRequest) -> AssistantTurnResult:
+    async def execute(
+        self,
+        request: AssistantTurnRequest,
+        *,
+        max_format_retries: int = 2,
+    ) -> AssistantTurnResult:
         sent_msg_ids: list[str] = []
         tool_call_cb, tool_result_cb = self._tool_activity.build_callbacks(request, sent_msg_ids)
+        template = get_template(request.chat.response_template)
+        total_attempts = 1 + max_format_retries
 
         try:
-            outcome = await self._stream_response(
+            outcome, parsed = await self._stream_with_validation(
                 request,
                 sent_msg_ids,
+                template=template,
+                total_attempts=total_attempts,
                 on_tool_call_display=tool_call_cb,
                 on_tool_result_display=tool_result_cb,
             )
@@ -176,8 +188,55 @@ class ConversationExecutor:
             sent_msg_ids,
             outcome,
             saved_msg.id,
+            parsed=parsed,
+            template=template,
         )
         return AssistantTurnResult(sent_message_ids=sent_msg_ids)
+
+    async def _stream_with_validation(
+        self,
+        request: AssistantTurnRequest,
+        sent_msg_ids: list[str],
+        *,
+        template: ResponseTemplate,
+        total_attempts: int,
+        on_tool_call_display: Callable[..., Awaitable[None]],
+        on_tool_result_display: Callable[..., Awaitable[None]],
+    ) -> tuple[_StreamOutcome, ParsedResponse]:
+        """Stream response and validate against template, retrying on failure."""
+        last_errors: list[str] = []
+
+        for attempt in range(1, total_attempts + 1):
+            outcome = await self._stream_response(
+                request,
+                sent_msg_ids,
+                on_tool_call_display=on_tool_call_display,
+                on_tool_result_display=on_tool_result_display,
+            )
+            parsed = template.parse(outcome.response_text)
+            errors = template.validate(parsed)
+
+            if not errors:
+                return outcome, parsed
+
+            last_errors = errors
+            logger.warning(
+                "Template validation failed (attempt %d/%d) for chat %s: %s",
+                attempt,
+                total_attempts,
+                request.chat.id,
+                "; ".join(errors),
+            )
+
+            if attempt < total_attempts and outcome.placeholder_msg_id:
+                await self._messenger.edit_message(
+                    request.telegram_chat_id,
+                    outcome.placeholder_msg_id,
+                    "\u26a0\ufe0f Format error, retrying...",
+                )
+
+        error_detail = "; ".join(last_errors)
+        raise LLMProviderError(f"Format error after {total_attempts} attempts: {error_detail}")
 
     async def _stream_response(
         self,
@@ -406,6 +465,9 @@ class ConversationExecutor:
         sent_msg_ids: list[str],
         outcome: _StreamOutcome,
         saved_msg_id: int,
+        *,
+        parsed: ParsedResponse | None = None,
+        template: ResponseTemplate | None = None,
     ) -> None:
         keyboard_buttons = [
             [("🔄 Regenerate", "regen"), ("✂ Cut this & above", f"cut:{saved_msg_id}")]
@@ -416,6 +478,25 @@ class ConversationExecutor:
             outcome.cost,
             outcome.is_byok,
         )
+
+        has_structured = (
+            template is not None
+            and parsed is not None
+            and template.name != "empty"
+            and len(parsed.fields) > 1
+        )
+
+        if has_structured and template is not None and parsed is not None:
+            await self._finalize_structured_response(
+                request,
+                sent_msg_ids,
+                outcome,
+                parsed=parsed,
+                template=template,
+                usage_footer=usage_footer,
+                keyboard=action_keyboard,
+            )
+            return
 
         if outcome.placeholder_msg_id and outcome.response_text.strip():
             remaining_raw = outcome.response_text[outcome.committed_content_offset :]
@@ -445,6 +526,81 @@ class ConversationExecutor:
         )
         sent_msg_ids.extend(final_msg_ids)
 
+    async def _finalize_structured_response(
+        self,
+        request: AssistantTurnRequest,
+        sent_msg_ids: list[str],
+        outcome: _StreamOutcome,
+        *,
+        parsed: ParsedResponse,
+        template: ResponseTemplate,
+        usage_footer: str,
+        keyboard: object,
+    ) -> None:
+        """Render a validated structured response field-by-field."""
+        hidden = _parse_hidden_fields(request.chat.hidden_template_fields)
+        content_field = template.content_field_name()
+        fields_ordered = sorted(template.get_fields(), key=lambda f: f.order)
+
+        if outcome.placeholder_msg_id:
+            sent_msg_ids.append(outcome.placeholder_msg_id)
+
+        header_parts: list[str] = []
+        content_text = ""
+
+        for descriptor in fields_ordered:
+            value = parsed.fields.get(descriptor.name, "")
+            if not value.strip():
+                continue
+            if descriptor.name in hidden:
+                continue
+
+            if descriptor.name == content_field:
+                content_text = value
+                continue
+
+            html = template.render_field_html(
+                descriptor.name,
+                value,
+                expandable=descriptor.expandable,
+            )
+            header_parts.append(html)
+
+        header_html = "\n\n".join(header_parts) if header_parts else ""
+
+        if content_text:
+            if usage_footer:
+                content_text += f"\n\n{usage_footer}"
+
+            if outcome.placeholder_msg_id:
+                extra_ids = await self._renderer._finalize_placeholder(
+                    request.telegram_chat_id,
+                    outcome.placeholder_msg_id,
+                    content_text,
+                    header_html=header_html,
+                    keyboard=keyboard,
+                )
+                sent_msg_ids.extend(extra_ids)
+            else:
+                final_ids = await self._renderer._send_response(
+                    request.telegram_chat_id,
+                    response_text=content_text,
+                    response_reasoning=None,
+                    show_reasoning=False,
+                    keyboard=keyboard,
+                )
+                if header_html and final_ids:
+                    header_result = await self._messenger.send_message(
+                        OutgoingMessage(
+                            text=header_html,
+                            chat_id=request.telegram_chat_id,
+                            parse_mode="html",
+                        )
+                    )
+                    if header_result.success and header_result.message_id:
+                        sent_msg_ids.append(header_result.message_id)
+                sent_msg_ids.extend(final_ids)
+
     @staticmethod
     def _final_header_html(request: AssistantTurnRequest, outcome: _StreamOutcome) -> str:
         if not request.show_reasoning:
@@ -456,3 +612,16 @@ class ConversationExecutor:
         from mai_gram.core.md_to_telegram import format_reasoning_html
 
         return format_reasoning_html(outcome.response_reasoning, expandable=True)
+
+
+def _parse_hidden_fields(hidden_json: str | None) -> set[str]:
+    """Parse the JSON-encoded hidden fields list from the chat model."""
+    if not hidden_json:
+        return set()
+    try:
+        data = json.loads(hidden_json)
+        if isinstance(data, list):
+            return {str(item) for item in data}
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return set()

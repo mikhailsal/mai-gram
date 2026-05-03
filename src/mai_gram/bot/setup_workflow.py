@@ -30,6 +30,7 @@ class SetupState(str, enum.Enum):
     CHOOSING_MODEL = "choosing_model"
     CHOOSING_PROMPT = "choosing_prompt"
     AWAITING_CUSTOM_PROMPT = "awaiting_custom_prompt"
+    CHOOSING_TEMPLATE = "choosing_template"
 
 
 @dataclass
@@ -40,6 +41,10 @@ class SetupSession:
     chat_id: str
     state: SetupState = SetupState.CHOOSING_MODEL
     selected_model: str = ""
+    selected_prompt_name: str | None = None
+    selected_prompt_text: str = ""
+    selected_template: str | None = None
+    bot_id: str = ""
 
 
 class SetupWorkflow:
@@ -90,7 +95,7 @@ class SetupWorkflow:
         await self._start_setup(message.user_id, message.chat_id)
 
     async def handle_setup_callback(self, message: IncomingMessage) -> None:
-        """Handle setup callback queries for model and prompt selection."""
+        """Handle setup callback queries for model, prompt, and template selection."""
         session = self._sessions.get(message.user_id)
         if not session or not message.callback_data:
             return
@@ -105,6 +110,9 @@ class SetupWorkflow:
             return
         if category == "prompt" and session.state == SetupState.CHOOSING_PROMPT:
             await self._handle_prompt_selection(message, session, value)
+            return
+        if category == "template" and session.state == SetupState.CHOOSING_TEMPLATE:
+            await self._handle_template_selection(message, session, value)
 
     async def handle_setup_text(self, message: IncomingMessage) -> None:
         """Handle free-form text entered during the setup flow."""
@@ -113,7 +121,10 @@ class SetupWorkflow:
             return
 
         if session.state == SetupState.AWAITING_CUSTOM_PROMPT:
-            await self._finish_setup(message, session, message.text.strip())
+            session.selected_prompt_text = message.text.strip()
+            session.selected_prompt_name = None
+            session.bot_id = message.bot_id or session.bot_id
+            await self._show_template_selection(session)
 
     async def _start_setup(self, user_id: str, chat_id: str) -> None:
         session = SetupSession(user_id=user_id, chat_id=chat_id)
@@ -209,7 +220,10 @@ class SetupWorkflow:
 
         prompt_text = self._get_available_prompts_for_bot().get(prompt_name, "")
         if prompt_text:
-            await self._finish_setup(message, session, prompt_text, prompt_name=prompt_name)
+            session.selected_prompt_name = prompt_name
+            session.selected_prompt_text = prompt_text
+            session.bot_id = message.bot_id or ""
+            await self._show_template_selection(session)
             return
 
         await self._messenger.send_message(
@@ -219,6 +233,93 @@ class SetupWorkflow:
             )
         )
 
+    def _get_available_templates_for_bot(self) -> list[str]:
+        all_templates = self._settings.get_available_templates()
+        if self._bot_config and self._bot_config.allowed_templates:
+            bot_set = set(self._bot_config.allowed_templates)
+            return [t for t in all_templates if t in bot_set]
+        return all_templates
+
+    async def _show_template_selection(self, session: SetupSession) -> None:
+        session.state = SetupState.CHOOSING_TEMPLATE
+        templates = self._get_available_templates_for_bot()
+
+        if len(templates) <= 1:
+            session.selected_template = None
+            await self._finish_setup_from_session(session)
+            return
+
+        from mai_gram.response_templates.registry import get_template
+
+        keyboard_rows = []
+        for tpl_name in templates:
+            tpl = get_template(tpl_name)
+            label = f"{tpl.description}" if tpl_name != "empty" else f"{tpl.description} [default]"
+            keyboard_rows.append([(label, f"template:{tpl_name}")])
+
+        prompt_preview = session.selected_prompt_text[:80]
+        if len(session.selected_prompt_text) > 80:
+            prompt_preview += "..."
+
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=(
+                    f"Model: {session.selected_model}\n"
+                    f"Prompt: {prompt_preview}\n\n"
+                    "Choose a response format template:"
+                ),
+                chat_id=session.chat_id,
+                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
+            )
+        )
+
+    async def _handle_template_selection(
+        self,
+        message: IncomingMessage,
+        session: SetupSession,
+        template_name: str,
+    ) -> None:
+        available = self._get_available_templates_for_bot()
+        if template_name not in available:
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text="This template is not available for this bot. Please choose another.",
+                    chat_id=session.chat_id,
+                )
+            )
+            return
+
+        session.selected_template = template_name if template_name != "empty" else None
+        session.bot_id = message.bot_id or session.bot_id
+        await self._finish_setup_from_session(session, message=message)
+
+    async def _finish_setup_from_session(
+        self,
+        session: SetupSession,
+        *,
+        message: IncomingMessage | None = None,
+    ) -> None:
+        """Complete setup using all values stored in the session."""
+        if message is None:
+            from mai_gram.messenger.base import MessageType
+
+            message = IncomingMessage(
+                platform="internal",
+                text="",
+                chat_id=session.chat_id,
+                user_id=session.user_id,
+                message_id="setup-finish",
+                message_type=MessageType.TEXT,
+                bot_id=session.bot_id,
+            )
+        await self._finish_setup(
+            message,
+            session,
+            session.selected_prompt_text,
+            prompt_name=session.selected_prompt_name,
+            template_name=session.selected_template,
+        )
+
     async def _finish_setup(
         self,
         message: IncomingMessage,
@@ -226,6 +327,7 @@ class SetupWorkflow:
         system_prompt: str,
         *,
         prompt_name: str | None = None,
+        template_name: str | None = None,
     ) -> None:
         chat_id = self._resolve_chat_id(message)
         prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
@@ -242,6 +344,7 @@ class SetupWorkflow:
                 llm_model=session.selected_model,
                 system_prompt=system_prompt,
                 prompt_name=prompt_name,
+                response_template=template_name,
                 timezone=self._settings.default_timezone,
                 show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
                 show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
@@ -255,25 +358,28 @@ class SetupWorkflow:
         reasoning_status = "ON" if chat.show_reasoning else "OFF"
         toolcalls_status = "ON" if chat.show_tool_calls else "OFF"
         datetime_status = "ON" if chat.send_datetime else "OFF"
+        tpl_display = template_name or "empty"
         await self._messenger.send_message(
             OutgoingMessage(
                 text=(
                     "Chat created!\n"
                     f"Model: {session.selected_model}\n"
                     f"Prompt: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}\n"
+                    f"Template: {tpl_display}\n"
                     f"Reasoning: {reasoning_status} | Tool calls: {toolcalls_status} "
                     f"| Datetime: {datetime_status}\n\n"
                     "Send a message to start chatting.\n"
-                    "Toggle display with /reasoning, /toolcalls, and /datetime."
+                    "Toggle display with /reasoning, /toolcalls, /datetime, and /toggle."
                 ),
                 chat_id=message.chat_id,
             )
         )
         logger.info(
-            "Created chat: id=%s model=%s prompt_len=%d reasoning=%s toolcalls=%s",
+            "Created chat: id=%s model=%s prompt_len=%d template=%s reasoning=%s toolcalls=%s",
             chat_id,
             session.selected_model,
             len(system_prompt),
+            tpl_display,
             chat.show_reasoning,
             chat.show_tool_calls,
         )

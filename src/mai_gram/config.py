@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +15,9 @@ from mai_gram.config_loaders import (
     PromptConfig,
     PromptConfigLoader,
 )
+
+if TYPE_CHECKING:
+    from mai_gram.response_templates.base import ResponseTemplate
 
 __all__ = ["BotConfig", "PromptConfig", "Settings", "get_settings"]
 
@@ -260,6 +263,23 @@ class Settings(BaseSettings):
         visible, no tool/MCP overrides).
         """
         return self._prompt_loader().get_prompt_config(prompt_name)
+
+    # -- Response templates ---------------------------------------------------
+
+    def get_available_templates(self) -> list[str]:
+        """Return all registered response template names."""
+        from mai_gram.response_templates.registry import list_template_names
+
+        return list_template_names()
+
+    def get_response_template(self, name: str | None) -> ResponseTemplate:
+        """Look up a response template by name.
+
+        Returns the EmptyTemplate for None or unknown names.
+        """
+        from mai_gram.response_templates.registry import get_template
+
+        return get_template(name)
 
 
 _settings_instance: Settings | None = None

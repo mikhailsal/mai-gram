@@ -89,6 +89,14 @@ def _add_setup_arguments(parser: argparse.ArgumentParser) -> None:
             "Use a name from the prompts/ directory, or '__custom__' with a message."
         ),
     )
+    parser.add_argument(
+        "--template",
+        metavar="TEMPLATE_NAME",
+        help=(
+            "Response template for --start setup (skips template selection step). "
+            "Available: empty, xml, json, markdown_headers, xml_emotions."
+        ),
+    )
 
 
 class ConsoleStateStore:

@@ -440,7 +440,8 @@ async def _dispatch_console_runtime(
         external_mcp_pool=external_mcp_pool,
     )
 
-    if args.start:
+    is_start = bool(args.start)
+    if is_start:
         await messenger.dispatch_message(_incoming_command(chat_id, user_id, "start"))
         if args.model:
             await messenger.dispatch_callback(
@@ -469,6 +470,13 @@ async def _dispatch_console_runtime(
             chat_id=chat_id,
             user_id=user_id,
             text=args.message,
+        )
+    if is_start:
+        template = getattr(args, "template", None) or "empty"
+        await messenger.dispatch_callback(
+            chat_id=chat_id,
+            user_id=user_id,
+            callback_data=f"template:{template}",
         )
 
     if not (args.start or args.command or args.callbacks or args.message):

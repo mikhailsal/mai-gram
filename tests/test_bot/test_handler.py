@@ -156,6 +156,7 @@ def test_init_registers_transport_handlers_and_bot_whitelist(monkeypatch) -> Non
         "reasoning",
         "toolcalls",
         "import",
+        "toggle",
         "resend_last",
     ]
     messenger.register_message_handler.assert_called_once_with(handler._handle_message)
