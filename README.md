@@ -26,7 +26,8 @@
 | **Conversation import** | Migrate existing chats from other AI tools — upload a JSON file via Telegram or CLI and the full history is replayed into the bot. |
 | **Per-prompt configuration** | Each system prompt template controls which tools are available, whether reasoning is visible, and how timestamps are displayed. |
 | **Self-hosted & private** | All data stays on your machine. No cloud dependencies beyond the LLM API itself. |
-| **Developer-friendly** | 274 tests, 90%+ coverage, strict typing, auto-reload, Docker support, and a full CLI for debugging. |
+| **Structured output** | Response template plugins (XML, JSON, markdown) constrain LLM output into validated structured formats — reasoning is preserved across turns instead of being silently truncated. |
+| **Developer-friendly** | 717 tests, 92%+ coverage, strict typing, auto-reload, Docker support, and a full CLI for debugging. |
 
 ## Quick Start
 
@@ -53,7 +54,7 @@ make run-dev
 
 ### Streaming AI Chat
 
-Responses stream token-by-token with real-time message editing in Telegram — just like ChatGPT, but in your messenger. Tool calls are displayed as separate blockquote messages for transparency.
+Responses stream token-by-token with real-time message editing in Telegram — just like ChatGPT, but in your messenger. Long responses automatically overflow into multiple messages with progressive streaming across message boundaries. Tool calls are displayed as separate blockquote messages for transparency. LaTeX symbols, headers, and nested lists are rendered with proper Unicode formatting.
 
 ### Wiki Knowledge Base
 
@@ -96,6 +97,22 @@ Each system prompt template is paired with a TOML config file that controls:
 - **Datetime behavior** — whether messages include timestamps
 
 This means a "creative writing" prompt can hide technical tool calls, while a "coder" prompt shows everything for full transparency.
+
+### Response Template Plugins
+
+Constrain LLM responses into structured formats with automatic validation and retries. Each template defines fields (e.g. `<thought>` and `<content>` in XML), format instructions injected into the system prompt, and per-field rendering rules for Telegram.
+
+Built-in templates:
+
+- **Empty** — no-op passthrough (default for backward compatibility)
+- **XML** — `<thought>` / `<content>` tags with regex extraction
+- **JSON** — `{"thought", "content"}` object with lenient parsing
+- **Markdown Headers** — `## Thought` / `## Content` section splitting
+- **XML with Emotions** — extends XML with an `<emotions>` field
+
+Templates are selected during `/start` onboarding (or via `--template` in CLI). Each template supports user-configurable parameters — field names, paragraph counts, emotion counts — that adapt instructions, examples, parsing, and validation dynamically. Use `/toggle <field>` to hide or show individual fields per chat.
+
+Per-bot template filtering is supported via `allowed_templates` in `bots.toml`.
 
 ### Conversation Import
 
@@ -207,7 +224,7 @@ Run `make help` to see all available commands. Key highlights:
 
 ```bash
 make install-dev    # Install with dev dependencies + git hooks
-make test           # Run 274 tests
+make test           # Run 717 tests
 make check          # Lint + format + typecheck + size audit
 make precommit      # Full pre-commit quality gate
 ```
@@ -216,8 +233,8 @@ The project enforces strict quality standards:
 
 - **Ruff** for linting and formatting
 - **mypy** in strict mode for type checking
-- **Code-size audit** reports files above 500 lines and functions above 60 lines until the first decomposition pass makes enforcement practical
-- **90%+ coverage** enforced on every commit
+- **Code-size audit** enforces 500-line file and 60-line function thresholds
+- **92%+ coverage** enforced on every commit
 - **Pre-commit hooks** run the full quality gate automatically, including live functional tests when `OPENROUTER_API_KEY` is available via the environment or `.env`
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup, project structure, and testing.

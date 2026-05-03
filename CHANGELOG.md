@@ -2,6 +2,137 @@
 
 All notable changes to mai-gram are documented here.
 
+## [1.2.0] - 2026-05-03
+
+### Response Template Plugin System
+
+- Add a template plugin architecture that constrains LLM responses into
+  structured formats (XML, JSON, markdown headers), validates compliance with
+  automatic retries, and renders each field appropriately in Telegram — this
+  preserves reasoning across turns, since providers often truncate native
+  reasoning from history but template-based structured output stays in message
+  content
+- Built-in templates: EmptyTemplate (no-op passthrough for backward
+  compatibility), XmlTemplate (`<thought>`/`<content>`), JsonTemplate,
+  MarkdownHeadersTemplate, and XmlWithEmotionsTemplate (adds `<emotions>` field)
+- Template selection during `/start` onboarding with per-bot filtering via
+  `allowed_templates` in `bots.toml`
+- `/toggle <field>` command to hide/show template fields per chat
+- CLI: `--template` argument for non-interactive chat creation
+- Database migration v7: add `response_template` and `hidden_template_fields`
+  columns to Chat model
+
+### Template Parameters
+
+- Add user-configurable parameter support to response template plugins —
+  parameters are declared by each template via `get_params()` and applied
+  through `with_params()` at chat creation time
+- Configurable parameters per template: `reasoning_field` name,
+  `num_reasoning_paragraphs` (1–8), `emotions_field` name, `num_emotions`
+  (1–12) — all with min/max clamping and default fallbacks
+- Smart dynamic example generation: examples automatically adapt to parameter
+  values (e.g., `num_emotions=8` produces exactly 8 emotions in examples)
+- New `CONFIGURING_TEMPLATE_PARAMS` setup state with "Use defaults" button or
+  free-text `key=value` entry
+- CLI: `--template-params KEY=VALUE` for headless chat creation
+- Database migration v8: add `template_params` column to Chat model
+- Fix: show actual parameter keys (not labels) in template configuration UI so
+  users can discover the correct override syntax
+
+### Code Quality Refactoring
+
+- Decompose monolithic `handler.py` (2100+ lines) into 14 focused service
+  modules: ConversationExecutor, ResponseRenderer, CallbackRouter,
+  SetupWorkflow, ResetWorkflow, ImportWorkflow, RegenerateService,
+  ResendService, ConversationService, AssistantTurnBuilder,
+  ToolActivityNotifier, HistoryActions, AccessControl, McpManagerFactory
+- Unify conversation and regenerate into a shared assistant-turn execution
+  pipeline
+- Narrow exception handling across the entire codebase: replace broad
+  `except Exception` blocks with specific exception types in OpenRouter,
+  config loaders, MCP bridge, conversation executor, reset workflow, import
+  workflow, external MCP, and main process watcher
+- Quarantine the summarization subsystem into `memory/consolidation/`
+  subpackage with clear documentation that modules are architecturally complete
+  but not invoked from production paths
+- Tighten messenger boundary: add `max_message_length` property to Messenger
+  base class so bot services read platform-specific limits from the interface
+  instead of importing constants directly
+- Remove `get_settings()` singleton from downstream services — all remaining
+  usages confined to application entry points with explicit dependency injection
+- Type JSON-RPC parsing for MCP bridge through typed helper models
+- Hide callback-origin message lookup behind messenger adapter helpers
+- Normalize wiki importance boundary to strict positive integers
+- Unify adapter wiring for Telegram and CLI through shared `AdapterRuntime`
+- Add report-only code size audit (`scripts/check_code_limits.py`) with
+  500-line file and 60-line function thresholds, wired into `make check` and
+  pre-commit
+- Raise coverage gate from 90% to 92% with `pyproject.toml` as single source
+  of truth (remove inline overrides from Makefile and pre-commit script)
+
+### Telegram UX
+
+- Progressive streaming for long messages: when accumulated text exceeds the
+  Telegram limit, the current placeholder is finalized and streaming continues
+  into a new message — users see continuous text flow instead of truncation
+- Enhance markdown parsing with LaTeX symbol conversion (50+ commands including
+  Greek letters, arrows, set operations), header rendering, tiered nested list
+  bullets (• → ◦ → ▪ → ▫), and full markdown inside reasoning blockquotes
+- Add confirmation dialog and automatic backup to `/reset` command — creates a
+  timestamped zip archive of the database and wiki directory before deletion
+- Add `/resend_last` command to re-deliver the last AI message with proper
+  splitting and formatting
+
+### Bug Fixes
+
+- Fix placeholder leak when `***` horizontal rule precedes headers — the bold
+  regex would match across multiple lines swallowing header placeholders,
+  causing raw "HH0"/"HH1" tokens in output
+- Preserve tool call chain when regenerating after post-tool LLM failure —
+  previously Regenerate would delete executed tool calls and re-trigger them,
+  duplicating side effects like wiki entries
+- Detect and display provider errors during streaming that were silently
+  swallowed (non-SSE error JSON, zero-content streams)
+- Handle edit failures in streaming response delivery — `_finalize_placeholder`
+  and overflow commits now fall back to sending fresh messages when edits fail
+- Fix `ConversationExecutor._send_or_edit_placeholder` returning stale message
+  ID when both edit attempts fail, causing streaming retries against a "dead"
+  placeholder
+- Harden replay engine for large imports with intelligent message splitting,
+  flood control awareness (parse Telegram's "retry in N" duration), and strict
+  message ordering
+- Fix `PythonFilter` instance attribute access for watchfiles 1.1.1
+  compatibility (was accessing non-existent `allowed_extensions` class
+  attribute)
+
+### Console CLI
+
+- Add `--command` flag so slash commands can be exercised from the CLI
+  (`mai-chat -c test-demo --command help`)
+- Add `--template` and `--template-params` flags for non-interactive setup
+
+### Prompts
+
+- Add psychotherapist (Marcus) system prompt template for evidence-based
+  psychotherapy sessions with wiki-based progress tracking (CBT, ACT, DBT, MI,
+  SFBT, mindfulness, behavioral activation)
+
+### Developer Experience
+
+- 717 tests (up from 274), 92%+ coverage enforcement
+- Add black-box `mai-chat` functional integration suite running as isolated
+  subprocesses against the real binary
+- Pre-commit hooks now include live functional tests when `OPENROUTER_API_KEY`
+  is available
+- Parallel test execution via pytest-xdist with work-stealing (6 workers,
+  ~55s vs ~170s serial)
+- Add `.github/copilot-instructions.md`
+
+### Documentation
+
+- Document explicit wiki sync transaction boundaries in DEVELOPMENT.md
+- Add comprehensive code quality refactoring plan (`plans/`)
+
 ## [1.1.0] - 2026-04-18
 
 ### Multi-Bot

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mai-gram"
-version = "1.1.0"
+version = "1.2.0"
 description = "Lightweight Telegram-to-LLM bridge via OpenRouter with multi-bot support."
 readme = "README.md"
 requires-python = ">=3.10"
