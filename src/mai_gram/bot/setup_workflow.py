@@ -328,15 +328,18 @@ class SetupWorkflow:
         if not isinstance(tpl, ResponseTemplate):
             return
         params = tpl.get_params()
-        lines = [f"Template: {tpl.description}\n\nConfigurable parameters (defaults shown):"]
+        lines = [f"Template: {tpl.description}\n\nConfigurable parameters:"]
         for p in params:
-            suggestions = ""
+            hint = ""
             if p.suggestions:
-                suggestions = f"  (options: {', '.join(p.suggestions)})"
-            lines.append(f"• {p.label}: {p.default}{suggestions}")
+                hint = f"\n  options: {', '.join(p.suggestions)}"
+            elif p.param_type == "int" and p.min_value is not None and p.max_value is not None:
+                hint = f"\n  range: {p.min_value}-{p.max_value}"
+            lines.append(f"• {p.key} = {p.default}  ({p.label}){hint}")
 
-        lines.append("\nUse defaults or type overrides as key=value pairs, one per line.")
-        lines.append("Example:\nreasoning_field=scratchpad\nnum_reasoning_paragraphs=4")
+        lines.append("\nTo customize, type key=value pairs, one per line:")
+        example_lines = "\n".join(f"{p.key}={p.default}" for p in params)
+        lines.append(example_lines)
 
         keyboard_rows = [
             [("Use defaults", "tpl_params:__defaults__")],
