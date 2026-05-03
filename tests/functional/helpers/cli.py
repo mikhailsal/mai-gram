@@ -148,6 +148,7 @@ class CliHarness:
         prompt: str = "default",
         model: str = FREE_MODEL,
         template: str = "empty",
+        template_params: dict[str, str] | None = None,
         user_id: str | None = None,
         env_overrides: dict[str, str | None] | None = None,
     ) -> CompletedCliRun:
@@ -162,6 +163,9 @@ class CliHarness:
             "--template",
             template,
         ]
+        if template_params:
+            args.append("--template-params")
+            args.extend(f"{k}={v}" for k, v in template_params.items())
         if user_id is not None:
             args.extend(["--user-id", user_id])
         return self.run_cli(*args, env_overrides=env_overrides)

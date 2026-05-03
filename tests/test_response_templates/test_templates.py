@@ -1,9 +1,19 @@
-"""Unit tests for the response template plugin system."""
+"""Unit tests for the response template plugin system.
+
+Covers both default behavior (backward compatibility) and user-configurable
+template parameters introduced in the parametrization update.
+"""
 
 from __future__ import annotations
 
-from mai_gram.response_templates.base import FieldDescriptor
+from typing import ClassVar
+
+from mai_gram.response_templates.base import FieldDescriptor, ResponseTemplate, TemplateParam
 from mai_gram.response_templates.registry import get_template, list_template_names
+
+# ──────────────────────────────────────────────────────────────────
+# Registry
+# ──────────────────────────────────────────────────────────────────
 
 
 class TestRegistry:
@@ -27,6 +37,26 @@ class TestRegistry:
         for name in ["empty", "xml", "json", "markdown_headers", "xml_emotions"]:
             t = get_template(name)
             assert t.name == name
+
+    def test_get_template_with_params_returns_parameterized_instance(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        fields = t.get_fields()
+        assert fields[0].name == "think"
+
+    def test_get_template_with_empty_params_returns_default(self) -> None:
+        t = get_template("xml", {})
+        fields = t.get_fields()
+        assert fields[0].name == "thought"
+
+    def test_get_template_with_none_params_returns_default(self) -> None:
+        t = get_template("xml", None)
+        fields = t.get_fields()
+        assert fields[0].name == "thought"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Empty template (no params, backward compat)
+# ──────────────────────────────────────────────────────────────────
 
 
 class TestEmptyTemplate:
@@ -67,6 +97,20 @@ class TestEmptyTemplate:
     def test_description(self) -> None:
         t = get_template("empty")
         assert t.description
+
+    def test_has_no_params(self) -> None:
+        t = get_template("empty")
+        assert t.get_params() == []
+
+    def test_with_params_returns_self(self) -> None:
+        t = get_template("empty")
+        t2 = t.with_params({"anything": "ignored"})
+        assert t2 is t
+
+
+# ──────────────────────────────────────────────────────────────────
+# XML template -- default behavior
+# ──────────────────────────────────────────────────────────────────
 
 
 class TestXmlTemplate:
@@ -149,6 +193,141 @@ class TestXmlTemplate:
         assert t.description
 
 
+# ──────────────────────────────────────────────────────────────────
+# XML template -- parameterized
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestXmlTemplateParams:
+    def test_declares_reasoning_field_param(self) -> None:
+        t = get_template("xml")
+        param_keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in param_keys
+        assert "num_reasoning_paragraphs" in param_keys
+
+    def test_default_effective_params(self) -> None:
+        t = get_template("xml")
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "thought"
+        assert ep["num_reasoning_paragraphs"] == 2
+
+    def test_custom_reasoning_field_changes_fields(self) -> None:
+        t = get_template("xml", {"reasoning_field": "scratchpad"})
+        fields = t.get_fields()
+        assert fields[0].name == "scratchpad"
+        assert fields[1].name == "content"
+
+    def test_custom_reasoning_field_changes_instruction(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        instruction = t.format_instruction()
+        assert "<think>" in instruction
+        assert "</think>" in instruction
+        assert "<thought>" not in instruction
+
+    def test_custom_reasoning_field_changes_examples(self) -> None:
+        t = get_template("xml", {"reasoning_field": "scratchpad"})
+        examples = t.examples()
+        pos = next(ex for ex in examples if ex.is_positive)
+        assert "<scratchpad>" in pos.text
+        assert "</scratchpad>" in pos.text
+        assert "<thought>" not in pos.text
+
+    def test_custom_reasoning_field_changes_parsing(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        raw = "<think>reasoning</think><content>answer</content>"
+        parsed = t.parse(raw)
+        assert parsed.fields["think"] == "reasoning"
+        assert parsed.fields["content"] == "answer"
+
+    def test_custom_reasoning_field_changes_validation(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        parsed = t.parse("<content>c</content>")
+        errors = t.validate(parsed)
+        assert any("think" in e.lower() for e in errors)
+
+    def test_custom_reasoning_field_changes_description(self) -> None:
+        t = get_template("xml", {"reasoning_field": "reflect"})
+        assert "reflect" in t.description
+
+    def test_num_reasoning_paragraphs_in_instruction(self) -> None:
+        t = get_template("xml", {"num_reasoning_paragraphs": 5})
+        instruction = t.format_instruction()
+        assert "5 paragraphs" in instruction
+
+    def test_num_reasoning_paragraphs_singular(self) -> None:
+        t = get_template("xml", {"num_reasoning_paragraphs": 1})
+        instruction = t.format_instruction()
+        assert "1 paragraph)" in instruction
+        assert "paragraphs" not in instruction.split("1 paragraph")[0]
+
+    def test_example_has_correct_paragraph_count(self) -> None:
+        for n in (1, 2, 3, 5, 8):
+            t = get_template("xml", {"num_reasoning_paragraphs": n})
+            pos = next(ex for ex in t.examples() if ex.is_positive)
+            tag_name = "thought"
+            start_tag = f"<{tag_name}>\n"
+            end_tag = f"\n</{tag_name}>"
+            assert start_tag in pos.text
+            inner = pos.text.split(start_tag, 1)[1].split(end_tag, 0)[0]
+            inner = inner.split(f"\n</{tag_name}>")[0]
+            paragraphs = [p.strip() for p in inner.split("\n\n") if p.strip()]
+            assert len(paragraphs) == n, f"Expected {n} paragraphs, got {len(paragraphs)}"
+
+    def test_param_clamping_min(self) -> None:
+        t = get_template("xml", {"num_reasoning_paragraphs": -5})
+        ep = t.get_effective_params()
+        assert ep["num_reasoning_paragraphs"] >= 1
+
+    def test_param_clamping_max(self) -> None:
+        t = get_template("xml", {"num_reasoning_paragraphs": 100})
+        ep = t.get_effective_params()
+        assert ep["num_reasoning_paragraphs"] <= 8
+
+    def test_invalid_int_param_uses_default(self) -> None:
+        t = get_template("xml", {"num_reasoning_paragraphs": "not_a_number"})
+        ep = t.get_effective_params()
+        assert ep["num_reasoning_paragraphs"] == 2
+
+    def test_empty_string_param_uses_default(self) -> None:
+        t = get_template("xml", {"reasoning_field": ""})
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "thought"
+
+    def test_unknown_params_ignored(self) -> None:
+        t = get_template("xml", {"nonexistent_param": "value"})
+        assert t.get_fields()[0].name == "thought"
+
+    def test_with_params_returns_new_instance(self) -> None:
+        t1 = get_template("xml")
+        t2 = t1.with_params({"reasoning_field": "think"})
+        assert t1.get_fields()[0].name == "thought"
+        assert t2.get_fields()[0].name == "think"
+
+    def test_effective_params_after_with_params(self) -> None:
+        t = get_template("xml", {"reasoning_field": "reflect", "num_reasoning_paragraphs": 4})
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "reflect"
+        assert ep["num_reasoning_paragraphs"] == 4
+
+    def test_render_html_with_custom_field(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        html = t.render_field_html("think", "some text", expandable=True)
+        assert "blockquote" in html
+        assert "Think" in html
+
+    def test_param_suggestions_provided(self) -> None:
+        t = get_template("xml")
+        rf_param = next(p for p in t.get_params() if p.key == "reasoning_field")
+        assert len(rf_param.suggestions) > 0
+        assert "thought" in rf_param.suggestions
+        assert "scratchpad" in rf_param.suggestions
+
+
+# ──────────────────────────────────────────────────────────────────
+# JSON template -- default + parameterized
+# ──────────────────────────────────────────────────────────────────
+
+
 class TestJsonTemplate:
     def test_parse_extracts_json(self) -> None:
         t = get_template("json")
@@ -210,6 +389,62 @@ class TestJsonTemplate:
         assert len(fields) == 2
 
 
+class TestJsonTemplateParams:
+    def test_declares_params(self) -> None:
+        t = get_template("json")
+        keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in keys
+        assert "num_reasoning_paragraphs" in keys
+
+    def test_custom_reasoning_field_changes_fields(self) -> None:
+        t = get_template("json", {"reasoning_field": "think"})
+        fields = t.get_fields()
+        assert fields[0].name == "think"
+
+    def test_custom_reasoning_field_in_instruction(self) -> None:
+        t = get_template("json", {"reasoning_field": "scratchpad"})
+        instruction = t.format_instruction()
+        assert '"scratchpad"' in instruction
+        assert '"thought"' not in instruction
+
+    def test_custom_reasoning_field_in_examples(self) -> None:
+        t = get_template("json", {"reasoning_field": "reflect"})
+        pos = next(ex for ex in t.examples() if ex.is_positive)
+        assert '"reflect"' in pos.text
+        assert '"thought"' not in pos.text
+
+    def test_custom_reasoning_field_in_validation(self) -> None:
+        t = get_template("json", {"reasoning_field": "think"})
+        parsed = t.parse('{"content": "c"}')
+        errors = t.validate(parsed)
+        assert any("think" in e.lower() for e in errors)
+
+    def test_custom_reasoning_field_in_parse(self) -> None:
+        t = get_template("json", {"reasoning_field": "think"})
+        parsed = t.parse('{"think": "r", "content": "c"}')
+        assert t.validate(parsed) == []
+        assert parsed.fields["think"] == "r"
+
+    def test_num_paragraphs_in_instruction(self) -> None:
+        t = get_template("json", {"num_reasoning_paragraphs": 4})
+        instruction = t.format_instruction()
+        assert "4 paragraphs" in instruction
+
+    def test_example_reasoning_reflects_paragraph_count(self) -> None:
+        t = get_template("json", {"num_reasoning_paragraphs": 3})
+        pos = next(ex for ex in t.examples() if ex.is_positive)
+        assert "\\n\\n" in pos.text
+
+    def test_description_includes_custom_field(self) -> None:
+        t = get_template("json", {"reasoning_field": "reflect"})
+        assert "reflect" in t.description
+
+
+# ──────────────────────────────────────────────────────────────────
+# Markdown headers template -- default + parameterized
+# ──────────────────────────────────────────────────────────────────
+
+
 class TestMarkdownHeadersTemplate:
     def test_parse_extracts_sections(self) -> None:
         t = get_template("markdown_headers")
@@ -258,6 +493,68 @@ class TestMarkdownHeadersTemplate:
         assert len(fields) == 2
 
 
+class TestMarkdownHeadersTemplateParams:
+    def test_declares_params(self) -> None:
+        t = get_template("markdown_headers")
+        keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in keys
+        assert "num_reasoning_paragraphs" in keys
+
+    def test_custom_reasoning_field_changes_fields(self) -> None:
+        t = get_template("markdown_headers", {"reasoning_field": "Reflection"})
+        fields = t.get_fields()
+        assert fields[0].name == "Reflection"
+
+    def test_custom_reasoning_field_in_instruction(self) -> None:
+        t = get_template("markdown_headers", {"reasoning_field": "Think"})
+        instruction = t.format_instruction()
+        assert "## Think" in instruction
+        assert "## Thought" not in instruction
+
+    def test_custom_reasoning_field_in_examples(self) -> None:
+        t = get_template("markdown_headers", {"reasoning_field": "Scratchpad"})
+        pos = next(ex for ex in t.examples() if ex.is_positive)
+        assert "## Scratchpad" in pos.text
+        assert "## Thought" not in pos.text
+
+    def test_custom_reasoning_field_in_parse(self) -> None:
+        t = get_template("markdown_headers", {"reasoning_field": "Think"})
+        raw = "## Think\nreasoning here\n\n## Content\nreply"
+        parsed = t.parse(raw)
+        assert parsed.fields["Think"] == "reasoning here"
+        assert parsed.fields["Content"] == "reply"
+
+    def test_custom_reasoning_field_in_validation(self) -> None:
+        t = get_template("markdown_headers", {"reasoning_field": "Think"})
+        parsed = t.parse("## Content\nc")
+        errors = t.validate(parsed)
+        assert any("Think" in e for e in errors)
+
+    def test_num_paragraphs_in_instruction(self) -> None:
+        t = get_template("markdown_headers", {"num_reasoning_paragraphs": 3})
+        instruction = t.format_instruction()
+        assert "3 paragraphs" in instruction
+
+    def test_example_paragraphs_match_count(self) -> None:
+        for n in (1, 3, 5):
+            t = get_template("markdown_headers", {"num_reasoning_paragraphs": n})
+            pos = next(ex for ex in t.examples() if ex.is_positive)
+            header = "## Thought\n"
+            content_header = "\n\n## Content"
+            reasoning_section = pos.text.split(header, 1)[1].split(content_header, 1)[0]
+            paragraphs = [p.strip() for p in reasoning_section.split("\n\n") if p.strip()]
+            assert len(paragraphs) == n
+
+    def test_description_includes_custom_field(self) -> None:
+        t = get_template("markdown_headers", {"reasoning_field": "Reflection"})
+        assert "Reflection" in t.description
+
+
+# ──────────────────────────────────────────────────────────────────
+# XML with emotions -- default + parameterized
+# ──────────────────────────────────────────────────────────────────
+
+
 class TestXmlWithEmotionsTemplate:
     def test_inherits_parsing(self) -> None:
         t = get_template("xml_emotions")
@@ -304,6 +601,267 @@ class TestXmlWithEmotionsTemplate:
         assert emotions.user_can_hide is True
 
 
+class TestXmlWithEmotionsParams:
+    def test_declares_all_four_params(self) -> None:
+        t = get_template("xml_emotions")
+        keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in keys
+        assert "num_reasoning_paragraphs" in keys
+        assert "emotions_field" in keys
+        assert "num_emotions" in keys
+
+    def test_default_effective_params(self) -> None:
+        t = get_template("xml_emotions")
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "thought"
+        assert ep["num_reasoning_paragraphs"] == 2
+        assert ep["emotions_field"] == "emotions"
+        assert ep["num_emotions"] == 3
+
+    def test_custom_reasoning_field(self) -> None:
+        t = get_template("xml_emotions", {"reasoning_field": "think"})
+        fields = t.get_fields()
+        names = [f.name for f in fields]
+        assert names == ["think", "emotions", "content"]
+
+    def test_custom_emotions_field(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "feelings"})
+        fields = t.get_fields()
+        names = [f.name for f in fields]
+        assert names == ["thought", "feelings", "content"]
+
+    def test_custom_emotions_field_in_instruction(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "mood"})
+        instruction = t.format_instruction()
+        assert "<mood>" in instruction
+        assert "</mood>" in instruction
+        assert "<emotions>" not in instruction
+
+    def test_custom_emotions_field_in_examples(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "mood"})
+        pos = next(ex for ex in t.examples() if ex.is_positive)
+        assert "<mood>" in pos.text
+        assert "</mood>" in pos.text
+        assert "<emotions>" not in pos.text
+
+    def test_custom_emotions_field_in_parse(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "mood"})
+        raw = "<thought>t</thought><mood>happy</mood><content>c</content>"
+        parsed = t.parse(raw)
+        assert parsed.fields["mood"] == "happy"
+        assert t.validate(parsed) == []
+
+    def test_custom_emotions_field_in_validation(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "mood"})
+        raw = "<thought>t</thought><emotions>happy</emotions><content>c</content>"
+        parsed = t.parse(raw)
+        errors = t.validate(parsed)
+        assert any("mood" in e.lower() for e in errors)
+
+    def test_num_emotions_in_instruction(self) -> None:
+        t = get_template("xml_emotions", {"num_emotions": 8})
+        instruction = t.format_instruction()
+        assert "exactly 8 emotions" in instruction
+
+    def test_num_emotions_singular(self) -> None:
+        t = get_template("xml_emotions", {"num_emotions": 1})
+        instruction = t.format_instruction()
+        assert "exactly 1 emotion " in instruction
+
+    def test_example_has_correct_emotion_count(self) -> None:
+        for n in (1, 3, 5, 8, 12):
+            t = get_template("xml_emotions", {"num_emotions": n})
+            pos = next(ex for ex in t.examples() if ex.is_positive)
+            emotions_start = "<emotions>"
+            emotions_end = "</emotions>"
+            inner = pos.text.split(emotions_start, 1)[1].split(emotions_end, 1)[0]
+            items = [e.strip() for e in inner.split(",") if e.strip()]
+            assert len(items) == n, f"Expected {n} emotions, got {len(items)}: {items}"
+
+    def test_combined_custom_fields(self) -> None:
+        """All four params customized together."""
+        t = get_template(
+            "xml_emotions",
+            {
+                "reasoning_field": "scratchpad",
+                "num_reasoning_paragraphs": 4,
+                "emotions_field": "mood",
+                "num_emotions": 5,
+            },
+        )
+        fields = t.get_fields()
+        names = [f.name for f in fields]
+        assert names == ["scratchpad", "mood", "content"]
+
+        instruction = t.format_instruction()
+        assert "<scratchpad>" in instruction
+        assert "<mood>" in instruction
+        assert "4 paragraphs" in instruction
+        assert "exactly 5 emotions" in instruction
+
+        pos = next(ex for ex in t.examples() if ex.is_positive)
+        assert "<scratchpad>" in pos.text
+        assert "<mood>" in pos.text
+
+    def test_num_emotions_clamping_min(self) -> None:
+        t = get_template("xml_emotions", {"num_emotions": 0})
+        ep = t.get_effective_params()
+        assert ep["num_emotions"] >= 1
+
+    def test_num_emotions_clamping_max(self) -> None:
+        t = get_template("xml_emotions", {"num_emotions": 100})
+        ep = t.get_effective_params()
+        assert ep["num_emotions"] <= 12
+
+    def test_description_includes_custom_fields(self) -> None:
+        t = get_template(
+            "xml_emotions",
+            {
+                "reasoning_field": "think",
+                "emotions_field": "mood",
+            },
+        )
+        assert "think" in t.description
+        assert "mood" in t.description
+
+    def test_emotions_field_suggestions_provided(self) -> None:
+        t = get_template("xml_emotions")
+        ef_param = next(p for p in t.get_params() if p.key == "emotions_field")
+        assert len(ef_param.suggestions) > 0
+        assert "emotions" in ef_param.suggestions
+
+    def test_custom_emotions_hideable(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "vibes"})
+        fields = t.get_fields()
+        vibes = next(f for f in fields if f.name == "vibes")
+        assert vibes.user_can_hide is True
+
+    def test_custom_emotions_label(self) -> None:
+        t = get_template("xml_emotions", {"emotions_field": "inner_mood"})
+        fields = t.get_fields()
+        field = next(f for f in fields if f.name == "inner_mood")
+        assert "Inner Mood" in field.label
+
+
+# ──────────────────────────────────────────────────────────────────
+# TemplateParam and base class
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestTemplateParam:
+    def test_param_type_int(self) -> None:
+        p = TemplateParam(key="k", label="L", param_type="int", default=5)
+        assert p.param_type == "int"
+        assert p.default == 5
+
+    def test_param_type_str(self) -> None:
+        p = TemplateParam(key="k", label="L", param_type="str", default="hello")
+        assert p.param_type == "str"
+        assert p.default == "hello"
+
+    def test_param_min_max(self) -> None:
+        p = TemplateParam(
+            key="k",
+            label="L",
+            param_type="int",
+            default=3,
+            min_value=1,
+            max_value=10,
+        )
+        assert p.min_value == 1
+        assert p.max_value == 10
+
+    def test_param_suggestions(self) -> None:
+        p = TemplateParam(
+            key="k",
+            label="L",
+            param_type="str",
+            default="a",
+            suggestions=["a", "b", "c"],
+        )
+        assert p.suggestions == ["a", "b", "c"]
+
+    def test_param_description(self) -> None:
+        p = TemplateParam(key="k", label="L", param_type="str", default="x", description="A test")
+        assert p.description == "A test"
+
+
+class TestResolveParams:
+    """Test the static _resolve_params helper on ResponseTemplate."""
+
+    def test_fills_defaults_for_missing_keys(self) -> None:
+        declared = {
+            "a": TemplateParam(key="a", label="A", param_type="str", default="default_a"),
+            "b": TemplateParam(key="b", label="B", param_type="int", default=10),
+        }
+        result = ResponseTemplate._resolve_params({}, declared)
+        assert result["a"] == "default_a"
+        assert result["b"] == 10
+
+    def test_coerces_int(self) -> None:
+        declared = {
+            "n": TemplateParam(
+                key="n",
+                label="N",
+                param_type="int",
+                default=5,
+                min_value=1,
+                max_value=20,
+            ),
+        }
+        result = ResponseTemplate._resolve_params({"n": "7"}, declared)
+        assert result["n"] == 7
+
+    def test_clamps_int_min(self) -> None:
+        declared = {
+            "n": TemplateParam(
+                key="n",
+                label="N",
+                param_type="int",
+                default=5,
+                min_value=1,
+                max_value=20,
+            ),
+        }
+        result = ResponseTemplate._resolve_params({"n": -10}, declared)
+        assert result["n"] == 1
+
+    def test_clamps_int_max(self) -> None:
+        declared = {
+            "n": TemplateParam(
+                key="n",
+                label="N",
+                param_type="int",
+                default=5,
+                min_value=1,
+                max_value=20,
+            ),
+        }
+        result = ResponseTemplate._resolve_params({"n": 50}, declared)
+        assert result["n"] == 20
+
+    def test_invalid_int_falls_back_to_default(self) -> None:
+        declared = {
+            "n": TemplateParam(key="n", label="N", param_type="int", default=5),
+        }
+        result = ResponseTemplate._resolve_params({"n": "abc"}, declared)
+        assert result["n"] == 5
+
+    def test_empty_str_falls_back_to_default(self) -> None:
+        declared = {
+            "s": TemplateParam(key="s", label="S", param_type="str", default="fallback"),
+        }
+        result = ResponseTemplate._resolve_params({"s": "  "}, declared)
+        assert result["s"] == "fallback"
+
+    def test_strips_str(self) -> None:
+        declared = {
+            "s": TemplateParam(key="s", label="S", param_type="str", default="x"),
+        }
+        result = ResponseTemplate._resolve_params({"s": "  hello  "}, declared)
+        assert result["s"] == "hello"
+
+
 class TestFieldDescriptor:
     def test_label_defaults_to_title_case_name(self) -> None:
         fd = FieldDescriptor(name="my_field")
@@ -324,3 +882,66 @@ class TestBaseRenderFieldHtml:
         t = get_template("xml")
         html = t.render_field_html("thought", "text", expandable=True)
         assert "expandable" in html
+
+
+# ──────────────────────────────────────────────────────────────────
+# Cross-template consistency checks
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestCrossTemplateConsistency:
+    """Verify that all parameterizable templates behave consistently."""
+
+    PARAMETERIZED_TEMPLATES: ClassVar[list[str]] = [
+        "xml",
+        "json",
+        "markdown_headers",
+        "xml_emotions",
+    ]
+
+    def test_all_parameterized_templates_declare_reasoning_field(self) -> None:
+        for name in self.PARAMETERIZED_TEMPLATES:
+            t = get_template(name)
+            keys = [p.key for p in t.get_params()]
+            assert "reasoning_field" in keys, f"{name} missing reasoning_field param"
+
+    def test_all_parameterized_templates_declare_num_reasoning_paragraphs(self) -> None:
+        for name in self.PARAMETERIZED_TEMPLATES:
+            t = get_template(name)
+            keys = [p.key for p in t.get_params()]
+            assert "num_reasoning_paragraphs" in keys, f"{name} missing num_reasoning_paragraphs"
+
+    def test_default_params_produce_backward_compatible_fields(self) -> None:
+        """Default parameterized templates should match the original field names."""
+        xml = get_template("xml")
+        assert xml.get_fields()[0].name == "thought"
+
+        json_tpl = get_template("json")
+        assert json_tpl.get_fields()[0].name == "thought"
+
+        md = get_template("markdown_headers")
+        assert md.get_fields()[0].name == "Thought"
+
+        emo = get_template("xml_emotions")
+        names = [f.name for f in emo.get_fields()]
+        assert names == ["thought", "emotions", "content"]
+
+    def test_with_params_preserves_template_name(self) -> None:
+        for name in self.PARAMETERIZED_TEMPLATES:
+            t = get_template(name, {"reasoning_field": "custom"})
+            assert t.name == name
+
+    def test_examples_always_contain_configured_field_names(self) -> None:
+        for name in self.PARAMETERIZED_TEMPLATES:
+            custom_field = "zz_custom"
+            if name == "markdown_headers":
+                custom_field = "Zzcustom"
+            t = get_template(name, {"reasoning_field": custom_field})
+            examples = t.examples()
+            assert len(examples) > 0
+            pos_examples = [ex for ex in examples if ex.is_positive]
+            assert len(pos_examples) > 0
+            for ex in pos_examples:
+                assert custom_field.lower() in ex.text.lower(), (
+                    f"{name}: example missing custom field name '{custom_field}'"
+                )

@@ -272,14 +272,18 @@ class Settings(BaseSettings):
 
         return list_template_names()
 
-    def get_response_template(self, name: str | None) -> ResponseTemplate:
-        """Look up a response template by name.
+    def get_response_template(
+        self,
+        name: str | None,
+        params: dict[str, Any] | None = None,
+    ) -> ResponseTemplate:
+        """Look up a response template by name, optionally applying user params.
 
         Returns the EmptyTemplate for None or unknown names.
         """
         from mai_gram.response_templates.registry import get_template
 
-        return get_template(name)
+        return get_template(name, params)
 
 
 _settings_instance: Settings | None = None

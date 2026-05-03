@@ -31,6 +31,7 @@ class SetupState(str, enum.Enum):
     CHOOSING_PROMPT = "choosing_prompt"
     AWAITING_CUSTOM_PROMPT = "awaiting_custom_prompt"
     CHOOSING_TEMPLATE = "choosing_template"
+    CONFIGURING_TEMPLATE_PARAMS = "configuring_template_params"
 
 
 @dataclass
@@ -44,6 +45,7 @@ class SetupSession:
     selected_prompt_name: str | None = None
     selected_prompt_text: str = ""
     selected_template: str | None = None
+    template_params: dict[str, str] | None = None
     bot_id: str = ""
 
 
@@ -113,6 +115,12 @@ class SetupWorkflow:
             return
         if category == "template" and session.state == SetupState.CHOOSING_TEMPLATE:
             await self._handle_template_selection(message, session, value)
+            return
+        if category == "tpl_params" and session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS:
+            if value == "__defaults__":
+                session.template_params = None
+            session.bot_id = message.bot_id or session.bot_id
+            await self._finish_setup_from_session(session, message=message)
 
     async def handle_setup_text(self, message: IncomingMessage) -> None:
         """Handle free-form text entered during the setup flow."""
@@ -125,6 +133,14 @@ class SetupWorkflow:
             session.selected_prompt_name = None
             session.bot_id = message.bot_id or session.bot_id
             await self._show_template_selection(session)
+            return
+
+        if session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS:
+            parsed = self._parse_kv_params(message.text)
+            if parsed:
+                session.template_params = parsed
+            session.bot_id = message.bot_id or session.bot_id
+            await self._finish_setup_from_session(session)
 
     async def _start_setup(self, user_id: str, chat_id: str) -> None:
         session = SetupSession(user_id=user_id, chat_id=chat_id)
@@ -291,7 +307,63 @@ class SetupWorkflow:
 
         session.selected_template = template_name if template_name != "empty" else None
         session.bot_id = message.bot_id or session.bot_id
-        await self._finish_setup_from_session(session, message=message)
+
+        from mai_gram.response_templates.registry import get_template as _get_tpl
+
+        tpl = _get_tpl(session.selected_template)
+        if tpl.get_params():
+            await self._show_template_params_summary(session, tpl)
+        else:
+            await self._finish_setup_from_session(session, message=message)
+
+    async def _show_template_params_summary(
+        self,
+        session: SetupSession,
+        tpl: object,
+    ) -> None:
+        """Show current template param defaults and let the user accept or configure."""
+        session.state = SetupState.CONFIGURING_TEMPLATE_PARAMS
+        from mai_gram.response_templates.base import ResponseTemplate
+
+        if not isinstance(tpl, ResponseTemplate):
+            return
+        params = tpl.get_params()
+        lines = [f"Template: {tpl.description}\n\nConfigurable parameters (defaults shown):"]
+        for p in params:
+            suggestions = ""
+            if p.suggestions:
+                suggestions = f"  (options: {', '.join(p.suggestions)})"
+            lines.append(f"• {p.label}: {p.default}{suggestions}")
+
+        lines.append("\nUse defaults or type overrides as key=value pairs, one per line.")
+        lines.append("Example:\nreasoning_field=scratchpad\nnum_reasoning_paragraphs=4")
+
+        keyboard_rows = [
+            [("Use defaults", "tpl_params:__defaults__")],
+        ]
+
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text="\n".join(lines),
+                chat_id=session.chat_id,
+                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
+            )
+        )
+
+    @staticmethod
+    def _parse_kv_params(text: str) -> dict[str, str]:
+        """Parse 'key=value' lines from user text input."""
+        result: dict[str, str] = {}
+        for line in text.strip().splitlines():
+            line = line.strip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if key:
+                result[key] = value
+        return result
 
     async def _finish_setup_from_session(
         self,
@@ -318,6 +390,7 @@ class SetupWorkflow:
             session.selected_prompt_text,
             prompt_name=session.selected_prompt_name,
             template_name=session.selected_template,
+            template_params=session.template_params,
         )
 
     async def _finish_setup(
@@ -328,9 +401,16 @@ class SetupWorkflow:
         *,
         prompt_name: str | None = None,
         template_name: str | None = None,
+        template_params: dict[str, str] | None = None,
     ) -> None:
+        import json as _json
+
         chat_id = self._resolve_chat_id(message)
         prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
+
+        params_json: str | None = None
+        if template_params:
+            params_json = _json.dumps(template_params, ensure_ascii=False)
 
         async with get_session() as db:
             send_dt = True
@@ -345,6 +425,7 @@ class SetupWorkflow:
                 system_prompt=system_prompt,
                 prompt_name=prompt_name,
                 response_template=template_name,
+                template_params=params_json,
                 timezone=self._settings.default_timezone,
                 show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
                 show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,

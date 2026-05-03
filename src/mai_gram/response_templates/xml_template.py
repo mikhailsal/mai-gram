@@ -1,18 +1,42 @@
-"""XML response template -- thought + content in XML tags."""
+"""XML response template -- reasoning + content in XML tags.
+
+Supports user-configurable parameters:
+- reasoning_field: tag name for the reasoning block (default "thought")
+- num_reasoning_paragraphs: minimum paragraphs in reasoning (default 2)
+"""
 
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
     ResponseTemplate,
     TemplateExample,
+    TemplateParam,
 )
 from mai_gram.response_templates.registry import register_template
 
 _TAG_RE = re.compile(r"<(\w+)>(.*?)</\1>", re.DOTALL)
+
+_REASONING_PARAGRAPHS = [
+    (
+        "The user is asking about Python decorators. "
+        "I should explain the concept clearly with a practical example."
+    ),
+    (
+        "Decorators are a form of metaprogramming. I'll start with the "
+        "basic pattern and then show a real-world use case."
+    ),
+    "I should mention common pitfalls like losing function metadata without functools.wraps.",
+    "It would also be helpful to compare class-based and function-based decorators.",
+    "Let me include a concise code snippet so the explanation is concrete and actionable.",
+    "I'll wrap up by linking decorators to broader design patterns like the Adapter pattern.",
+    "Finally, I could suggest further reading for those who want to go deeper.",
+    "Let me also consider how decorators interact with async functions in modern Python.",
+]
 
 
 def _extract_xml_fields(
@@ -28,12 +52,29 @@ def _extract_xml_fields(
     return fields
 
 
-class XmlTemplate(ResponseTemplate):
-    """Structured XML template with <thought> and <content> tags.
+def _generate_reasoning_example(num_paragraphs: int) -> str:
+    """Build example reasoning text with exactly *num_paragraphs* paragraphs."""
+    paras = _REASONING_PARAGRAPHS[:num_paragraphs]
+    while len(paras) < num_paragraphs:
+        paras.append(f"(Additional reasoning paragraph {len(paras) + 1}.)")
+    return "\n\n".join(paras)
 
-    The model is instructed to wrap its reasoning in <thought> and its
-    user-facing reply in <content>. Order matters.
+
+class XmlTemplate(ResponseTemplate):
+    """Structured XML template with configurable reasoning + content tags.
+
+    The model is instructed to wrap its reasoning in a configurable tag
+    (default ``<thought>``) and its user-facing reply in ``<content>``.
     """
+
+    def __init__(
+        self,
+        *,
+        reasoning_field: str = "thought",
+        num_reasoning_paragraphs: int = 2,
+    ) -> None:
+        self._reasoning_field = reasoning_field
+        self._num_reasoning_paragraphs = num_reasoning_paragraphs
 
     @property
     def name(self) -> str:
@@ -41,14 +82,47 @@ class XmlTemplate(ResponseTemplate):
 
     @property
     def description(self) -> str:
-        return "XML tags: <thought> + <content>"
+        return f"XML tags: <{self._reasoning_field}> + <content>"
+
+    def get_params(self) -> list[TemplateParam]:
+        return [
+            TemplateParam(
+                key="reasoning_field",
+                label="Reasoning field name",
+                param_type="str",
+                default="thought",
+                description="XML tag name for internal reasoning",
+                suggestions=["thought", "think", "scratchpad", "reasoning", "reflection"],
+            ),
+            TemplateParam(
+                key="num_reasoning_paragraphs",
+                label="Reasoning paragraphs",
+                param_type="int",
+                default=2,
+                description="Minimum number of reasoning paragraphs",
+                min_value=1,
+                max_value=8,
+            ),
+        ]
+
+    def get_effective_params(self) -> dict[str, Any]:
+        return {
+            "reasoning_field": self._reasoning_field,
+            "num_reasoning_paragraphs": self._num_reasoning_paragraphs,
+        }
+
+    def _build_with_params(self, params: dict[str, Any]) -> XmlTemplate:
+        return XmlTemplate(
+            reasoning_field=params["reasoning_field"],
+            num_reasoning_paragraphs=params["num_reasoning_paragraphs"],
+        )
 
     def get_fields(self) -> list[FieldDescriptor]:
         return [
             FieldDescriptor(
-                name="thought",
+                name=self._reasoning_field,
                 required=True,
-                display_label="\U0001f4ad Thought",
+                display_label=f"\U0001f4ad {self._reasoning_field.replace('_', ' ').title()}",
                 display_tag="blockquote",
                 expandable=True,
                 user_can_hide=True,
@@ -63,6 +137,7 @@ class XmlTemplate(ResponseTemplate):
         ]
 
     def format_instruction(self) -> str:
+        rf = self._reasoning_field
         field_names = [f.name for f in self.get_fields()]
         tags_spec = "\n".join(f"<{n}>...</{n}>" for n in field_names)
         order_note = " -> ".join(f"<{n}>" for n in field_names)
@@ -72,18 +147,19 @@ class XmlTemplate(ResponseTemplate):
             "Do NOT output any text outside these tags.\n\n"
             f"{tags_spec}\n\n"
             f"Tag order is strict: {order_note}\n"
-            "The <thought> tag contains your internal reasoning (at least 2 paragraphs). "
+            f"The <{rf}> tag contains your internal reasoning "
+            f"(at least {self._num_reasoning_paragraphs} paragraph"
+            f"{'s' if self._num_reasoning_paragraphs != 1 else ''}). "
             "The <content> tag contains your response to the human."
         )
 
     def examples(self) -> list[TemplateExample]:
+        rf = self._reasoning_field
+        reasoning = _generate_reasoning_example(self._num_reasoning_paragraphs)
         return [
             TemplateExample(
                 text=(
-                    "<thought>\nThe user is asking about Python decorators. "
-                    "I should explain the concept clearly with a practical example.\n\n"
-                    "Decorators are a form of metaprogramming. I'll start with the "
-                    "basic pattern and then show a real-world use case.\n</thought>\n"
+                    f"<{rf}>\n{reasoning}\n</{rf}>\n"
                     "<content>\nA Python decorator is a function that wraps another "
                     "function to extend its behavior...\n</content>"
                 ),

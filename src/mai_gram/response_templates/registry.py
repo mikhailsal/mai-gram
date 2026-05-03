@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mai_gram.response_templates.base import ResponseTemplate
@@ -38,12 +38,21 @@ def register_template(template: ResponseTemplate) -> None:
     _REGISTRY[template.name] = template
 
 
-def get_template(name: str | None) -> ResponseTemplate:
-    """Look up a template by name. Returns EmptyTemplate for None/unknown."""
+def get_template(
+    name: str | None,
+    params: dict[str, Any] | None = None,
+) -> ResponseTemplate:
+    """Look up a template by name and optionally apply user params.
+
+    Returns EmptyTemplate for None/unknown names.  When *params* is
+    provided (and not empty), calls ``template.with_params(params)``
+    to produce a configured instance.
+    """
     _discover()
-    if name is None or name not in _REGISTRY:
-        return _REGISTRY["empty"]
-    return _REGISTRY[name]
+    base = _REGISTRY["empty"] if name is None or name not in _REGISTRY else _REGISTRY[name]
+    if params:
+        return base.with_params(params)
+    return base
 
 
 def list_template_names() -> list[str]:

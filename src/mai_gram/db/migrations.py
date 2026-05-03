@@ -33,7 +33,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 def register_migration(version: int, description: str) -> Callable[[MigrationFunc], MigrationFunc]:
@@ -167,6 +167,17 @@ async def _migrate_v7(conn: AsyncConnection) -> None:
     if "hidden_template_fields" not in existing_cols:
         await conn.execute(text("ALTER TABLE chats ADD COLUMN hidden_template_fields TEXT"))
         logger.info("Added chats.hidden_template_fields column")
+
+
+@register_migration(8, "Add template_params column to chats")
+async def _migrate_v8(conn: AsyncConnection) -> None:
+    """Version 8: add Chat.template_params for user-configurable template overrides."""
+    result = await conn.execute(text("PRAGMA table_info(chats)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "template_params" not in existing_cols:
+        await conn.execute(text("ALTER TABLE chats ADD COLUMN template_params TEXT"))
+        logger.info("Added chats.template_params column")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

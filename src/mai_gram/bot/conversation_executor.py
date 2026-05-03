@@ -28,6 +28,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _parse_template_params(chat: Any) -> dict[str, Any] | None:
+    """Extract JSON template_params from a Chat object, returning None on failure."""
+    raw = getattr(chat, "template_params", None)
+    if not raw:
+        return None
+    try:
+        data: dict[str, Any] = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return data
+
+
 @dataclass(frozen=True, slots=True)
 class AssistantTurnRequest:
     """Prepared inputs for one assistant response generation pass."""
@@ -157,7 +169,8 @@ class ConversationExecutor:
     ) -> AssistantTurnResult:
         sent_msg_ids: list[str] = []
         tool_call_cb, tool_result_cb = self._tool_activity.build_callbacks(request, sent_msg_ids)
-        template = get_template(request.chat.response_template)
+        tpl_params = _parse_template_params(request.chat)
+        template = get_template(request.chat.response_template, tpl_params)
         total_attempts = 1 + max_format_retries
 
         try:

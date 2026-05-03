@@ -230,9 +230,19 @@ class PromptBuilder:
     @staticmethod
     def _build_template_section(chat: Chat) -> str:
         """Append response format instructions from the chat's template."""
+        import json as _json
+
         from mai_gram.response_templates.registry import get_template
 
-        template = get_template(getattr(chat, "response_template", None))
+        raw_params = getattr(chat, "template_params", None)
+        params: dict[str, object] | None = None
+        if raw_params:
+            try:
+                params = _json.loads(raw_params)
+            except (ValueError, TypeError):
+                params = None
+
+        template = get_template(getattr(chat, "response_template", None), params)
         instruction = template.format_instruction()
         if not instruction:
             return ""

@@ -329,7 +329,16 @@ class BotHandler:
                 )
                 return
 
-            template = get_template(chat.response_template)
+            import json as _json
+
+            _raw_tpl_params = getattr(chat, "template_params", None)
+            _tpl_params: dict[str, object] | None = None
+            if _raw_tpl_params:
+                try:
+                    _tpl_params = _json.loads(_raw_tpl_params)
+                except (ValueError, TypeError):
+                    _tpl_params = None
+            template = get_template(chat.response_template, _tpl_params)
             hideable = [f for f in template.get_fields() if f.user_can_hide]
 
             if not hideable:

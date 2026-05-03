@@ -4,12 +4,18 @@ Response templates constrain LLM output into structured formats (XML, JSON,
 markdown headers, etc.) with named fields. Each template defines how to
 instruct the model, parse raw output, validate compliance, and render
 individual fields for Telegram display.
+
+Templates support user-configurable parameters (e.g. field names, counts)
+declared via ``get_params()``.  A parameterized copy is obtained through
+``with_params()``, which returns a new instance whose instructions, examples,
+parsing, and validation all reflect the chosen values.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +49,20 @@ class TemplateExample:
 
     text: str
     is_positive: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateParam:
+    """Declares a single user-configurable template parameter."""
+
+    key: str
+    label: str
+    param_type: str  # "int" | "str"
+    default: Any
+    description: str = ""
+    min_value: int | None = None
+    max_value: int | None = None
+    suggestions: list[str] = field(default_factory=list)
 
 
 class ResponseTemplate(ABC):
@@ -91,6 +111,68 @@ class ResponseTemplate(ABC):
         understand the expected format.
         """
         return []
+
+    def get_params(self) -> list[TemplateParam]:
+        """Declare user-configurable parameters for this template.
+
+        Override to expose parameters that users can customize when creating
+        a chat. The base implementation returns an empty list.
+        """
+        return []
+
+    def with_params(self, params: dict[str, Any]) -> ResponseTemplate:
+        """Return a new template instance configured with *params*.
+
+        Only keys declared in ``get_params()`` are accepted; unknown keys
+        are silently ignored. Values are coerced and clamped to declared
+        constraints. The base implementation returns ``self`` unchanged
+        when no params are declared.
+        """
+        declared = {p.key: p for p in self.get_params()}
+        if not declared:
+            return self
+        resolved = self._resolve_params(params, declared)
+        return self._build_with_params(resolved)
+
+    def get_effective_params(self) -> dict[str, Any]:
+        """Return the current effective parameter values.
+
+        For a default (non-parameterized) instance this returns the declared
+        defaults. For a parameterized instance it returns the configured values.
+        """
+        return {p.key: p.default for p in self.get_params()}
+
+    def _build_with_params(self, params: dict[str, Any]) -> ResponseTemplate:
+        """Subclass hook: construct a new instance with resolved *params*.
+
+        Only called when the template has declared parameters.
+        """
+        return self
+
+    @staticmethod
+    def _resolve_params(
+        raw: dict[str, Any],
+        declared: dict[str, TemplateParam],
+    ) -> dict[str, Any]:
+        """Coerce, validate, and fill defaults for raw user params."""
+        result: dict[str, Any] = {}
+        for key, spec in declared.items():
+            value = raw.get(key, spec.default)
+            if spec.param_type == "int":
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    value = spec.default
+                if spec.min_value is not None:
+                    value = max(value, spec.min_value)
+                if spec.max_value is not None:
+                    value = min(value, spec.max_value)
+            elif spec.param_type == "str":
+                value = str(value).strip() if value else spec.default
+                if not value:
+                    value = spec.default
+            result[key] = value
+        return result
 
     def render_field_html(
         self,

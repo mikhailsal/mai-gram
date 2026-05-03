@@ -478,6 +478,24 @@ async def _dispatch_console_runtime(
             user_id=user_id,
             callback_data=f"template:{template}",
         )
+        raw_tpl_params = getattr(args, "template_params", None)
+        if raw_tpl_params:
+            kv_lines = "\n".join(raw_tpl_params)
+            await messenger.dispatch_text(
+                chat_id=chat_id,
+                user_id=user_id,
+                text=kv_lines,
+            )
+        else:
+            from mai_gram.response_templates.registry import get_template as _get_tpl
+
+            tpl_obj = _get_tpl(template if template != "empty" else None)
+            if tpl_obj.get_params():
+                await messenger.dispatch_callback(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    callback_data="tpl_params:__defaults__",
+                )
 
     if not (args.start or args.command or args.callbacks or args.message):
         raise SystemExit(

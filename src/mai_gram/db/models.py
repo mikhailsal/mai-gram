@@ -119,6 +119,15 @@ class Chat(Base):
             "NULL means the empty template (no format constraints)."
         ),
     )
+    template_params: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        doc=(
+            "JSON-encoded dict of user-configured template parameter overrides. "
+            "NULL means all defaults. Keys match TemplateParam.key values."
+        ),
+    )
     hidden_template_fields: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,

@@ -97,6 +97,15 @@ def _add_setup_arguments(parser: argparse.ArgumentParser) -> None:
             "Available: empty, xml, json, markdown_headers, xml_emotions."
         ),
     )
+    parser.add_argument(
+        "--template-params",
+        metavar="KEY=VALUE",
+        nargs="*",
+        help=(
+            "Template parameter overrides as key=value pairs. "
+            "Example: --template-params reasoning_field=scratchpad num_reasoning_paragraphs=4"
+        ),
+    )
 
 
 class ConsoleStateStore:
