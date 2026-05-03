@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from mai_gram.db.models import Chat, KnowledgeEntry, Message
     from mai_gram.memory.knowledge_base import WikiStore
     from mai_gram.memory.messages import MessageStore
+    from mai_gram.response_templates.base import ResponseTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +62,25 @@ class PromptBuilder:
         llm_history = await self._load_llm_history(chat.id, cut_above_message_id)
         loaded_count = len(llm_history)
 
+        template = self._resolve_template(chat)
         system_prompt = self._build_system_prompt(
             chat,
             wiki_entries,
             now,
             cut_above_message_id=cut_above_message_id,
+            template=template,
         )
+        prefill = template.assistant_prefill() if template is not None else None
         llm_history, token_count = await self._truncate_history_for_budget(
             chat.id,
             system_prompt,
             llm_history,
         )
-        context = self._build_context_messages(system_prompt, llm_history)
+        context = self._build_context_messages(
+            system_prompt,
+            llm_history,
+            assistant_prefill=prefill,
+        )
 
         final_count = len(llm_history)
         logger.info(
@@ -137,8 +145,13 @@ class PromptBuilder:
     def _build_context_messages(
         system_prompt: str,
         llm_history: list[ChatMessage],
+        *,
+        assistant_prefill: str | None = None,
     ) -> list[ChatMessage]:
-        return [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
+        messages = [ChatMessage(role=MessageRole.SYSTEM, content=system_prompt), *llm_history]
+        if assistant_prefill:
+            messages.append(ChatMessage(role=MessageRole.ASSISTANT, content=assistant_prefill))
+        return messages
 
     def _normalize_conversation(self, messages: list[ChatMessage]) -> list[ChatMessage]:
         """Merge consecutive user messages for LLM compatibility."""
@@ -199,6 +212,27 @@ class PromptBuilder:
             reasoning=persisted.reasoning,
         )
 
+    @staticmethod
+    def _resolve_template(chat: Chat) -> ResponseTemplate | None:
+        """Look up the chat's response template, applying any stored params."""
+        import json as _json
+
+        from mai_gram.response_templates.registry import get_template
+
+        template_name = getattr(chat, "response_template", None)
+        if template_name is None:
+            return None
+
+        raw_params = getattr(chat, "template_params", None)
+        params: dict[str, object] | None = None
+        if raw_params:
+            try:
+                params = _json.loads(raw_params)
+            except (ValueError, TypeError):
+                params = None
+
+        return get_template(template_name, params)
+
     def _build_system_prompt(
         self,
         chat: Chat,
@@ -206,6 +240,7 @@ class PromptBuilder:
         now: datetime,
         *,
         cut_above_message_id: int | None = None,
+        template: ResponseTemplate | None = None,
     ) -> str:
         test_section = ""
         if self._test_mode:
@@ -223,26 +258,32 @@ class PromptBuilder:
                 "or get_messages_by_timerange tools to retrieve them."
             )
 
-        template_section = self._build_template_section(chat)
+        template_section = self._build_template_section(chat, template=template)
 
         return f"{test_section}{chat.system_prompt}{cut_notice}{template_section}"
 
     @staticmethod
-    def _build_template_section(chat: Chat) -> str:
+    def _build_template_section(
+        chat: Chat,
+        *,
+        template: ResponseTemplate | None = None,
+    ) -> str:
         """Append response format instructions from the chat's template."""
-        import json as _json
+        if template is None:
+            import json as _json
 
-        from mai_gram.response_templates.registry import get_template
+            from mai_gram.response_templates.registry import get_template
 
-        raw_params = getattr(chat, "template_params", None)
-        params: dict[str, object] | None = None
-        if raw_params:
-            try:
-                params = _json.loads(raw_params)
-            except (ValueError, TypeError):
-                params = None
+            raw_params = getattr(chat, "template_params", None)
+            params: dict[str, object] | None = None
+            if raw_params:
+                try:
+                    params = _json.loads(raw_params)
+                except (ValueError, TypeError):
+                    params = None
 
-        template = get_template(getattr(chat, "response_template", None), params)
+            template = get_template(getattr(chat, "response_template", None), params)
+
         instruction = template.format_instruction()
         if not instruction:
             return ""

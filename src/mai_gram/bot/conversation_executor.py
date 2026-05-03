@@ -218,6 +218,7 @@ class ConversationExecutor:
     ) -> tuple[_StreamOutcome, ParsedResponse]:
         """Stream response and validate against template, retrying on failure."""
         last_errors: list[str] = []
+        prefill = template.assistant_prefill() or ""
 
         for attempt in range(1, total_attempts + 1):
             outcome = await self._stream_response(
@@ -226,6 +227,17 @@ class ConversationExecutor:
                 on_tool_call_display=on_tool_call_display,
                 on_tool_result_display=on_tool_result_display,
             )
+            if prefill:
+                outcome = _StreamOutcome(
+                    response_text=prefill + outcome.response_text,
+                    response_reasoning=outcome.response_reasoning,
+                    placeholder_msg_id=outcome.placeholder_msg_id,
+                    committed_content_offset=outcome.committed_content_offset,
+                    reasoning_committed=outcome.reasoning_committed,
+                    usage=outcome.usage,
+                    cost=outcome.cost,
+                    is_byok=outcome.is_byok,
+                )
             parsed = template.parse(outcome.response_text)
             errors = template.validate(parsed)
 

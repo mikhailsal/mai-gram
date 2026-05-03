@@ -200,6 +200,17 @@ class ResponseTemplate(ABC):
         close_tag = tag.split()[0]
         return f"<{tag}>{descriptor.label}\n{inner_html}</{close_tag}>"
 
+    def assistant_prefill(self) -> str | None:
+        """Return text for an assistant prefill message, or ``None`` to skip.
+
+        When a non-``None`` value is returned, the prompt builder appends an
+        assistant message with this content at the very end of the context.
+        This "primes" the model to continue from the given prefix, which
+        helps enforce structured output from the first token and can disable
+        native reasoning on some providers (e.g. Google models).
+        """
+        return None
+
     def content_field_name(self) -> str:
         """Return the name of the primary content field (rendered as main body)."""
         return "content"

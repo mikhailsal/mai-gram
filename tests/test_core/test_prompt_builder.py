@@ -163,3 +163,199 @@ def test_build_system_prompt_adds_test_mode_banner() -> None:
 
     assert prompt.startswith("[TEST MODE]")
     assert prompt.endswith("System prompt")
+
+
+# ──────────────────────────────────────────────────────────────────
+# Assistant prefill integration
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_build_context_messages_without_prefill() -> None:
+    messages = PromptBuilder._build_context_messages(
+        "system", [ChatMessage(role=MessageRole.USER, content="hello")]
+    )
+    assert len(messages) == 2
+    assert messages[0].role == MessageRole.SYSTEM
+    assert messages[1].role == MessageRole.USER
+
+
+def test_build_context_messages_with_prefill() -> None:
+    messages = PromptBuilder._build_context_messages(
+        "system",
+        [ChatMessage(role=MessageRole.USER, content="hello")],
+        assistant_prefill="<thought>",
+    )
+    assert len(messages) == 3
+    assert messages[0].role == MessageRole.SYSTEM
+    assert messages[1].role == MessageRole.USER
+    assert messages[2].role == MessageRole.ASSISTANT
+    assert messages[2].content == "<thought>"
+
+
+def test_build_context_messages_with_none_prefill() -> None:
+    messages = PromptBuilder._build_context_messages(
+        "system",
+        [ChatMessage(role=MessageRole.USER, content="hello")],
+        assistant_prefill=None,
+    )
+    assert len(messages) == 2
+
+
+def test_build_context_messages_with_empty_prefill() -> None:
+    messages = PromptBuilder._build_context_messages(
+        "system",
+        [ChatMessage(role=MessageRole.USER, content="hello")],
+        assistant_prefill="",
+    )
+    assert len(messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_build_context_appends_prefill_for_prefill_template() -> None:
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=12)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(return_value=[_make_message(1, "user", "hi")])
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store)
+    chat = cast(
+        "Any",
+        SimpleNamespace(
+            id="test-chat",
+            system_prompt="Test",
+            response_template="xml_prefill",
+            template_params=None,
+        ),
+    )
+
+    context = await builder.build_context(chat)
+
+    assert context[-1].role == MessageRole.ASSISTANT
+    assert context[-1].content == "<thought>"
+
+
+@pytest.mark.asyncio
+async def test_build_context_no_prefill_for_regular_template() -> None:
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=12)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(return_value=[_make_message(1, "user", "hi")])
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store)
+    chat = cast(
+        "Any",
+        SimpleNamespace(
+            id="test-chat",
+            system_prompt="Test",
+            response_template="xml",
+            template_params=None,
+        ),
+    )
+
+    context = await builder.build_context(chat)
+
+    assert context[-1].role == MessageRole.USER
+    assert context[-1].content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_build_context_no_prefill_for_none_template() -> None:
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=12)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(return_value=[_make_message(1, "user", "hi")])
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store)
+    chat = cast(
+        "Any",
+        SimpleNamespace(
+            id="test-chat",
+            system_prompt="Test",
+            response_template=None,
+            template_params=None,
+        ),
+    )
+
+    context = await builder.build_context(chat)
+
+    assert context[-1].role == MessageRole.USER
+    assert context[-1].content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_build_context_prefill_uses_custom_field_name() -> None:
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=12)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(return_value=[_make_message(1, "user", "hi")])
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store)
+    chat = cast(
+        "Any",
+        SimpleNamespace(
+            id="test-chat",
+            system_prompt="Test",
+            response_template="xml_prefill",
+            template_params=json.dumps({"reasoning_field": "think"}),
+        ),
+    )
+
+    context = await builder.build_context(chat)
+
+    assert context[-1].role == MessageRole.ASSISTANT
+    assert context[-1].content == "<think>"
+
+
+def test_resolve_template_returns_none_for_no_template() -> None:
+    chat = cast("Any", SimpleNamespace(response_template=None, template_params=None))
+    result = PromptBuilder._resolve_template(chat)
+    assert result is None
+
+
+def test_resolve_template_returns_template_for_valid_name() -> None:
+    chat = cast("Any", SimpleNamespace(response_template="xml", template_params=None))
+    result = PromptBuilder._resolve_template(chat)
+    assert result is not None
+    assert result.name == "xml"
+
+
+def test_resolve_template_applies_params() -> None:
+    chat = cast(
+        "Any",
+        SimpleNamespace(
+            response_template="xml",
+            template_params=json.dumps({"reasoning_field": "think"}),
+        ),
+    )
+    result = PromptBuilder._resolve_template(chat)
+    assert result is not None
+    assert result.get_fields()[0].name == "think"
+
+
+def test_resolve_template_handles_invalid_json_params() -> None:
+    chat = cast(
+        "Any",
+        SimpleNamespace(
+            response_template="xml",
+            template_params="not-json",
+        ),
+    )
+    result = PromptBuilder._resolve_template(chat)
+    assert result is not None
+    assert result.get_fields()[0].name == "thought"

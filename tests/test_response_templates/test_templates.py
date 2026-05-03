@@ -1,7 +1,7 @@
 """Unit tests for the response template plugin system.
 
-Covers both default behavior (backward compatibility) and user-configurable
-template parameters introduced in the parametrization update.
+Covers both default behavior (backward compatibility), user-configurable
+template parameters, and assistant prefill support.
 """
 
 from __future__ import annotations
@@ -10,6 +10,20 @@ from typing import ClassVar
 
 from mai_gram.response_templates.base import FieldDescriptor, ResponseTemplate, TemplateParam
 from mai_gram.response_templates.registry import get_template, list_template_names
+
+PREFILL_TEMPLATES: list[str] = [
+    "xml_prefill",
+    "json_prefill",
+    "markdown_headers_prefill",
+    "xml_emotions_prefill",
+]
+
+PARENT_OF: dict[str, str] = {
+    "xml_prefill": "xml",
+    "json_prefill": "json",
+    "markdown_headers_prefill": "markdown_headers",
+    "xml_emotions_prefill": "xml_emotions",
+}
 
 # ──────────────────────────────────────────────────────────────────
 # Registry
@@ -25,6 +39,11 @@ class TestRegistry:
         assert "markdown_headers" in names
         assert "xml_emotions" in names
 
+    def test_list_names_returns_all_prefill(self) -> None:
+        names = list_template_names()
+        for name in PREFILL_TEMPLATES:
+            assert name in names, f"Missing prefill template: {name}"
+
     def test_get_template_returns_empty_for_none(self) -> None:
         t = get_template(None)
         assert t.name == "empty"
@@ -35,6 +54,11 @@ class TestRegistry:
 
     def test_get_template_by_name(self) -> None:
         for name in ["empty", "xml", "json", "markdown_headers", "xml_emotions"]:
+            t = get_template(name)
+            assert t.name == name
+
+    def test_get_prefill_template_by_name(self) -> None:
+        for name in PREFILL_TEMPLATES:
             t = get_template(name)
             assert t.name == name
 
@@ -97,6 +121,10 @@ class TestEmptyTemplate:
     def test_description(self) -> None:
         t = get_template("empty")
         assert t.description
+
+    def test_assistant_prefill_is_none(self) -> None:
+        t = get_template("empty")
+        assert t.assistant_prefill() is None
 
     def test_has_no_params(self) -> None:
         t = get_template("empty")
@@ -187,6 +215,10 @@ class TestXmlTemplate:
         t = get_template("xml")
         html = t.render_field_html("content", "hello world")
         assert "blockquote" not in html
+
+    def test_assistant_prefill_is_none(self) -> None:
+        t = get_template("xml")
+        assert t.assistant_prefill() is None
 
     def test_description(self) -> None:
         t = get_template("xml")
@@ -885,6 +917,326 @@ class TestBaseRenderFieldHtml:
 
 
 # ──────────────────────────────────────────────────────────────────
+# XML prefill template
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestXmlPrefillTemplate:
+    def test_prefill_returns_opening_tag(self) -> None:
+        t = get_template("xml_prefill")
+        assert t.assistant_prefill() == "<thought>"
+
+    def test_prefill_respects_custom_reasoning_field(self) -> None:
+        t = get_template("xml_prefill", {"reasoning_field": "think"})
+        assert t.assistant_prefill() == "<think>"
+
+    def test_prefill_respects_custom_scratchpad(self) -> None:
+        t = get_template("xml_prefill", {"reasoning_field": "scratchpad"})
+        assert t.assistant_prefill() == "<scratchpad>"
+
+    def test_inherits_parse_from_xml(self) -> None:
+        t = get_template("xml_prefill")
+        raw = "<thought>reasoning</thought><content>answer</content>"
+        parsed = t.parse(raw)
+        assert parsed.fields["thought"] == "reasoning"
+        assert parsed.fields["content"] == "answer"
+
+    def test_inherits_validate_from_xml(self) -> None:
+        t = get_template("xml_prefill")
+        parsed = t.parse("<thought>t</thought><content>c</content>")
+        assert t.validate(parsed) == []
+
+    def test_inherits_fields_from_xml(self) -> None:
+        t = get_template("xml_prefill")
+        fields = t.get_fields()
+        assert fields[0].name == "thought"
+        assert fields[1].name == "content"
+
+    def test_inherits_format_instruction_from_xml(self) -> None:
+        t = get_template("xml_prefill")
+        instruction = t.format_instruction()
+        assert "<thought>" in instruction
+        assert "<content>" in instruction
+        assert "RESPONSE FORMAT" in instruction
+
+    def test_inherits_examples_from_xml(self) -> None:
+        t = get_template("xml_prefill")
+        examples = t.examples()
+        assert any(ex.is_positive for ex in examples)
+        assert any(not ex.is_positive for ex in examples)
+
+    def test_name_is_xml_prefill(self) -> None:
+        t = get_template("xml_prefill")
+        assert t.name == "xml_prefill"
+
+    def test_description_mentions_prefill(self) -> None:
+        t = get_template("xml_prefill")
+        assert "prefill" in t.description.lower()
+
+    def test_with_params_returns_prefill_instance(self) -> None:
+        t = get_template("xml_prefill", {"reasoning_field": "reflect"})
+        assert t.name == "xml_prefill"
+        assert t.assistant_prefill() == "<reflect>"
+
+    def test_custom_field_changes_parse_and_validate(self) -> None:
+        t = get_template("xml_prefill", {"reasoning_field": "think"})
+        raw = "<think>reasoning</think><content>answer</content>"
+        parsed = t.parse(raw)
+        assert t.validate(parsed) == []
+        assert parsed.fields["think"] == "reasoning"
+
+    def test_description_includes_custom_field(self) -> None:
+        t = get_template("xml_prefill", {"reasoning_field": "reflect"})
+        assert "reflect" in t.description
+
+
+# ──────────────────────────────────────────────────────────────────
+# JSON prefill template
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestJsonPrefillTemplate:
+    def test_prefill_returns_json_start(self) -> None:
+        t = get_template("json_prefill")
+        assert t.assistant_prefill() == '{"thought": "'
+
+    def test_prefill_respects_custom_reasoning_field(self) -> None:
+        t = get_template("json_prefill", {"reasoning_field": "think"})
+        assert t.assistant_prefill() == '{"think": "'
+
+    def test_prefill_respects_custom_scratchpad(self) -> None:
+        t = get_template("json_prefill", {"reasoning_field": "scratchpad"})
+        assert t.assistant_prefill() == '{"scratchpad": "'
+
+    def test_inherits_parse_from_json(self) -> None:
+        t = get_template("json_prefill")
+        raw = '{"thought": "reasoning", "content": "answer"}'
+        parsed = t.parse(raw)
+        assert parsed.fields["thought"] == "reasoning"
+        assert parsed.fields["content"] == "answer"
+
+    def test_inherits_validate_from_json(self) -> None:
+        t = get_template("json_prefill")
+        parsed = t.parse('{"thought": "t", "content": "c"}')
+        assert t.validate(parsed) == []
+
+    def test_inherits_fields_from_json(self) -> None:
+        t = get_template("json_prefill")
+        fields = t.get_fields()
+        assert len(fields) == 2
+        assert fields[0].name == "thought"
+        assert fields[1].name == "content"
+
+    def test_inherits_format_instruction_from_json(self) -> None:
+        t = get_template("json_prefill")
+        instruction = t.format_instruction()
+        assert "JSON" in instruction
+
+    def test_name_is_json_prefill(self) -> None:
+        t = get_template("json_prefill")
+        assert t.name == "json_prefill"
+
+    def test_description_mentions_prefill(self) -> None:
+        t = get_template("json_prefill")
+        assert "prefill" in t.description.lower()
+
+    def test_with_params_returns_prefill_instance(self) -> None:
+        t = get_template("json_prefill", {"reasoning_field": "reflect"})
+        assert t.name == "json_prefill"
+        assert t.assistant_prefill() == '{"reflect": "'
+
+    def test_custom_field_changes_parse_and_validate(self) -> None:
+        t = get_template("json_prefill", {"reasoning_field": "think"})
+        raw = '{"think": "reasoning", "content": "answer"}'
+        parsed = t.parse(raw)
+        assert t.validate(parsed) == []
+        assert parsed.fields["think"] == "reasoning"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Markdown headers prefill template
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestMarkdownHeadersPrefillTemplate:
+    def test_prefill_returns_section_header(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        assert t.assistant_prefill() == "## Thought\n"
+
+    def test_prefill_respects_custom_reasoning_field(self) -> None:
+        t = get_template("markdown_headers_prefill", {"reasoning_field": "Think"})
+        assert t.assistant_prefill() == "## Think\n"
+
+    def test_prefill_respects_custom_scratchpad(self) -> None:
+        t = get_template("markdown_headers_prefill", {"reasoning_field": "Scratchpad"})
+        assert t.assistant_prefill() == "## Scratchpad\n"
+
+    def test_inherits_parse_from_markdown(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        raw = "## Thought\nreasoning\n\n## Content\nanswer"
+        parsed = t.parse(raw)
+        assert parsed.fields["Thought"] == "reasoning"
+        assert parsed.fields["Content"] == "answer"
+
+    def test_inherits_validate_from_markdown(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        parsed = t.parse("## Thought\nt\n\n## Content\nc")
+        assert t.validate(parsed) == []
+
+    def test_inherits_fields_from_markdown(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        fields = t.get_fields()
+        assert len(fields) == 2
+        assert fields[0].name == "Thought"
+        assert fields[1].name == "Content"
+
+    def test_inherits_format_instruction_from_markdown(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        instruction = t.format_instruction()
+        assert "## Thought" in instruction
+
+    def test_name_is_markdown_headers_prefill(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        assert t.name == "markdown_headers_prefill"
+
+    def test_description_mentions_prefill(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        assert "prefill" in t.description.lower()
+
+    def test_with_params_returns_prefill_instance(self) -> None:
+        t = get_template("markdown_headers_prefill", {"reasoning_field": "Reflect"})
+        assert t.name == "markdown_headers_prefill"
+        assert t.assistant_prefill() == "## Reflect\n"
+
+    def test_custom_field_changes_parse_and_validate(self) -> None:
+        t = get_template("markdown_headers_prefill", {"reasoning_field": "Think"})
+        raw = "## Think\nreasoning\n\n## Content\nanswer"
+        parsed = t.parse(raw)
+        assert t.validate(parsed) == []
+        assert parsed.fields["Think"] == "reasoning"
+
+    def test_content_field_name(self) -> None:
+        t = get_template("markdown_headers_prefill")
+        assert t.content_field_name() == "Content"
+
+
+# ──────────────────────────────────────────────────────────────────
+# XML with emotions prefill template
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestXmlWithEmotionsPrefillTemplate:
+    def test_prefill_returns_opening_reasoning_tag(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        assert t.assistant_prefill() == "<thought>"
+
+    def test_prefill_respects_custom_reasoning_field(self) -> None:
+        t = get_template("xml_emotions_prefill", {"reasoning_field": "think"})
+        assert t.assistant_prefill() == "<think>"
+
+    def test_inherits_parse_from_xml_emotions(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        raw = "<thought>t</thought><emotions>happy</emotions><content>c</content>"
+        parsed = t.parse(raw)
+        assert parsed.fields["thought"] == "t"
+        assert parsed.fields["emotions"] == "happy"
+        assert parsed.fields["content"] == "c"
+
+    def test_inherits_validate_from_xml_emotions(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        parsed = t.parse("<thought>t</thought><emotions>e</emotions><content>c</content>")
+        assert t.validate(parsed) == []
+
+    def test_inherits_fields_order_from_xml_emotions(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        fields = t.get_fields()
+        names = [f.name for f in fields]
+        assert names == ["thought", "emotions", "content"]
+
+    def test_inherits_format_instruction_from_xml_emotions(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        instruction = t.format_instruction()
+        assert "<emotions>" in instruction
+        assert "<thought>" in instruction
+
+    def test_name_is_xml_emotions_prefill(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        assert t.name == "xml_emotions_prefill"
+
+    def test_description_mentions_prefill(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        assert "prefill" in t.description.lower()
+
+    def test_with_params_returns_prefill_instance(self) -> None:
+        t = get_template("xml_emotions_prefill", {"reasoning_field": "reflect"})
+        assert t.name == "xml_emotions_prefill"
+        assert t.assistant_prefill() == "<reflect>"
+
+    def test_custom_emotions_field(self) -> None:
+        t = get_template("xml_emotions_prefill", {"emotions_field": "mood"})
+        fields = t.get_fields()
+        names = [f.name for f in fields]
+        assert names == ["thought", "mood", "content"]
+
+    def test_combined_custom_fields(self) -> None:
+        t = get_template(
+            "xml_emotions_prefill",
+            {
+                "reasoning_field": "think",
+                "emotions_field": "mood",
+                "num_emotions": 5,
+            },
+        )
+        assert t.assistant_prefill() == "<think>"
+        fields = t.get_fields()
+        names = [f.name for f in fields]
+        assert names == ["think", "mood", "content"]
+        instruction = t.format_instruction()
+        assert "<think>" in instruction
+        assert "<mood>" in instruction
+        assert "exactly 5 emotions" in instruction
+
+    def test_declares_all_four_params(self) -> None:
+        t = get_template("xml_emotions_prefill")
+        keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in keys
+        assert "num_reasoning_paragraphs" in keys
+        assert "emotions_field" in keys
+        assert "num_emotions" in keys
+
+
+# ──────────────────────────────────────────────────────────────────
+# Non-prefill templates return None
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestNonPrefillTemplatesReturnNone:
+    """All non-prefill templates should return None from assistant_prefill()."""
+
+    NON_PREFILL: ClassVar[list[str]] = [
+        "empty",
+        "xml",
+        "json",
+        "markdown_headers",
+        "xml_emotions",
+    ]
+
+    def test_all_non_prefill_return_none(self) -> None:
+        for name in self.NON_PREFILL:
+            t = get_template(name)
+            assert t.assistant_prefill() is None, (
+                f"{name} should return None for assistant_prefill()"
+            )
+
+    def test_parameterized_non_prefill_still_return_none(self) -> None:
+        for name in ["xml", "json", "markdown_headers", "xml_emotions"]:
+            t = get_template(name, {"reasoning_field": "custom"})
+            assert t.assistant_prefill() is None, (
+                f"Parameterized {name} should still return None for assistant_prefill()"
+            )
+
+
+# ──────────────────────────────────────────────────────────────────
 # Cross-template consistency checks
 # ──────────────────────────────────────────────────────────────────
 
@@ -899,14 +1251,19 @@ class TestCrossTemplateConsistency:
         "xml_emotions",
     ]
 
+    ALL_PARAMETERIZED: ClassVar[list[str]] = [
+        *PARAMETERIZED_TEMPLATES,
+        *PREFILL_TEMPLATES,
+    ]
+
     def test_all_parameterized_templates_declare_reasoning_field(self) -> None:
-        for name in self.PARAMETERIZED_TEMPLATES:
+        for name in self.ALL_PARAMETERIZED:
             t = get_template(name)
             keys = [p.key for p in t.get_params()]
             assert "reasoning_field" in keys, f"{name} missing reasoning_field param"
 
     def test_all_parameterized_templates_declare_num_reasoning_paragraphs(self) -> None:
-        for name in self.PARAMETERIZED_TEMPLATES:
+        for name in self.ALL_PARAMETERIZED:
             t = get_template(name)
             keys = [p.key for p in t.get_params()]
             assert "num_reasoning_paragraphs" in keys, f"{name} missing num_reasoning_paragraphs"
@@ -927,14 +1284,14 @@ class TestCrossTemplateConsistency:
         assert names == ["thought", "emotions", "content"]
 
     def test_with_params_preserves_template_name(self) -> None:
-        for name in self.PARAMETERIZED_TEMPLATES:
+        for name in self.ALL_PARAMETERIZED:
             t = get_template(name, {"reasoning_field": "custom"})
             assert t.name == name
 
     def test_examples_always_contain_configured_field_names(self) -> None:
-        for name in self.PARAMETERIZED_TEMPLATES:
+        for name in self.ALL_PARAMETERIZED:
             custom_field = "zz_custom"
-            if name == "markdown_headers":
+            if name in ("markdown_headers", "markdown_headers_prefill"):
                 custom_field = "Zzcustom"
             t = get_template(name, {"reasoning_field": custom_field})
             examples = t.examples()
@@ -945,3 +1302,53 @@ class TestCrossTemplateConsistency:
                 assert custom_field.lower() in ex.text.lower(), (
                     f"{name}: example missing custom field name '{custom_field}'"
                 )
+
+    def test_prefill_templates_share_fields_with_parents(self) -> None:
+        """Prefill templates must produce identical fields as their parent."""
+        for prefill_name, parent_name in PARENT_OF.items():
+            parent = get_template(parent_name)
+            prefill = get_template(prefill_name)
+            parent_fields = [(f.name, f.required, f.order) for f in parent.get_fields()]
+            prefill_fields = [(f.name, f.required, f.order) for f in prefill.get_fields()]
+            assert parent_fields == prefill_fields, (
+                f"{prefill_name} fields differ from {parent_name}"
+            )
+
+    def test_prefill_templates_share_instruction_with_parents(self) -> None:
+        """Prefill templates produce the same format instruction as their parent."""
+        for prefill_name, parent_name in PARENT_OF.items():
+            parent = get_template(parent_name)
+            prefill = get_template(prefill_name)
+            assert parent.format_instruction() == prefill.format_instruction(), (
+                f"{prefill_name} instruction differs from {parent_name}"
+            )
+
+    def test_prefill_templates_share_examples_with_parents(self) -> None:
+        """Prefill templates produce the same examples as their parent."""
+        for prefill_name, parent_name in PARENT_OF.items():
+            parent = get_template(parent_name)
+            prefill = get_template(prefill_name)
+            parent_ex = [(e.text, e.is_positive) for e in parent.examples()]
+            prefill_ex = [(e.text, e.is_positive) for e in prefill.examples()]
+            assert parent_ex == prefill_ex, f"{prefill_name} examples differ from {parent_name}"
+
+    def test_prefill_templates_return_non_none_prefill(self) -> None:
+        """All prefill templates must return a non-None assistant_prefill."""
+        for name in PREFILL_TEMPLATES:
+            t = get_template(name)
+            prefill = t.assistant_prefill()
+            assert prefill is not None, f"{name} returned None for assistant_prefill()"
+            assert len(prefill) > 0, f"{name} returned empty string for assistant_prefill()"
+
+    def test_prefill_changes_with_custom_reasoning_field(self) -> None:
+        """Prefill must update when reasoning_field is customized."""
+        for name in PREFILL_TEMPLATES:
+            field_name = "customfield"
+            if name == "markdown_headers_prefill":
+                field_name = "Customfield"
+            t = get_template(name, {"reasoning_field": field_name})
+            prefill = t.assistant_prefill()
+            assert prefill is not None
+            assert field_name.lower() in prefill.lower(), (
+                f"{name}: prefill '{prefill}' doesn't contain custom field '{field_name}'"
+            )

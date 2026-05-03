@@ -22,8 +22,12 @@ def _discover() -> None:
 
     from mai_gram.response_templates import (  # noqa: F401
         empty,
+        json_prefill,
         json_template,
+        markdown_headers_prefill,
         markdown_headers_template,
+        xml_emotions_prefill,
+        xml_prefill,
         xml_template,
         xml_with_emotions,
     )
