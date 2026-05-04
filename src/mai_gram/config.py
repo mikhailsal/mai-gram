@@ -88,7 +88,7 @@ class Settings(BaseSettings):
         description="Maximum agentic tool-calling iterations per response",
     )
 
-    # -- Model whitelist config --
+    # -- Model config --
     models_config_path: str = Field(
         default="config/models.toml",
         description="Path to TOML file defining available models",
@@ -211,21 +211,33 @@ class Settings(BaseSettings):
     # -- Public TOML accessors ------------------------------------------------
 
     def get_allowed_models(self) -> list[str]:
-        """Load the model whitelist from the TOML config file."""
-        return self._models_loader().get_allowed_models(self.llm_model)
+        """Return keys of enabled models from the TOML config."""
+        return self._models_loader().get_enabled_models(self.llm_model)
 
     def get_default_model(self) -> str:
         """Get the default model from the TOML config."""
         return self._models_loader().get_default_model(self.llm_model)
 
-    def get_model_params(self, model_id: str) -> dict[str, Any]:
+    def get_model_title(self, model_key: str) -> str | None:
+        """Return the display title for *model_key*, or ``None``."""
+        return self._models_loader().get_model_title(model_key)
+
+    def get_model_id(self, model_key: str) -> str:
+        """Resolve the real OpenRouter model ID for *model_key*.
+
+        If the model section has an ``id`` field the value is returned;
+        otherwise *model_key* itself is the real model identifier.
+        """
+        return self._models_loader().get_model_id(model_key)
+
+    def get_model_params(self, model_key: str) -> dict[str, Any]:
         """Load per-model parameter overrides from the TOML config.
 
         Returns a dict of extra parameters (provider, reasoning, temperature, etc.)
         that should be merged into the OpenRouter request body for this model.
-        Returns an empty dict if no overrides are defined.
+        Meta-keys (``enabled``, ``title``, ``id``) are excluded.
         """
-        return self._models_loader().get_model_params(model_id)
+        return self._models_loader().get_model_params(model_key)
 
     def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
         """Load tool enable/disable lists from the models config.

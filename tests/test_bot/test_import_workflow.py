@@ -28,6 +28,7 @@ def _make_workflow() -> tuple[ImportWorkflow, MagicMock, MagicMock]:
 
     settings = MagicMock()
     settings.get_default_model.return_value = "openai/test-model"
+    settings.get_model_title.return_value = None
     settings.default_timezone = "UTC"
 
     workflow = ImportWorkflow(

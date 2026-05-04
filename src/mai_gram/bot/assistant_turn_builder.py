@@ -122,6 +122,7 @@ class AssistantTurnBuilder:
             chat_timezone=chat.timezone,
             cut_above_message_id=chat.cut_above_message_id,
         )
+        model_key = chat.llm_model
         return AssistantTurnRequest(
             chat=chat,
             message_store=message_store,
@@ -132,6 +133,7 @@ class AssistantTurnBuilder:
             show_datetime=chat.send_datetime,
             show_reasoning=chat.show_reasoning,
             show_tool_calls=chat.show_tool_calls,
-            extra_params=self._settings.get_model_params(chat.llm_model),
+            extra_params=self._settings.get_model_params(model_key),
             failure_log_message=failure_log_message,
+            resolved_model=self._settings.get_model_id(model_key),
         )

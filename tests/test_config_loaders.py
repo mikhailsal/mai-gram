@@ -14,7 +14,347 @@ def _fake_secret(label: str) -> str:
     return f"test-{label}-value"
 
 
-class TestModelsConfigLoader:
+# ── helpers ──────────────────────────────────────────────────────────
+
+
+def _write_models_toml(path, content: str) -> str:
+    models_path = path / "models.toml"
+    models_path.write_text(content, encoding="utf-8")
+    return str(models_path)
+
+
+# ── ModelsConfigLoader ───────────────────────────────────────────────
+
+
+class TestModelsConfigLoaderBasic:
+    """Core loader behaviour: enabled flag, defaults, refresh."""
+
+    def test_enabled_models_returned_in_order(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "default = 'b-model'",
+                    "",
+                    '[models."a-model"]',
+                    "",
+                    '[models."b-model"]',
+                    "",
+                    '[models."c-model"]',
+                    "enabled = false",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("fallback") == ["a-model", "b-model"]
+
+    def test_all_models_enabled_by_default(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "",
+                    '[models."x/alpha"]',
+                    "temperature = 0.5",
+                    "",
+                    '[models."x/beta"]',
+                    "temperature = 1.0",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("fallback") == ["x/alpha", "x/beta"]
+
+    def test_disabled_model_excluded(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "",
+                    '[models."visible"]',
+                    "",
+                    '[models."hidden"]',
+                    "enabled = false",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("fallback") == ["visible"]
+
+    def test_explicitly_enabled_model_included(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "",
+                    '[models."explicit"]',
+                    "enabled = true",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("fallback") == ["explicit"]
+
+    def test_no_model_sections_falls_back_to_default(self, tmp_path) -> None:
+        toml = _write_models_toml(tmp_path, "[models]\n")
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("my-fallback") == ["my-fallback"]
+
+    def test_missing_file_falls_back_to_default(self, tmp_path) -> None:
+        loader = ModelsConfigLoader(str(tmp_path / "missing.toml"))
+
+        assert loader.get_enabled_models("fallback") == ["fallback"]
+
+    def test_get_allowed_models_is_alias_for_get_enabled_models(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."m1"]',
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_allowed_models("fb") == loader.get_enabled_models("fb")
+
+
+class TestModelsConfigLoaderDefault:
+    """Default model resolution."""
+
+    def test_returns_configured_default(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "[models]\ndefault = 'preferred'\n",
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_default_model("fallback") == "preferred"
+
+    def test_falls_back_when_no_default_set(self, tmp_path) -> None:
+        toml = _write_models_toml(tmp_path, "[models]\n")
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_default_model("fallback") == "fallback"
+
+
+class TestModelsConfigLoaderTitle:
+    """Display title resolution."""
+
+    def test_returns_title_when_set(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."google/gemini-3.1-flash-lite"]',
+                    "title = 'Gemini 3.1 Flash Lite @high'",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_title("google/gemini-3.1-flash-lite") == (
+            "Gemini 3.1 Flash Lite @high"
+        )
+
+    def test_returns_none_when_no_title(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."no-title"]',
+                    "temperature = 0.5",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_title("no-title") is None
+
+    def test_returns_none_for_unknown_model(self, tmp_path) -> None:
+        toml = _write_models_toml(tmp_path, "[models]\n")
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_title("unknown") is None
+
+
+class TestModelsConfigLoaderModelId:
+    """Real model ID resolution for aliases."""
+
+    def test_returns_id_when_set(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."flash-creative"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "temperature = 1.5",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_id("flash-creative") == "google/gemini-2.5-flash"
+
+    def test_returns_key_when_no_id(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."google/gemini-2.5-flash"]',
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_id("google/gemini-2.5-flash") == "google/gemini-2.5-flash"
+
+    def test_returns_key_for_unknown_model(self, tmp_path) -> None:
+        toml = _write_models_toml(tmp_path, "[models]\n")
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_id("unknown") == "unknown"
+
+
+class TestModelsConfigLoaderParams:
+    """Parameter extraction with meta-key stripping."""
+
+    def test_returns_api_params_without_meta_keys(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."my-model"]',
+                    "enabled = true",
+                    "title = 'My Model'",
+                    "id = 'real/model'",
+                    "temperature = 0.7",
+                    "max_tokens = 2048",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+        params = loader.get_model_params("my-model")
+
+        assert params == {"temperature": 0.7, "max_tokens": 2048}
+        assert "enabled" not in params
+        assert "title" not in params
+        assert "id" not in params
+
+    def test_nested_params_preserved(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."nested"]',
+                    "reasoning.effort = 'high'",
+                    "provider.order = ['Google']",
+                    "provider.allow_fallbacks = false",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+        params = loader.get_model_params("nested")
+
+        assert params["reasoning"] == {"effort": "high"}
+        assert params["provider"] == {"order": ["Google"], "allow_fallbacks": False}
+
+    def test_empty_params_for_unknown_model(self, tmp_path) -> None:
+        toml = _write_models_toml(tmp_path, "[models]\n")
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_model_params("unknown") == {}
+
+
+class TestModelsConfigLoaderDuplicateModels:
+    """Same base model with different parameter sets."""
+
+    def test_alias_entries_with_shared_base_model(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "default = 'flash-balanced'",
+                    "",
+                    '[models."flash-balanced"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "title = 'Gemini Flash (balanced)'",
+                    "reasoning.effort = 'medium'",
+                    "temperature = 0.7",
+                    "",
+                    '[models."flash-creative"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "title = 'Gemini Flash (creative)'",
+                    "temperature = 1.5",
+                    "",
+                    '[models."flash-precise"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "title = 'Gemini Flash (precise)'",
+                    "reasoning.effort = 'high'",
+                    "temperature = 0.2",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        enabled = loader.get_enabled_models("fb")
+        assert enabled == ["flash-balanced", "flash-creative", "flash-precise"]
+
+        for key in enabled:
+            assert loader.get_model_id(key) == "google/gemini-2.5-flash"
+
+        assert loader.get_model_params("flash-balanced") == {
+            "reasoning": {"effort": "medium"},
+            "temperature": 0.7,
+        }
+        assert loader.get_model_params("flash-creative") == {"temperature": 1.5}
+        assert loader.get_model_params("flash-precise") == {
+            "reasoning": {"effort": "high"},
+            "temperature": 0.2,
+        }
+
+    def test_disabled_alias_excluded(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "",
+                    '[models."flash-normal"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "",
+                    '[models."flash-experimental"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "enabled = false",
+                    "temperature = 2.0",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("fb") == ["flash-normal"]
+        assert loader.get_model_id("flash-experimental") == "google/gemini-2.5-flash"
+        assert loader.get_model_params("flash-experimental") == {"temperature": 2.0}
+
+
+class TestModelsConfigLoaderToolsAndMcp:
     def test_reads_tools_and_external_mcp_config(self, tmp_path) -> None:
         mcp_path = tmp_path / "mcp.json"
         mcp_path.write_text(
@@ -28,13 +368,13 @@ class TestModelsConfigLoader:
             ),
             encoding="utf-8",
         )
-        models_path = tmp_path / "models.toml"
-        models_path.write_text(
+        toml = _write_models_toml(
+            tmp_path,
             "\n".join(
                 [
                     "[models]",
-                    "allowed = ['openrouter/free']",
-                    "default = 'openrouter/free'",
+                    "",
+                    '[models."openrouter/free"]',
                     "",
                     "[tools]",
                     "enabled = ['wiki_search']",
@@ -44,15 +384,51 @@ class TestModelsConfigLoader:
                     "external_servers = ['exa']",
                 ]
             ),
+        )
+
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_enabled_models("fallback") == ["openrouter/free"]
+        assert loader.get_default_model("fallback") == "fallback"
+        assert loader.get_tool_filter() == (["wiki_search"], None)
+        assert loader.get_external_mcp_config() == {"exa": {"command": "exa"}}
+
+
+class TestModelsConfigLoaderRefresh:
+    def test_mtime_based_refresh(self, tmp_path) -> None:
+        import os
+
+        toml_path = tmp_path / "models.toml"
+        toml_path.write_text(
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."model-a"]',
+                ]
+            ),
             encoding="utf-8",
         )
 
-        loader = ModelsConfigLoader(str(models_path))
+        loader = ModelsConfigLoader(str(toml_path))
+        assert loader.get_enabled_models("fb") == ["model-a"]
 
-        assert loader.get_allowed_models("fallback") == ["openrouter/free"]
-        assert loader.get_default_model("fallback") == "openrouter/free"
-        assert loader.get_tool_filter() == (["wiki_search"], None)
-        assert loader.get_external_mcp_config() == {"exa": {"command": "exa"}}
+        toml_path.write_text(
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."model-b"]',
+                    '[models."model-c"]',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        current_mtime = toml_path.stat().st_mtime
+        os.utime(toml_path, (current_mtime + 1, current_mtime + 1))
+
+        assert loader.get_enabled_models("fb") == ["model-b", "model-c"]
+
+
+# ── BotsConfigLoader ─────────────────────────────────────────────────
 
 
 class TestBotsConfigLoader:
@@ -85,6 +461,9 @@ class TestBotsConfigLoader:
         assert configs[0].token == token
         assert loader.get_bot_config_by_token(token) == configs[0]
         assert loader.get_bot_config_by_token("missing") is None
+
+
+# ── PromptConfigLoader ───────────────────────────────────────────────
 
 
 class TestPromptConfigLoader:

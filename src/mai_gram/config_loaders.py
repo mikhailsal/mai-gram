@@ -44,8 +44,21 @@ class BotConfig:
     allowed_templates: list[str] | None = None
 
 
+_MODEL_META_KEYS = frozenset({"enabled", "title", "id"})
+
+
 class ModelsConfigLoader:
-    """Load and mtime-cache the shared models TOML file."""
+    """Load and mtime-cache the shared models TOML file.
+
+    Model sections live under ``[models."<key>"]``.  Each section may contain:
+
+    * ``enabled`` (bool, default ``True``) -- whether the model is offered to
+      users during chat setup.
+    * ``title`` (str, optional) -- human-friendly label shown in selection UI.
+    * ``id`` (str, optional) -- real OpenRouter model identifier when the
+      section key is an alias (allows the same model with different params).
+    * Any other keys are treated as OpenRouter request-body overrides.
+    """
 
     def __init__(self, config_path: str) -> None:
         self._config_path = Path(config_path)
@@ -72,19 +85,57 @@ class ModelsConfigLoader:
             logger.info("Config reloaded: %s (mtime=%.3f)", config_path, mtime)
         return self._cache
 
+    def _iter_model_sections(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return ``(key, section_dict)`` for every model sub-table."""
+        models = self.refresh().get("models", {})
+        return [(k, v) for k, v in models.items() if isinstance(v, dict)]
+
+    def get_enabled_models(self, default_model: str) -> list[str]:
+        """Return keys of models that are enabled (``enabled`` defaults to ``True``)."""
+        sections = self._iter_model_sections()
+        if not sections:
+            return [default_model]
+        return [key for key, sec in sections if sec.get("enabled", True)]
+
+    # Backward-compatible alias used by Settings.get_allowed_models
     def get_allowed_models(self, default_model: str) -> list[str]:
-        data = self.refresh()
-        result: list[str] = data.get("models", {}).get("allowed", [default_model])
-        return result
+        return self.get_enabled_models(default_model)
 
     def get_default_model(self, default_model: str) -> str:
         data = self.refresh()
         result: str = data.get("models", {}).get("default", default_model)
         return result
 
-    def get_model_params(self, model_id: str) -> dict[str, Any]:
+    def get_model_title(self, model_key: str) -> str | None:
+        """Return the display title for *model_key*, or ``None`` if not set."""
         data = self.refresh()
-        return dict(data.get("models", {}).get(model_id, {}))
+        section = data.get("models", {}).get(model_key)
+        if isinstance(section, dict):
+            title = section.get("title")
+            return str(title) if title is not None else None
+        return None
+
+    def get_model_id(self, model_key: str) -> str:
+        """Resolve the real OpenRouter model ID for *model_key*.
+
+        If the section defines ``id``, that value is used; otherwise the
+        section key itself is assumed to be the real model identifier.
+        """
+        data = self.refresh()
+        section = data.get("models", {}).get(model_key)
+        if isinstance(section, dict):
+            real_id = section.get("id")
+            if real_id:
+                return str(real_id)
+        return model_key
+
+    def get_model_params(self, model_key: str) -> dict[str, Any]:
+        """Return API-level overrides for *model_key* (meta-keys stripped)."""
+        data = self.refresh()
+        section = data.get("models", {}).get(model_key, {})
+        if not isinstance(section, dict):
+            return {}
+        return {k: v for k, v in section.items() if k not in _MODEL_META_KEYS}
 
     def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
         data = self.refresh()

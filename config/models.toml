@@ -1,27 +1,26 @@
-# Model whitelist -- models available for user selection during setup.
-# Users can only choose from this list when creating a new chat via /start.
+# Model registry -- each [models."<key>"] section defines an available model.
+#
+# A model is shown to users during /start setup when enabled = true (the default).
+# Set enabled = false to hide a model without removing its configuration.
 #
 # This file is HOT-RELOADED: edits take effect within ~2 seconds,
 # no bot restart required.
 
 [models]
-allowed = [
-    "minimax/minimax-m2.7",
-    "google/gemini-2.5-flash",
-    "google/gemini-3.1-flash-lite-preview",
-    "google/gemini-3-flash-preview",
-    "google/gemma-4-31b-it:free",
-    "x-ai/grok-4.1-fast",
-    "nvidia/moonshotai/kimi-k2.5",
-]
 default = "google/gemma-4-31b-it:free"
 
 # ─────────────────────────────────────────────────────────────────────
-# Per-model parameter overrides
+# Per-model sections
 # ─────────────────────────────────────────────────────────────────────
 #
-# Any key placed under [models."<model-id>"] is merged into the
-# OpenRouter request body.  Supported keys include:
+# Recognised meta-keys (not sent to OpenRouter):
+#
+#   enabled   bool    Show this model in selection UI (default: true)
+#   title     string  Custom display label (default: derived from key)
+#   id        string  Real OpenRouter model ID when the key is an alias
+#
+# All other keys are merged into the OpenRouter request body.
+# Supported API keys include:
 #
 #   temperature        float    Sampling temperature (0.0 – 2.0)
 #   max_tokens         int      Maximum response tokens
@@ -34,47 +33,71 @@ default = "google/gemma-4-31b-it:free"
 # TOML syntax cheat-sheet:
 #   Dotted keys      →  reasoning.effort = "high"
 #   Inline table     →  provider = { order = ["Google"], allow_fallbacks = false }
-#   Sub-table        →  [models."id".provider]
+#   Sub-table        →  [models."key".provider]
 #                        order = ["Google"]
 #
-# All three forms are equivalent; dotted keys are the most compact.
-
-# ── Gemini 2.5 Flash ─────────────────────────────────────────────────
-# Gemini benefits heavily from explicit reasoning effort; without it
-# the model often skips chain-of-thought entirely.
-[models."google/gemini-2.5-flash"]
-reasoning.effort = "medium"
-provider.order = ["Google AI Studio"]
-provider.allow_fallbacks = false
-
-# ── Gemini 2.5 Pro ───────────────────────────────────────────────────
-#[models."google/gemini-2.5-pro"]
-#reasoning.effort = "high"
-#provider.order = ["Google AI Studio"]
-#provider.allow_fallbacks = false
-
-# ── Gemini 3.1 Flash Lite (preview) ─────────────────────────────────
-[models."google/gemini-3.1-flash-lite-preview"]
-provider.order = ["Google AI Studio"]
-reasoning.effort = "high"
-provider.allow_fallbacks = false
+# To register the same model with different parameters, use a unique key
+# and set "id" to the real model:
+#
+#   [models."gemini-flash@creative"]
+#   id = "google/gemini-2.5-flash"
+#   title = "Gemini Flash (creative)"
+#   temperature = 1.5
 
 # ── MiniMax M2.7 ─────────────────────────────────────────────────────
 [models."minimax/minimax-m2.7"]
+title = "MiniMax M2.7"
 provider.order = ["Minimax"]
 reasoning.effort = "high"
 provider.allow_fallbacks = false
 
-# ── Kimi K2.5  ─────────────────────────────────────────────────────
-[models."nvidia/moonshotai/kimi-k2.5"]
-reasoning.effort = "high"
+# ── Gemini 2.5 Flash ─────────────────────────────────────────────────
+[models."google/gemini-2.5-flash"]
+title = "Gemini 2.5 Flash"
+reasoning.effort = "medium"
+provider.order = ["Google AI Studio"]
+provider.allow_fallbacks = false
 
+# ── Gemini 3.1 Flash Lite (preview) @high ────────────────────────────
+[models."google/gemini-3.1-flash-lite-preview"]
+title = "Gemini 3.1 Flash Lite @high"
+provider.order = ["Google AI Studio"]
+reasoning.effort = "high"
+provider.allow_fallbacks = false
+
+# ── Gemini 3 Flash (preview) ─────────────────────────────────────────
+[models."google/gemini-3-flash-preview"]
+title = "Gemini 3 Flash"
 
 # ── Gemma 4 31B (free tier) ──────────────────────────────────────────
-# No special overrides needed for the free-tier model.
 [models."google/gemma-4-31b-it:free"]
+title = "Gemma 4 31B (free)"
 reasoning.effort = "none"
 temperature = 1.0
+
+# ── Grok 4.1 Fast ────────────────────────────────────────────────────
+[models."x-ai/grok-4.1-fast"]
+title = "Grok 4.1 Fast"
+
+# ── Kimi K2.5 ─────────────────────────────────────────────────────
+[models."nvidia/moonshotai/kimi-k2.5"]
+title = "Kimi K2.5"
+reasoning.effort = "high"
+
+# ── Gemini 3.1 Pro (preview) ─────────────────────────────────────────
+[models."google/gemini-3.1-pro-preview"]
+title = "Gemini 3.1 Pro"
+reasoning.effort = "low"
+temperature = 1.0
+max_tokens = 4096
+
+# ── Gemini 2.5 Pro (disabled) ────────────────────────────────────────
+#[models."google/gemini-2.5-pro"]
+#enabled = true
+#title = "Gemini 2.5 Pro"
+#reasoning.effort = "high"
+#provider.order = ["Google AI Studio"]
+#provider.allow_fallbacks = false
 
 # ─────────────────────────────────────────────────────────────────────
 # Tool configuration

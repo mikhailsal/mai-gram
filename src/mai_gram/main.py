@@ -212,7 +212,7 @@ async def _watch_config(settings: Settings) -> None:
                 models = settings.get_allowed_models()
                 logger.info(
                     "Config file changed -- reloaded. Models: %s",
-                    ", ".join(m.split("/")[-1] for m in models),
+                    ", ".join(settings.get_model_title(m) or m.split("/")[-1] for m in models),
                 )
         except (OSError, ValueError):
             logger.debug("Config watcher transient error", exc_info=True)

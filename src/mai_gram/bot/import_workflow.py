@@ -138,14 +138,21 @@ class ImportWorkflow:
         self._sessions[user_id] = import_session
         await self._show_import_model_selection(import_session)
 
+    def _model_display_label(self, model_key: str) -> str:
+        title = self._settings.get_model_title(model_key)
+        if title:
+            return title
+        return model_key.split("/")[-1] if "/" in model_key else model_key
+
     async def _show_import_model_selection(self, session: ImportSession) -> None:
         session.state = ImportState.CHOOSING_MODEL
         keyboard_rows = []
         allowed_models = self._get_allowed_models()
         default_model = self._settings.get_default_model()
         for model in allowed_models:
-            short_name = model.split("/")[-1] if "/" in model else model
-            label = f"{short_name} [default]" if model == default_model else short_name
+            label = self._model_display_label(model)
+            if model == default_model:
+                label = f"{label} [default]"
             keyboard_rows.append([(label, f"import_model:{model}")])
 
         kb = self._messenger.build_inline_keyboard(keyboard_rows)

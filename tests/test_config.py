@@ -90,7 +90,7 @@ class TestSettings:
     def test_refresh_models_config_reloads_changed_file(self, tmp_path) -> None:
         models_path = tmp_path / "models.toml"
         models_path.write_text(
-            "[models]\nallowed = ['openrouter/free']\ndefault = 'openrouter/free'\n",
+            '[models]\n[models."openrouter/free"]\n',
             encoding="utf-8",
         )
         settings = Settings(
@@ -101,7 +101,7 @@ class TestSettings:
         assert settings.get_allowed_models() == ["openrouter/free"]
 
         models_path.write_text(
-            "[models]\nallowed = ['openrouter/alt']\ndefault = 'openrouter/alt'\n",
+            '[models]\n[models."openrouter/alt"]\n[models."openrouter/new"]\n',
             encoding="utf-8",
         )
         current_mtime = models_path.stat().st_mtime
@@ -109,7 +109,32 @@ class TestSettings:
 
         settings.refresh_models_config()
 
-        assert settings.get_allowed_models() == ["openrouter/alt"]
+        assert settings.get_allowed_models() == ["openrouter/alt", "openrouter/new"]
+
+    def test_get_model_title_and_id(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text(
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."flash-creative"]',
+                    "id = 'google/gemini-2.5-flash'",
+                    "title = 'Flash Creative'",
+                    "temperature = 1.5",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+        assert settings.get_model_title("flash-creative") == "Flash Creative"
+        assert settings.get_model_id("flash-creative") == "google/gemini-2.5-flash"
+        assert settings.get_model_params("flash-creative") == {"temperature": 1.5}
+        assert "title" not in settings.get_model_params("flash-creative")
+        assert "id" not in settings.get_model_params("flash-creative")
 
 
 class TestAllowedUsers:

@@ -54,6 +54,9 @@ class FakeSettings:
     def get_allowed_models(self) -> list[str]:
         return ["openrouter/free"]
 
+    def get_model_title(self, model_key: str) -> str | None:
+        return None
+
 
 class FakeProvider:
     def __init__(self, *, api_key: str, default_model: str, base_url: str) -> None:
@@ -363,7 +366,7 @@ async def test_shutdown_is_idempotent(monkeypatch) -> None:
 
 async def test_watch_config_refreshes_models_on_change(monkeypatch, tmp_path) -> None:
     models_path = tmp_path / "models.toml"
-    models_path.write_text("[models]\nallowed=['openrouter/free']\n", encoding="utf-8")
+    models_path.write_text('[models]\n[models."openrouter/free"]\n', encoding="utf-8")
     refreshed = asyncio.Event()
     settings = FakeSettings(["token-1"])
     settings.models_config_path = str(models_path)
@@ -394,7 +397,7 @@ async def test_watch_config_refreshes_models_on_change(monkeypatch, tmp_path) ->
 
 async def test_watch_config_recovers_from_value_error(monkeypatch, tmp_path) -> None:
     models_path = tmp_path / "models.toml"
-    models_path.write_text("[models]\nallowed=['openrouter/free']\n", encoding="utf-8")
+    models_path.write_text('[models]\n[models."openrouter/free"]\n', encoding="utf-8")
     settings = FakeSettings(["token-1"])
     settings.models_config_path = str(models_path)
     real_sleep = asyncio.sleep

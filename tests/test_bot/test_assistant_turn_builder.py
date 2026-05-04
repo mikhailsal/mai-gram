@@ -20,6 +20,7 @@ def _make_builder(*, build_mcp_manager: MagicMock | None = None) -> AssistantTur
     llm = MagicMock()
     settings = MagicMock()
     settings.get_model_params.return_value = {"temperature": 0.2}
+    settings.get_model_id.return_value = "resolved/model-id"
     return AssistantTurnBuilder(
         llm,
         settings,
@@ -85,6 +86,8 @@ class TestAssistantTurnBuilder:
         assert request.llm_messages == ["ctx"]
         assert request.telegram_chat_id == "telegram-chat"
         assert request.extra_params == {"temperature": 0.2}
+        assert request.resolved_model == "resolved/model-id"
+        assert request.model_for_api == "resolved/model-id"
         build_mcp_manager.assert_called_once()
         prompt_builder_cls.return_value.build_context.assert_awaited_once_with(
             chat,

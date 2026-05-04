@@ -83,7 +83,7 @@ def _build_cli_harness(root: Path, cli_path: str) -> CliHarness:
     prompts_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.joinpath("default.txt").write_text(_DEFAULT_PROMPT.strip() + "\n", encoding="utf-8")
     models_config_path.write_text(
-        '[models]\nallowed = ["openrouter/free"]\ndefault = "openrouter/free"\n',
+        '[models]\ndefault = "openrouter/free"\n\n[models."openrouter/free"]\n',
         encoding="utf-8",
     )
 

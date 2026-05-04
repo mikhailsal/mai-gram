@@ -55,6 +55,12 @@ class AssistantTurnRequest:
     show_tool_calls: bool
     extra_params: dict[str, Any] | None
     failure_log_message: str
+    resolved_model: str | None = None
+
+    @property
+    def model_for_api(self) -> str:
+        """Return the OpenRouter model identifier to use for the API call."""
+        return self.resolved_model or self.chat.llm_model
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,7 +286,7 @@ class ConversationExecutor:
             self._llm,
             request.mcp_manager,
             request.llm_messages,
-            model=request.chat.llm_model,
+            model=request.model_for_api,
             max_iterations=self._tool_max_iterations,
             extra_params=request.extra_params or None,
             on_assistant_tool_call=on_tool_call_display,

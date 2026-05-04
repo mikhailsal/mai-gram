@@ -161,14 +161,22 @@ class SetupWorkflow:
             return {name: value for name, value in all_prompts.items() if name in bot_set}
         return all_prompts
 
+    def _model_display_label(self, model_key: str) -> str:
+        """Return the UI label for a model: title if set, else last path segment."""
+        title = self._settings.get_model_title(model_key)
+        if title:
+            return title
+        return model_key.split("/")[-1] if "/" in model_key else model_key
+
     async def _show_model_selection(self, session: SetupSession) -> None:
         session.state = SetupState.CHOOSING_MODEL
         keyboard_rows = []
         allowed_models = self._get_allowed_models_for_bot()
         default_model = self._settings.get_default_model()
         for model in allowed_models:
-            short_name = model.split("/")[-1] if "/" in model else model
-            label = f"{short_name} [default]" if model == default_model else short_name
+            label = self._model_display_label(model)
+            if model == default_model:
+                label = f"{label} [default]"
             keyboard_rows.append([(label, f"model:{model}")])
 
         await self._messenger.send_message(

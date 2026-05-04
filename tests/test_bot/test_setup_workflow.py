@@ -38,6 +38,8 @@ def _make_workflow(
             "openai/test-model",
         ]
         workflow_settings.get_default_model.return_value = "openrouter/free"
+        workflow_settings.get_model_title.return_value = None
+        workflow_settings.get_model_id.side_effect = lambda key: key
         workflow_settings.get_available_prompts.return_value = {
             "default": "Default prompt",
             "support": "Support prompt",
@@ -137,6 +139,8 @@ class TestSetupCallbacks:
         settings = MagicMock()
         settings.get_allowed_models.return_value = ["openrouter/free"]
         settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
         settings.get_available_prompts.return_value = {"default": "Default prompt"}
         settings.get_prompt_config.return_value = None
         settings.get_available_templates.return_value = ["empty"]
@@ -232,6 +236,8 @@ class TestSetupCallbacks:
         settings = MagicMock()
         settings.get_allowed_models.return_value = ["openrouter/free"]
         settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
         settings.get_available_prompts.return_value = {"default": "Default prompt"}
         settings.get_prompt_config.return_value = None
         settings.get_available_templates.return_value = ["empty"]
@@ -264,6 +270,8 @@ class TestFinishSetup:
         settings = MagicMock()
         settings.get_allowed_models.return_value = ["openrouter/free"]
         settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
         settings.get_available_prompts.return_value = {"default": "Default prompt"}
         settings.get_prompt_config.return_value = PromptConfig(
             show_reasoning=False,
