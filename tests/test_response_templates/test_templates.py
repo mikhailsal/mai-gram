@@ -16,6 +16,7 @@ PREFILL_TEMPLATES: list[str] = [
     "json_prefill",
     "markdown_headers_prefill",
     "xml_emotions_prefill",
+    "gemma_reasoning_prefill",
 ]
 
 PARENT_OF: dict[str, str] = {
@@ -23,6 +24,7 @@ PARENT_OF: dict[str, str] = {
     "json_prefill": "json",
     "markdown_headers_prefill": "markdown_headers",
     "xml_emotions_prefill": "xml_emotions",
+    "gemma_reasoning_prefill": "gemma_reasoning",
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -38,6 +40,7 @@ class TestRegistry:
         assert "json" in names
         assert "markdown_headers" in names
         assert "xml_emotions" in names
+        assert "gemma_reasoning" in names
 
     def test_list_names_returns_all_prefill(self) -> None:
         names = list_template_names()
@@ -1206,6 +1209,333 @@ class TestXmlWithEmotionsPrefillTemplate:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Gemma-4-style reasoning template -- default + parameterized
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestGemmaReasoningTemplate:
+    def test_parse_extracts_both_tags(self) -> None:
+        t = get_template("gemma_reasoning")
+        raw = (
+            "<reasoning>\n"
+            "    *   **Situation Analysis:**\n"
+            "    *   The user asks about X.\n"
+            "</reasoning>\n"
+            "<content>reply</content>"
+        )
+        parsed = t.parse(raw)
+        assert "Situation Analysis" in parsed.fields["reasoning"]
+        assert parsed.fields["content"] == "reply"
+
+    def test_parse_handles_multiline_reasoning(self) -> None:
+        t = get_template("gemma_reasoning")
+        raw = (
+            "<reasoning>\n"
+            "    *   **Step 1:** First point.\n"
+            "    *   Sub-point A.\n\n"
+            "    *   **Step 2:** Second point.\n"
+            "</reasoning>\n"
+            "<content>response text</content>"
+        )
+        parsed = t.parse(raw)
+        assert "Step 1" in parsed.fields["reasoning"]
+        assert "Step 2" in parsed.fields["reasoning"]
+
+    def test_validate_passes_complete(self) -> None:
+        t = get_template("gemma_reasoning")
+        parsed = t.parse("<reasoning>analysis</reasoning><content>reply</content>")
+        assert t.validate(parsed) == []
+
+    def test_validate_fails_missing_reasoning(self) -> None:
+        t = get_template("gemma_reasoning")
+        parsed = t.parse("<content>c</content>")
+        errors = t.validate(parsed)
+        assert any("reasoning" in e.lower() for e in errors)
+
+    def test_validate_fails_missing_content(self) -> None:
+        t = get_template("gemma_reasoning")
+        parsed = t.parse("<reasoning>r</reasoning>")
+        errors = t.validate(parsed)
+        assert any("content" in e.lower() for e in errors)
+
+    def test_validate_fails_empty_tag(self) -> None:
+        t = get_template("gemma_reasoning")
+        parsed = t.parse("<reasoning>  </reasoning><content>c</content>")
+        errors = t.validate(parsed)
+        assert any("empty" in e.lower() for e in errors)
+
+    def test_format_instruction_mentions_tags(self) -> None:
+        t = get_template("gemma_reasoning")
+        instruction = t.format_instruction()
+        assert "<reasoning>" in instruction
+        assert "<content>" in instruction
+        assert "RESPONSE FORMAT" in instruction
+
+    def test_format_instruction_mentions_steps(self) -> None:
+        t = get_template("gemma_reasoning")
+        instruction = t.format_instruction()
+        assert "analytical steps" in instruction
+        assert "Situation Analysis" in instruction
+
+    def test_format_instruction_step_count(self) -> None:
+        t = get_template("gemma_reasoning")
+        instruction = t.format_instruction()
+        assert "at least 4" in instruction
+
+    def test_examples_has_positive_and_negative(self) -> None:
+        t = get_template("gemma_reasoning")
+        examples = t.examples()
+        assert any(ex.is_positive for ex in examples)
+        assert any(not ex.is_positive for ex in examples)
+
+    def test_positive_example_has_step_labels(self) -> None:
+        t = get_template("gemma_reasoning")
+        pos = next(ex for ex in t.examples() if ex.is_positive)
+        assert "**Situation Analysis:**" in pos.text
+        assert "**Context & Constraints:**" in pos.text
+
+    def test_fields_order(self) -> None:
+        t = get_template("gemma_reasoning")
+        fields = t.get_fields()
+        assert fields[0].name == "reasoning"
+        assert fields[1].name == "content"
+
+    def test_reasoning_is_hideable(self) -> None:
+        t = get_template("gemma_reasoning")
+        fields = t.get_fields()
+        reasoning = next(f for f in fields if f.name == "reasoning")
+        assert reasoning.user_can_hide is True
+        assert reasoning.expandable is True
+
+    def test_render_reasoning_html(self) -> None:
+        t = get_template("gemma_reasoning")
+        html = t.render_field_html("reasoning", "**Analysis:** points here", expandable=True)
+        assert "blockquote" in html
+        assert "Reasoning" in html
+
+    def test_render_content_html(self) -> None:
+        t = get_template("gemma_reasoning")
+        html = t.render_field_html("content", "hello world")
+        assert "blockquote" not in html
+
+    def test_assistant_prefill_is_none(self) -> None:
+        t = get_template("gemma_reasoning")
+        assert t.assistant_prefill() is None
+
+    def test_description(self) -> None:
+        t = get_template("gemma_reasoning")
+        assert "Gemma" in t.description or "gemma" in t.description.lower()
+        assert "reasoning" in t.description.lower()
+
+
+class TestGemmaReasoningTemplateParams:
+    def test_declares_reasoning_field_param(self) -> None:
+        t = get_template("gemma_reasoning")
+        param_keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in param_keys
+        assert "num_reasoning_steps" in param_keys
+
+    def test_default_effective_params(self) -> None:
+        t = get_template("gemma_reasoning")
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "reasoning"
+        assert ep["num_reasoning_steps"] == 4
+
+    def test_custom_reasoning_field_changes_fields(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "analysis"})
+        fields = t.get_fields()
+        assert fields[0].name == "analysis"
+        assert fields[1].name == "content"
+
+    def test_custom_reasoning_field_changes_instruction(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "think"})
+        instruction = t.format_instruction()
+        assert "<think>" in instruction
+        assert "</think>" in instruction
+        assert "<reasoning>" not in instruction
+
+    def test_custom_reasoning_field_changes_examples(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "analysis"})
+        examples = t.examples()
+        pos = next(ex for ex in examples if ex.is_positive)
+        assert "<analysis>" in pos.text
+        assert "</analysis>" in pos.text
+        assert "<reasoning>" not in pos.text
+
+    def test_custom_reasoning_field_changes_parsing(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "think"})
+        raw = "<think>steps here</think><content>answer</content>"
+        parsed = t.parse(raw)
+        assert parsed.fields["think"] == "steps here"
+        assert parsed.fields["content"] == "answer"
+
+    def test_custom_reasoning_field_changes_validation(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "think"})
+        parsed = t.parse("<content>c</content>")
+        errors = t.validate(parsed)
+        assert any("think" in e.lower() for e in errors)
+
+    def test_custom_reasoning_field_changes_description(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "analysis"})
+        assert "analysis" in t.description
+
+    def test_num_reasoning_steps_in_instruction(self) -> None:
+        t = get_template("gemma_reasoning", {"num_reasoning_steps": 6})
+        instruction = t.format_instruction()
+        assert "at least 6" in instruction
+
+    def test_num_reasoning_steps_controls_listed_steps(self) -> None:
+        t2 = get_template("gemma_reasoning", {"num_reasoning_steps": 2})
+        inst2 = t2.format_instruction()
+        assert "Situation Analysis" in inst2
+        assert "Context & Constraints" in inst2
+        assert "Deep Analysis" not in inst2
+
+        t6 = get_template("gemma_reasoning", {"num_reasoning_steps": 6})
+        inst6 = t6.format_instruction()
+        assert "Final Plan" in inst6
+
+    def test_example_has_correct_step_count(self) -> None:
+        for n in (2, 3, 4, 5, 6):
+            t = get_template("gemma_reasoning", {"num_reasoning_steps": n})
+            pos = next(ex for ex in t.examples() if ex.is_positive)
+            bold_labels = pos.text.count("**")
+            assert bold_labels // 2 >= n, (
+                f"Expected at least {n} bold step labels, got {bold_labels // 2}"
+            )
+
+    def test_param_clamping_min(self) -> None:
+        t = get_template("gemma_reasoning", {"num_reasoning_steps": 0})
+        ep = t.get_effective_params()
+        assert ep["num_reasoning_steps"] >= 2
+
+    def test_param_clamping_max(self) -> None:
+        t = get_template("gemma_reasoning", {"num_reasoning_steps": 100})
+        ep = t.get_effective_params()
+        assert ep["num_reasoning_steps"] <= 6
+
+    def test_invalid_int_param_uses_default(self) -> None:
+        t = get_template("gemma_reasoning", {"num_reasoning_steps": "not_a_number"})
+        ep = t.get_effective_params()
+        assert ep["num_reasoning_steps"] == 4
+
+    def test_empty_string_param_uses_default(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": ""})
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "reasoning"
+
+    def test_unknown_params_ignored(self) -> None:
+        t = get_template("gemma_reasoning", {"nonexistent_param": "value"})
+        assert t.get_fields()[0].name == "reasoning"
+
+    def test_with_params_returns_new_instance(self) -> None:
+        t1 = get_template("gemma_reasoning")
+        t2 = t1.with_params({"reasoning_field": "think"})
+        assert t1.get_fields()[0].name == "reasoning"
+        assert t2.get_fields()[0].name == "think"
+
+    def test_effective_params_after_with_params(self) -> None:
+        t = get_template(
+            "gemma_reasoning",
+            {"reasoning_field": "analysis", "num_reasoning_steps": 5},
+        )
+        ep = t.get_effective_params()
+        assert ep["reasoning_field"] == "analysis"
+        assert ep["num_reasoning_steps"] == 5
+
+    def test_render_html_with_custom_field(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "think"})
+        html = t.render_field_html("think", "some text", expandable=True)
+        assert "blockquote" in html
+        assert "Think" in html
+
+    def test_param_suggestions_provided(self) -> None:
+        t = get_template("gemma_reasoning")
+        rf_param = next(p for p in t.get_params() if p.key == "reasoning_field")
+        assert len(rf_param.suggestions) > 0
+        assert "reasoning" in rf_param.suggestions
+
+
+# ──────────────────────────────────────────────────────────────────
+# Gemma reasoning prefill template
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestGemmaReasoningPrefillTemplate:
+    def test_prefill_returns_opening_tag_with_first_step(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        prefill = t.assistant_prefill()
+        assert "<reasoning>" in prefill
+        assert "Situation Analysis" in prefill
+
+    def test_prefill_respects_custom_reasoning_field(self) -> None:
+        t = get_template("gemma_reasoning_prefill", {"reasoning_field": "think"})
+        prefill = t.assistant_prefill()
+        assert "<think>" in prefill
+        assert "Situation Analysis" in prefill
+
+    def test_inherits_parse_from_gemma_reasoning(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        raw = "<reasoning>steps here</reasoning><content>answer</content>"
+        parsed = t.parse(raw)
+        assert parsed.fields["reasoning"] == "steps here"
+        assert parsed.fields["content"] == "answer"
+
+    def test_inherits_validate_from_gemma_reasoning(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        parsed = t.parse("<reasoning>r</reasoning><content>c</content>")
+        assert t.validate(parsed) == []
+
+    def test_inherits_fields_from_gemma_reasoning(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        fields = t.get_fields()
+        assert fields[0].name == "reasoning"
+        assert fields[1].name == "content"
+
+    def test_inherits_format_instruction_from_gemma_reasoning(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        instruction = t.format_instruction()
+        assert "<reasoning>" in instruction
+        assert "analytical steps" in instruction
+
+    def test_inherits_examples_from_gemma_reasoning(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        examples = t.examples()
+        assert any(ex.is_positive for ex in examples)
+        assert any(not ex.is_positive for ex in examples)
+
+    def test_name_is_gemma_reasoning_prefill(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        assert t.name == "gemma_reasoning_prefill"
+
+    def test_description_mentions_prefill(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        assert "prefill" in t.description.lower()
+
+    def test_with_params_returns_prefill_instance(self) -> None:
+        t = get_template("gemma_reasoning_prefill", {"reasoning_field": "analysis"})
+        assert t.name == "gemma_reasoning_prefill"
+        assert "<analysis>" in t.assistant_prefill()
+
+    def test_custom_field_changes_parse_and_validate(self) -> None:
+        t = get_template("gemma_reasoning_prefill", {"reasoning_field": "think"})
+        raw = "<think>steps</think><content>answer</content>"
+        parsed = t.parse(raw)
+        assert t.validate(parsed) == []
+        assert parsed.fields["think"] == "steps"
+
+    def test_description_includes_custom_field(self) -> None:
+        t = get_template("gemma_reasoning_prefill", {"reasoning_field": "analysis"})
+        assert "analysis" in t.description
+
+    def test_declares_both_params(self) -> None:
+        t = get_template("gemma_reasoning_prefill")
+        keys = [p.key for p in t.get_params()]
+        assert "reasoning_field" in keys
+        assert "num_reasoning_steps" in keys
+
+
+# ──────────────────────────────────────────────────────────────────
 # Non-prefill templates return None
 # ──────────────────────────────────────────────────────────────────
 
@@ -1219,6 +1549,7 @@ class TestNonPrefillTemplatesReturnNone:
         "json",
         "markdown_headers",
         "xml_emotions",
+        "gemma_reasoning",
     ]
 
     def test_all_non_prefill_return_none(self) -> None:
@@ -1249,6 +1580,7 @@ class TestCrossTemplateConsistency:
         "json",
         "markdown_headers",
         "xml_emotions",
+        "gemma_reasoning",
     ]
 
     ALL_PARAMETERIZED: ClassVar[list[str]] = [
@@ -1262,11 +1594,16 @@ class TestCrossTemplateConsistency:
             keys = [p.key for p in t.get_params()]
             assert "reasoning_field" in keys, f"{name} missing reasoning_field param"
 
-    def test_all_parameterized_templates_declare_num_reasoning_paragraphs(self) -> None:
+    def test_all_parameterized_templates_declare_reasoning_length_param(self) -> None:
         for name in self.ALL_PARAMETERIZED:
             t = get_template(name)
             keys = [p.key for p in t.get_params()]
-            assert "num_reasoning_paragraphs" in keys, f"{name} missing num_reasoning_paragraphs"
+            has_paragraphs = "num_reasoning_paragraphs" in keys
+            has_steps = "num_reasoning_steps" in keys
+            assert has_paragraphs or has_steps, (
+                f"{name} missing reasoning length param "
+                f"(num_reasoning_paragraphs or num_reasoning_steps)"
+            )
 
     def test_default_params_produce_backward_compatible_fields(self) -> None:
         """Default parameterized templates should match the original field names."""

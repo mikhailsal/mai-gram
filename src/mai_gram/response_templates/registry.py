@@ -22,6 +22,8 @@ def _discover() -> None:
 
     from mai_gram.response_templates import (  # noqa: F401
         empty,
+        gemma_reasoning_prefill,
+        gemma_reasoning_template,
         json_prefill,
         json_template,
         markdown_headers_prefill,
