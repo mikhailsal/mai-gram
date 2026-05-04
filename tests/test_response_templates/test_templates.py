@@ -1217,57 +1217,57 @@ class TestGemmaReasoningTemplate:
     def test_parse_extracts_both_tags(self) -> None:
         t = get_template("gemma_reasoning")
         raw = (
-            "<reasoning>\n"
+            "<thought>\n"
             "*   The user asks about X.\n"
             "    *   Tone: curious, practical.\n"
-            "</reasoning>\n"
+            "</thought>\n"
             "<content>reply</content>"
         )
         parsed = t.parse(raw)
-        assert "user asks" in parsed.fields["reasoning"]
+        assert "user asks" in parsed.fields["thought"]
         assert parsed.fields["content"] == "reply"
 
     def test_parse_handles_multiline_reasoning(self) -> None:
         t = get_template("gemma_reasoning")
         raw = (
-            "<reasoning>\n"
+            "<thought>\n"
             "*   User wants a practical explanation.\n"
             "    *   Context: second exchange.\n\n"
             "    *   Keep it direct and concrete.\n"
-            "</reasoning>\n"
+            "</thought>\n"
             "<content>response text</content>"
         )
         parsed = t.parse(raw)
-        assert "practical" in parsed.fields["reasoning"]
-        assert "direct" in parsed.fields["reasoning"]
+        assert "practical" in parsed.fields["thought"]
+        assert "direct" in parsed.fields["thought"]
 
     def test_validate_passes_complete(self) -> None:
         t = get_template("gemma_reasoning")
-        parsed = t.parse("<reasoning>analysis</reasoning><content>reply</content>")
+        parsed = t.parse("<thought>analysis</thought><content>reply</content>")
         assert t.validate(parsed) == []
 
     def test_validate_fails_missing_reasoning(self) -> None:
         t = get_template("gemma_reasoning")
         parsed = t.parse("<content>c</content>")
         errors = t.validate(parsed)
-        assert any("reasoning" in e.lower() for e in errors)
+        assert any("thought" in e.lower() for e in errors)
 
     def test_validate_fails_missing_content(self) -> None:
         t = get_template("gemma_reasoning")
-        parsed = t.parse("<reasoning>r</reasoning>")
+        parsed = t.parse("<thought>r</thought>")
         errors = t.validate(parsed)
         assert any("content" in e.lower() for e in errors)
 
     def test_validate_fails_empty_tag(self) -> None:
         t = get_template("gemma_reasoning")
-        parsed = t.parse("<reasoning>  </reasoning><content>c</content>")
+        parsed = t.parse("<thought>  </thought><content>c</content>")
         errors = t.validate(parsed)
         assert any("empty" in e.lower() for e in errors)
 
     def test_format_instruction_mentions_tags(self) -> None:
         t = get_template("gemma_reasoning")
         instruction = t.format_instruction()
-        assert "<reasoning>" in instruction
+        assert "<thought>" in instruction
         assert "<content>" in instruction
         assert "RESPONSE FORMAT" in instruction
 
@@ -1275,12 +1275,12 @@ class TestGemmaReasoningTemplate:
         t = get_template("gemma_reasoning")
         instruction = t.format_instruction()
         assert "blank-line-separated blocks" in instruction
-        assert "Do NOT label the blocks" in instruction
+        assert "guideline" in instruction
 
     def test_format_instruction_block_count(self) -> None:
         t = get_template("gemma_reasoning")
         instruction = t.format_instruction()
-        assert "at least 4" in instruction
+        assert "roughly 4" in instruction
 
     def test_examples_has_positive_and_negative(self) -> None:
         t = get_template("gemma_reasoning")
@@ -1292,6 +1292,10 @@ class TestGemmaReasoningTemplate:
         t = get_template("gemma_reasoning")
         pos = next(ex for ex in t.examples() if ex.is_positive)
         assert "*   " in pos.text
+
+    def test_example_with_enough_blocks_includes_options(self) -> None:
+        t = get_template("gemma_reasoning", {"num_reasoning_blocks": 6})
+        pos = next(ex for ex in t.examples() if ex.is_positive)
         assert "Option 1" in pos.text or "Option 2" in pos.text
 
     def test_positive_example_has_blank_line_separated_blocks(self) -> None:
@@ -1306,21 +1310,21 @@ class TestGemmaReasoningTemplate:
     def test_fields_order(self) -> None:
         t = get_template("gemma_reasoning")
         fields = t.get_fields()
-        assert fields[0].name == "reasoning"
+        assert fields[0].name == "thought"
         assert fields[1].name == "content"
 
     def test_reasoning_is_hideable(self) -> None:
         t = get_template("gemma_reasoning")
         fields = t.get_fields()
-        reasoning = next(f for f in fields if f.name == "reasoning")
+        reasoning = next(f for f in fields if f.name == "thought")
         assert reasoning.user_can_hide is True
         assert reasoning.expandable is True
 
     def test_render_reasoning_html(self) -> None:
         t = get_template("gemma_reasoning")
-        html = t.render_field_html("reasoning", "analysis points here", expandable=True)
+        html = t.render_field_html("thought", "analysis points here", expandable=True)
         assert "blockquote" in html
-        assert "Reasoning" in html
+        assert "Thought" in html
 
     def test_render_content_html(self) -> None:
         t = get_template("gemma_reasoning")
@@ -1334,7 +1338,7 @@ class TestGemmaReasoningTemplate:
     def test_description(self) -> None:
         t = get_template("gemma_reasoning")
         assert "Gemma" in t.description or "gemma" in t.description.lower()
-        assert "reasoning" in t.description.lower()
+        assert "thought" in t.description.lower()
 
 
 class TestGemmaReasoningTemplateParams:
@@ -1347,7 +1351,7 @@ class TestGemmaReasoningTemplateParams:
     def test_default_effective_params(self) -> None:
         t = get_template("gemma_reasoning")
         ep = t.get_effective_params()
-        assert ep["reasoning_field"] == "reasoning"
+        assert ep["reasoning_field"] == "thought"
         assert ep["num_reasoning_blocks"] == 4
 
     def test_custom_reasoning_field_changes_fields(self) -> None:
@@ -1391,7 +1395,7 @@ class TestGemmaReasoningTemplateParams:
     def test_num_reasoning_blocks_in_instruction(self) -> None:
         t = get_template("gemma_reasoning", {"num_reasoning_blocks": 6})
         instruction = t.format_instruction()
-        assert "at least 6" in instruction
+        assert "roughly 6" in instruction
 
     def test_example_has_correct_block_count(self) -> None:
         for n in (3, 4, 5, 6):
@@ -1421,16 +1425,16 @@ class TestGemmaReasoningTemplateParams:
     def test_empty_string_param_uses_default(self) -> None:
         t = get_template("gemma_reasoning", {"reasoning_field": ""})
         ep = t.get_effective_params()
-        assert ep["reasoning_field"] == "reasoning"
+        assert ep["reasoning_field"] == "thought"
 
     def test_unknown_params_ignored(self) -> None:
         t = get_template("gemma_reasoning", {"nonexistent_param": "value"})
-        assert t.get_fields()[0].name == "reasoning"
+        assert t.get_fields()[0].name == "thought"
 
     def test_with_params_returns_new_instance(self) -> None:
         t1 = get_template("gemma_reasoning")
         t2 = t1.with_params({"reasoning_field": "think"})
-        assert t1.get_fields()[0].name == "reasoning"
+        assert t1.get_fields()[0].name == "thought"
         assert t2.get_fields()[0].name == "think"
 
     def test_effective_params_after_with_params(self) -> None:
@@ -1452,7 +1456,7 @@ class TestGemmaReasoningTemplateParams:
         t = get_template("gemma_reasoning")
         rf_param = next(p for p in t.get_params() if p.key == "reasoning_field")
         assert len(rf_param.suggestions) > 0
-        assert "reasoning" in rf_param.suggestions
+        assert "thought" in rf_param.suggestions
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1464,7 +1468,7 @@ class TestGemmaReasoningPrefillTemplate:
     def test_prefill_returns_opening_tag_with_bullet(self) -> None:
         t = get_template("gemma_reasoning_prefill")
         prefill = t.assistant_prefill()
-        assert "<reasoning>" in prefill
+        assert "<thought>" in prefill
         assert "*   " in prefill
 
     def test_prefill_respects_custom_reasoning_field(self) -> None:
@@ -1475,26 +1479,26 @@ class TestGemmaReasoningPrefillTemplate:
 
     def test_inherits_parse_from_gemma_reasoning(self) -> None:
         t = get_template("gemma_reasoning_prefill")
-        raw = "<reasoning>steps here</reasoning><content>answer</content>"
+        raw = "<thought>steps here</thought><content>answer</content>"
         parsed = t.parse(raw)
-        assert parsed.fields["reasoning"] == "steps here"
+        assert parsed.fields["thought"] == "steps here"
         assert parsed.fields["content"] == "answer"
 
     def test_inherits_validate_from_gemma_reasoning(self) -> None:
         t = get_template("gemma_reasoning_prefill")
-        parsed = t.parse("<reasoning>r</reasoning><content>c</content>")
+        parsed = t.parse("<thought>r</thought><content>c</content>")
         assert t.validate(parsed) == []
 
     def test_inherits_fields_from_gemma_reasoning(self) -> None:
         t = get_template("gemma_reasoning_prefill")
         fields = t.get_fields()
-        assert fields[0].name == "reasoning"
+        assert fields[0].name == "thought"
         assert fields[1].name == "content"
 
     def test_inherits_format_instruction_from_gemma_reasoning(self) -> None:
         t = get_template("gemma_reasoning_prefill")
         instruction = t.format_instruction()
-        assert "<reasoning>" in instruction
+        assert "<thought>" in instruction
         assert "block" in instruction.lower()
 
     def test_inherits_examples_from_gemma_reasoning(self) -> None:

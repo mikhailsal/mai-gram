@@ -1,30 +1,27 @@
 """Gemma-4-style structured reasoning template.
 
 Produces reasoning in the native Gemma-4 analytical format: a sequence of
-blank-line-separated blocks using indented bullet points.  Each block is an
-unlabelled cognitive phase -- the model decides what each block covers
-(situation parsing, context recall, analysis, option drafting, style checks)
-based on the problem at hand.
+blank-line-separated blocks using indented bullet points.  The model decides
+what each block covers based on the problem at hand.
 
 The format is modelled on 104 real ``reasoning_content`` messages produced by
 ``google/gemma-4-31b-it``.  Key observations from that corpus:
 
-- **No explicit section labels** -- 100% of blocks are content-driven, not
-  headed with bold or italic labels.
 - **4-6 blocks** on average (median 6, range 3-27), separated by blank lines.
 - **Indented bullets** (``    *   ``) are the dominant structural element
   (80/104 examples).
 - **First block** typically parses the user's input (intent, tone, context).
-- **Middle blocks** recall constraints, analyse the problem, and/or draft
-  candidate responses with inline option labels like ``*Option 1 (Too polite):*``.
+- **Middle blocks** recall constraints, analyse the problem, and sometimes
+  draft candidate responses with inline option labels like
+  ``*Option 1 (Too polite):*`` -- but only when the situation warrants it.
 - **Last block** is nearly always a short style/tone checklist.
-- Some blocks use numbered lists, dashes, or plain paragraphs instead of
-  bullets -- the model adapts the micro-format to the content.
+- The model freely adapts structure to content: some blocks use numbered
+  lists, dashes, or plain paragraphs instead of bullets.
 
 Supports user-configurable parameters:
 
-- ``num_reasoning_blocks``: minimum blank-line-separated blocks (default 4)
-- ``reasoning_field``: XML tag name wrapping the reasoning (default "reasoning")
+- ``num_reasoning_blocks``: target number of blocks (default 4)
+- ``reasoning_field``: XML tag name wrapping the reasoning (default "thought")
 """
 
 from __future__ import annotations
@@ -101,11 +98,26 @@ _EXAMPLE_BLOCKS: list[list[str]] = [
 
 
 def _generate_reasoning_example(num_blocks: int) -> str:
-    """Build example reasoning with *num_blocks* blank-line-separated blocks."""
-    blocks = _EXAMPLE_BLOCKS[:num_blocks]
-    while len(blocks) < num_blocks:
-        blocks.append([f"    *   (Additional analysis block {len(blocks) + 1}.)"])
-    return "\n\n".join("\n".join(lines) for lines in blocks)
+    """Build example reasoning with *num_blocks* blank-line-separated blocks.
+
+    Always keeps the first block (user-input parsing) and last block
+    (style checklist).  When fewer blocks are requested, middle blocks
+    are trimmed first -- matching how real Gemma reasoning scales down
+    for simpler questions.
+    """
+    all_blocks = list(_EXAMPLE_BLOCKS)
+    if num_blocks >= len(all_blocks):
+        selected = list(all_blocks)
+        while len(selected) < num_blocks:
+            selected.insert(-1, [f"    *   (Additional analysis point {len(selected)}.)\n"])
+        return "\n\n".join("\n".join(lines) for lines in selected)
+
+    first = all_blocks[0]
+    last = all_blocks[-1]
+    middle = all_blocks[1:-1]
+    needed_middle = num_blocks - 2
+    selected_middle = middle[:needed_middle]
+    return "\n\n".join("\n".join(lines) for lines in [first, *selected_middle, last])
 
 
 class GemmaReasoningTemplate(ResponseTemplate):
@@ -119,7 +131,7 @@ class GemmaReasoningTemplate(ResponseTemplate):
     def __init__(
         self,
         *,
-        reasoning_field: str = "reasoning",
+        reasoning_field: str = "thought",
         num_reasoning_blocks: int = 4,
     ) -> None:
         self._reasoning_field = reasoning_field
@@ -139,9 +151,9 @@ class GemmaReasoningTemplate(ResponseTemplate):
                 key="reasoning_field",
                 label="Reasoning field name",
                 param_type="str",
-                default="reasoning",
+                default="thought",
                 description="XML tag wrapping the analytical reasoning block",
-                suggestions=["reasoning", "thought", "analysis", "think"],
+                suggestions=["thought", "reasoning", "analysis", "think"],
             ),
             TemplateParam(
                 key="num_reasoning_blocks",
@@ -195,18 +207,21 @@ class GemmaReasoningTemplate(ResponseTemplate):
             f"<{rf}>...</{rf}>\n<content>...</content>\n\n"
             f"Tag order is strict: <{rf}> -> <content>\n\n"
             f"The <{rf}> tag contains your internal reasoning as a sequence "
-            f"of at least {n} blank-line-separated blocks. "
-            "Use indented bullet points (    *   ) within each block. "
-            "Do NOT label the blocks with headers -- let each block's role "
-            "emerge naturally from its content.\n\n"
-            "Typical block progression (adapt to the situation):\n"
+            f"of roughly {n} blank-line-separated blocks. "
+            "Use indented bullet points (    *   ) within each block.\n\n"
+            "The following is a guideline, not a rigid template -- adapt "
+            "freely to the situation. For simple questions you may need "
+            "fewer blocks; for complex ones, more.\n\n"
+            "Typical block progression:\n"
             "1. Parse the user's message: identify intent, tone, what they "
             "actually need.\n"
             "2. Recall relevant constraints: persona rules, conversation "
             "history, prior agreements.\n"
             "3. Analyse the problem in depth with multiple sub-points.\n"
-            "4. Draft 2-3 candidate responses, evaluating each inline "
-            "(e.g. *Option 1 (Too formal):* ..., *Option 2 (Better):* ...).\n"
+            "4. If the question is complex or the risk of error is "
+            "significant, draft candidate responses evaluating each inline "
+            "(e.g. *Option 1 (Too formal):* ..., *Option 2 (Better):* ...). "
+            "For straightforward questions, a single approach is fine.\n"
             "5. Decide on the final approach and note what to include.\n"
             "6. Quick style/tone checklist (direct, conversational, honest, "
             "etc.).\n\n"
