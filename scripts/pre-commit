@@ -6,7 +6,7 @@
 #   2. ruff format             — all files formatted
 #   3. mypy                    — no type errors
 #   4. code size audit         — report oversized files/functions for refactoring
-#   5. pytest + coverage       — all tests pass, coverage >= 90%
+#   5. pytest + coverage       — all tests pass, coverage >= fail_under (pyproject.toml)
 #   6. live functional pytest  — real OpenRouter-backed integration suite passes
 #
 # Install with:  make install-hooks
@@ -56,11 +56,13 @@ else
 fi
 
 # ── 5. Tests + coverage ─────────────────────────────────────────
+# Coverage threshold is defined by fail_under in [tool.coverage.report]
+# section of pyproject.toml. Do NOT hardcode --cov-fail-under here.
 step "Running tests with coverage"
 if pytest --cov=mai_gram --cov-config=pyproject.toml -q 2>&1; then
-    pass "All tests passed with required coverage"
+    pass "All tests passed with required coverage (threshold from pyproject.toml)"
 else
-    fail "Tests failed or coverage below threshold"
+    fail "Tests failed or coverage below minimum (see fail_under in pyproject.toml)"
 fi
 
 # ── 6. Live functional tests ────────────────────────────────────
