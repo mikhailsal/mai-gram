@@ -311,3 +311,12 @@ def get_settings() -> Settings:
     if _settings_instance is None:
         _settings_instance = Settings()
     return _settings_instance
+
+
+def reset_settings() -> None:
+    """Reset the settings singleton so the next ``get_settings()`` creates a fresh instance.
+
+    Primarily useful for testing when environment variables change between runs.
+    """
+    global _settings_instance
+    _settings_instance = None

@@ -31,6 +31,7 @@ def test_run_cli_decodes_timeout_output(monkeypatch, tmp_path) -> None:
         raise cli_helpers._CliTimeoutError(b"partial stdout", b"partial stderr")
 
     monkeypatch.setattr(cli_helpers, "_run_cli_command", fake_run_cli_command)
+    monkeypatch.setattr(cli_helpers, "_USE_SUBPROCESS", True)
 
     result = harness.run_cli("hello", timeout=12, allow_retry=False)
 

@@ -1,16 +1,22 @@
-"""Subprocess helpers for black-box functional CLI tests."""
+"""In-process and subprocess helpers for black-box functional CLI tests.
+
+By default the harness runs ``mai-chat`` **in-process** to avoid the ~1.4s
+Python startup + import overhead per invocation.  Set the environment variable
+``MAI_FUNCTIONAL_SUBPROCESS=1`` to fall back to the legacy subprocess path.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
+import logging
 import os
 import re
 import time
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 FREE_MODEL = "openrouter/free"
 
@@ -32,6 +38,8 @@ _LIVE_OUTPUT_PROVIDER_ERROR_RE = re.compile(
     r"(?:ai provider error|something went wrong with the ai provider|tap regenerate to retry)",
     re.IGNORECASE,
 )
+
+_USE_SUBPROCESS = os.environ.get("MAI_FUNCTIONAL_SUBPROCESS", "") == "1"
 
 
 class _CliTimeoutError(Exception):
@@ -58,6 +66,65 @@ class CompletedCliRun:
     def require_ok(self) -> CompletedCliRun:
         assert self.returncode == 0, self.output
         return self
+
+
+def _run_inprocess(
+    argv: tuple[str, ...], *, env: dict[str, str], cwd: Path
+) -> tuple[int, str, str]:
+    """Run the CLI entry-point in the current process, returning (rc, stdout, stderr)."""
+    from mai_gram.config import reset_settings
+    from mai_gram.console_cli import build_parser
+    from mai_gram.console_runner import _run
+    from mai_gram.db import close_db, reset_db_state
+
+    saved_env = {k: os.environ.get(k) for k in env}
+    saved_cwd = Path.cwd()
+    os.environ.update(env)
+    os.chdir(cwd)
+
+    reset_settings()
+    reset_db_state()
+
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+
+    returncode = 0
+    try:
+        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+            parser = build_parser()
+            parsed = parser.parse_args(list(argv))
+            logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
+            asyncio.run(_run(parsed))
+    except SystemExit as exc:
+        returncode = _extract_exit_code(exc, stderr_buf)
+    except Exception as exc:
+        returncode = 1
+        stderr_buf.write(f"{exc}\n")
+    finally:
+        with contextlib.suppress(Exception):
+            asyncio.run(close_db())
+        reset_db_state()
+        reset_settings()
+
+        os.chdir(saved_cwd)
+        for key, old_val in saved_env.items():
+            if old_val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_val
+
+    return returncode, stdout_buf.getvalue(), stderr_buf.getvalue()
+
+
+def _extract_exit_code(exc: SystemExit, stderr_buf: io.StringIO) -> int:
+    """Convert a SystemExit to (returncode), writing messages to stderr_buf."""
+    code = exc.code
+    if code is None or code == 0:
+        return 0
+    if isinstance(code, int):
+        return code
+    stderr_buf.write(str(code) + "\n")
+    return 1
 
 
 @dataclass(slots=True)
@@ -94,23 +161,12 @@ class CliHarness:
                     else:
                         merged_env[key] = value
 
-            try:
-                returncode, stdout, stderr = asyncio.run(
-                    _run_cli_command(
-                        command,
-                        cwd=self.root,
-                        env=merged_env,
-                        timeout=timeout,
-                    )
+            if _USE_SUBPROCESS:
+                returncode, stdout, stderr = self._run_subprocess(
+                    args, merged_env=merged_env, timeout=timeout
                 )
-            except _CliTimeoutError as exc:
-                return CompletedCliRun(
-                    command=command,
-                    returncode=124,
-                    stdout=_coerce_cli_text(exc.stdout),
-                    stderr=_coerce_cli_text(exc.stderr) or f"Timed out after {timeout}s",
-                    root=self.root,
-                )
+            else:
+                returncode, stdout, stderr = _run_inprocess(args, env=merged_env, cwd=self.root)
 
             result = CompletedCliRun(
                 command=command,
@@ -128,6 +184,25 @@ class CliHarness:
 
             time.sleep(retry_delay)
             transient_retries += 1
+
+    def _run_subprocess(
+        self,
+        args: tuple[str, ...],
+        *,
+        merged_env: dict[str, str],
+        timeout: int,
+    ) -> tuple[int, str, str]:
+        command = (self.cli_path, *args)
+        try:
+            return asyncio.run(
+                _run_cli_command(command, cwd=self.root, env=merged_env, timeout=timeout)
+            )
+        except _CliTimeoutError as exc:
+            return (
+                124,
+                _coerce_cli_text(exc.stdout),
+                _coerce_cli_text(exc.stderr) or f"Timed out after {timeout}s",
+            )
 
     def write_prompt(self, name: str, text: str, *, toml: str | None = None) -> Path:
         prompt_path = self.prompts_dir / f"{name}.txt"
