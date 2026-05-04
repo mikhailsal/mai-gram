@@ -373,3 +373,101 @@ class TestPlaceholderLeaks:
         result = markdown_to_mdv2(text)
         assert "PH" not in result
         assert "\x00" not in result
+
+
+# ---------------------------------------------------------------------------
+# MarkdownV2 conversion: code, links, italic, strikethrough
+# ---------------------------------------------------------------------------
+
+
+class TestMdV2CodeBlocks:
+    def test_code_block_with_language(self) -> None:
+        text = "```python\nprint('hello')\n```"
+        result = markdown_to_mdv2(text)
+        assert "```python\n" in result
+        assert "print" in result
+        assert "```" in result
+
+    def test_code_block_without_language(self) -> None:
+        text = "```\nsome code\n```"
+        result = markdown_to_mdv2(text)
+        assert "```\n" in result
+        assert "some code" in result
+
+    def test_inline_code_mdv2(self) -> None:
+        result = markdown_to_mdv2("Use `foo()` here")
+        assert "`foo\\(\\)`" in result or "`foo()`" in result
+
+    def test_code_block_special_chars_escaped(self) -> None:
+        text = "```\nfoo\\bar `baz`\n```"
+        result = markdown_to_mdv2(text)
+        assert "\\\\bar" in result or "\\bar" in result
+
+
+class TestMdV2Links:
+    def test_link_conversion(self) -> None:
+        result = markdown_to_mdv2("[click](https://example.com)")
+        assert "[click]" in result
+        assert "(https://example.com)" in result
+
+    def test_link_with_special_chars(self) -> None:
+        result = markdown_to_mdv2("[test & link](https://ex.com/path)")
+        assert "test" in result
+        assert "ex.com" in result
+
+
+class TestMdV2Italic:
+    def test_star_italic(self) -> None:
+        result = markdown_to_mdv2("this *word* is italic")
+        assert "_word_" in result
+
+    def test_underscore_italic(self) -> None:
+        result = markdown_to_mdv2("this _word_ is italic")
+        assert "_word_" in result
+
+
+class TestMdV2Strikethrough:
+    def test_strikethrough(self) -> None:
+        result = markdown_to_mdv2("~~deleted~~")
+        assert "~deleted~" in result
+
+    def test_strikethrough_multiword(self) -> None:
+        result = markdown_to_mdv2("~~old text~~")
+        assert "~old text~" in result
+
+
+class TestMdV2NestedPlaceholders:
+    def test_bold_inside_header(self) -> None:
+        text = "# **Important** Title\n\nContent"
+        result = markdown_to_mdv2(text)
+        assert "\x00" not in result
+        assert "PH" not in result
+
+    def test_complex_nested_formatting(self) -> None:
+        text = "***\n\n# Header with **bold**\n\n## Another *italic* section"
+        result = markdown_to_mdv2(text)
+        assert "\x00" not in result
+        assert "\u2500" in result
+
+    def test_link_inside_bold(self) -> None:
+        result = markdown_to_html("**[link](https://example.com)**")
+        assert "<b>" in result
+        assert "example.com" in result
+
+    def test_nested_mdv2_stress(self) -> None:
+        """Force nested placeholder resolution by combining HR + header + bold."""
+        text = "***\n\n# **Emphasized** Header\n\n## Sub\n\nRegular text"
+        result = markdown_to_mdv2(text)
+        assert "\x00" not in result
+        assert "Header" in result
+
+
+class TestMdV2Blockquotes:
+    def test_blockquote_html(self) -> None:
+        result = markdown_to_html("> This is a quote\n> with two lines")
+        assert "<blockquote>" in result
+        assert "This is a quote" in result
+
+    def test_nested_blockquote(self) -> None:
+        result = markdown_to_html("> > Nested quote")
+        assert "Nested quote" in result

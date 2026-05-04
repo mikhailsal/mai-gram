@@ -137,6 +137,107 @@ class TestSettings:
         assert "id" not in settings.get_model_params("flash-creative")
 
 
+class TestSettingsLoaders:
+    def test_get_available_templates_returns_list(self) -> None:
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        templates = settings.get_available_templates()
+        assert isinstance(templates, list)
+        assert "empty" in templates
+        assert "xml" in templates
+
+    def test_get_response_template_by_name(self) -> None:
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        t = settings.get_response_template("xml")
+        assert t.name == "xml"
+
+    def test_get_response_template_none_returns_empty(self) -> None:
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        t = settings.get_response_template(None)
+        assert t.name == "empty"
+
+    def test_get_response_template_with_params(self) -> None:
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        t = settings.get_response_template("xml", {"reasoning_field": "think"})
+        fields = t.get_fields()
+        assert fields[0].name == "think"
+
+    def test_get_available_prompts(self, tmp_path) -> None:
+        prompt_file = tmp_path / "test_prompt.md"
+        prompt_file.write_text("You are a helpful bot.", encoding="utf-8")
+        settings = Settings(
+            prompts_dir=str(tmp_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        prompts = settings.get_available_prompts()
+        assert "test_prompt" in prompts
+        assert prompts["test_prompt"] == "You are a helpful bot."
+
+    def test_get_prompt_config_missing_returns_default(self, tmp_path) -> None:
+        settings = Settings(
+            prompts_dir=str(tmp_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        config = settings.get_prompt_config("nonexistent")
+        assert config.show_reasoning is True
+        assert config.tools_enabled is None
+
+    def test_get_tool_filter_default_is_none(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text("[models]\n", encoding="utf-8")
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        enabled, disabled = settings.get_tool_filter()
+        assert enabled is None
+        assert disabled is None
+
+    def test_get_default_model_fallback(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text("[models]\n", encoding="utf-8")
+        settings = Settings(
+            models_config_path=str(models_path),
+            llm_model="fallback/model",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_default_model() == "fallback/model"
+
+    def test_get_external_mcp_config_empty(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text("[models]\n", encoding="utf-8")
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_external_mcp_config() == {}
+
+    def test_get_bot_config_by_token_not_found(self) -> None:
+        settings = Settings(
+            bots_config_path="/nonexistent/bots.toml",
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        assert settings.get_bot_config_by_token("unknown_token") is None
+
+    def test_load_toml_alias(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text('[models]\n[models."test/model"]\n', encoding="utf-8")
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+        data = settings._load_toml()
+        assert "models" in data
+
+    def test_reset_settings(self) -> None:
+        from mai_gram.config import reset_settings
+
+        reset_settings()
+        s1 = get_settings()
+        reset_settings()
+        s2 = get_settings()
+        assert s1 is not s2
+
+
 class TestAllowedUsers:
     def test_empty_allowed_users_returns_empty_set(self) -> None:
         settings = Settings(allowed_users="", _env_file=None)  # type: ignore[call-arg]

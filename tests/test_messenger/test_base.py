@@ -1,15 +1,64 @@
 """Tests for the messenger base classes."""
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
 from mai_gram.messenger.base import (
     IncomingMessage,
+    InlineKeyboardSpec,
+    MessageHandler,
     MessageType,
+    Messenger,
     OutgoingMessage,
     SendResult,
 )
+
+
+class _ConcreteMessenger(Messenger):
+    """Minimal concrete Messenger for testing default method implementations."""
+
+    @property
+    def platform_name(self) -> str:
+        return "test"
+
+    @property
+    def max_message_length(self) -> int:
+        return 4000
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def send_message(self, message: OutgoingMessage) -> SendResult:
+        return SendResult(success=True, message_id="sent_1")
+
+    async def edit_message(
+        self, chat_id: str, message_id: str, new_text: str, **kwargs: Any
+    ) -> SendResult:
+        return SendResult(success=True, message_id=message_id)
+
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        return True
+
+    async def send_typing_indicator(self, chat_id: str) -> None:
+        pass
+
+    def register_message_handler(self, handler: MessageHandler) -> None:
+        pass
+
+    def register_command_handler(
+        self, command: str, handler: MessageHandler, *, description: str = ""
+    ) -> None:
+        pass
+
+    def register_callback_handler(self, handler: MessageHandler) -> None:
+        pass
 
 
 class TestIncomingMessage:
@@ -175,3 +224,71 @@ class TestMessageType:
         assert MessageType.VOICE.value == "voice"
         assert MessageType.DOCUMENT.value == "document"
         assert MessageType.OTHER.value == "other"
+
+
+class TestMessengerDefaults:
+    """Tests for default method implementations on the Messenger ABC."""
+
+    def setup_method(self) -> None:
+        self.messenger = _ConcreteMessenger()
+
+    def test_register_document_handler_noop(self) -> None:
+        async def _handler(msg: IncomingMessage) -> None:
+            pass
+
+        result = self.messenger.register_document_handler(_handler)
+        assert result is None
+
+    def test_build_inline_keyboard(self) -> None:
+        buttons: InlineKeyboardSpec = [
+            [("Yes", "cb:yes"), ("No", "cb:no")],
+            [("Cancel", "cb:cancel")],
+        ]
+        kb = self.messenger.build_inline_keyboard(buttons)
+        assert kb == {
+            "inline_keyboard": [
+                [
+                    {"text": "Yes", "callback_data": "cb:yes"},
+                    {"text": "No", "callback_data": "cb:no"},
+                ],
+                [{"text": "Cancel", "callback_data": "cb:cancel"}],
+            ]
+        }
+
+    async def test_download_file_raises(self) -> None:
+        with pytest.raises(NotImplementedError, match="does not support file downloads"):
+            await self.messenger.download_file("file_123")
+
+    def test_get_callback_source_message_returns_none(self) -> None:
+        msg = IncomingMessage(
+            platform="test",
+            chat_id="c1",
+            user_id="u1",
+            message_id="m1",
+            message_type=MessageType.CALLBACK,
+            callback_data="cb:test",
+        )
+        assert self.messenger.get_callback_source_message(msg) is None
+
+    async def test_delete_callback_source_message_no_source(self) -> None:
+        msg = IncomingMessage(
+            platform="test",
+            chat_id="c1",
+            user_id="u1",
+            message_id="m1",
+            message_type=MessageType.CALLBACK,
+            callback_data="cb:test",
+        )
+        result = await self.messenger.delete_callback_source_message(msg)
+        assert result is False
+
+    async def test_set_profile_photo_default(self) -> None:
+        result = await self.messenger.set_profile_photo("/home/user/photo.jpg")
+        assert result is False
+
+    async def test_set_profile_name_default(self) -> None:
+        result = await self.messenger.set_profile_name("New Name")
+        assert result is False
+
+    def test_max_message_length_default(self) -> None:
+        assert self.messenger.max_message_length == 4000

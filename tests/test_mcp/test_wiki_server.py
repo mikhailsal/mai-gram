@@ -243,3 +243,135 @@ class TestWikiMCPServer:
         assert lines[0]["key"] == "human_name"
         assert lines[1]["action"] == "edit"
         assert lines[1]["content"] == "Alexander"
+
+
+class TestWikiServerValidation:
+    """Test error handling and validation of wiki_server tool calls."""
+
+    import pytest
+
+    async def test_create_empty_key(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="non-empty string 'key'"):
+            await server.call_tool("wiki_create", {"key": "", "content": "x", "importance": 5})
+
+    async def test_create_non_string_content(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="requires string 'content'"):
+            await server.call_tool("wiki_create", {"key": "k", "content": 123, "importance": 5})
+
+    async def test_create_non_int_importance(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="requires integer 'importance'"):
+            await server.call_tool("wiki_create", {"key": "k", "content": "x", "importance": "hi"})
+
+    async def test_edit_empty_key(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="non-empty string 'key'"):
+            await server.call_tool("wiki_edit", {"key": "", "content": "x"})
+
+    async def test_edit_non_string_content(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="'content' must be a string"):
+            await server.call_tool("wiki_edit", {"key": "k", "content": 123})
+
+    async def test_edit_non_int_importance(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="'importance' must be an integer"):
+            await server.call_tool("wiki_edit", {"key": "k", "importance": "high"})
+
+    async def test_edit_no_content_or_importance(
+        self, session: AsyncSession, tmp_path: Path
+    ) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="requires 'content' and/or 'importance'"):
+            await server.call_tool("wiki_edit", {"key": "k"})
+
+    async def test_edit_not_found(self, session: AsyncSession, tmp_path: Path) -> None:
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        result = await server.call_tool("wiki_edit", {"key": "missing", "content": "x"})
+        assert "not found" in result.lower()
+
+    async def test_read_empty_key(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="non-empty string 'key'"):
+            await server.call_tool("wiki_read", {"key": ""})
+
+    async def test_list_invalid_sort_by(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="sort_by"):
+            await server.call_tool("wiki_list", {"sort_by": "invalid"})
+
+    async def test_list_non_int_limit(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="'limit' must be an integer"):
+            await server.call_tool("wiki_list", {"limit": "ten"})
+
+    async def test_list_non_int_offset(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="'offset' must be an integer"):
+            await server.call_tool("wiki_list", {"offset": "zero"})
+
+    async def test_search_empty_query(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="non-empty string 'query'"):
+            await server.call_tool("wiki_search", {"query": ""})
+
+    async def test_search_non_int_limit(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="'limit' must be an integer"):
+            await server.call_tool("wiki_search", {"query": "test", "limit": "abc"})
+
+    async def test_search_no_results(self, session: AsyncSession, tmp_path: Path) -> None:
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        result = await server.call_tool("wiki_search", {"query": "nonexistent"})
+        assert "No wiki entries found" in result
+
+    async def test_unknown_tool(self, session: AsyncSession, tmp_path: Path) -> None:
+        import pytest as _pt
+
+        chat_id = await _create_companion(session)
+        server = WikiMCPServer(WikiStore(session, data_dir=tmp_path), chat_id)
+        with _pt.raises(ValueError, match="Unknown tool"):
+            await server.call_tool("wiki_delete", {})

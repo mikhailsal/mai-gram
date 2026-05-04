@@ -67,3 +67,77 @@ class TestMCPManager:
 
         with pytest.raises(ValueError, match="Unknown tool"):
             await manager.call_tool("messages", "missing_tool", {})
+
+    async def test_register_server_empty_name(self) -> None:
+        manager = MCPManager()
+        with pytest.raises(ValueError, match="must not be empty"):
+            manager.register_server("", _FakeServer([]))
+
+    async def test_register_server_duplicate_name(self) -> None:
+        manager = MCPManager()
+        manager.register_server("wiki", _FakeServer([]))
+        with pytest.raises(ValueError, match="already registered"):
+            manager.register_server("wiki", _FakeServer([]))
+
+    async def test_enabled_tools_filter(self) -> None:
+        manager = MCPManager(enabled_tools=["wiki_read"])
+        manager.register_server(
+            "wiki",
+            _FakeServer(
+                [
+                    MCPToolSpec("wiki_read", "Read wiki", {"type": "object"}),
+                    MCPToolSpec("wiki_write", "Write wiki", {"type": "object"}),
+                ]
+            ),
+        )
+        tools = await manager.list_all_tools()
+        assert len(tools) == 1
+        assert tools[0].name == "wiki_read"
+
+    async def test_disabled_tools_filter(self) -> None:
+        manager = MCPManager(disabled_tools=["wiki_write"])
+        manager.register_server(
+            "wiki",
+            _FakeServer(
+                [
+                    MCPToolSpec("wiki_read", "Read wiki", {"type": "object"}),
+                    MCPToolSpec("wiki_write", "Write wiki", {"type": "object"}),
+                ]
+            ),
+        )
+        tools = await manager.list_all_tools()
+        assert len(tools) == 1
+        assert tools[0].name == "wiki_read"
+
+    async def test_resolve_tool_server_success(self) -> None:
+        manager = MCPManager()
+        manager.register_server(
+            "messages",
+            _FakeServer([MCPToolSpec("search_messages", "Search", {"type": "object"})]),
+        )
+        manager.register_server(
+            "wiki",
+            _FakeServer([MCPToolSpec("wiki_read", "Read", {"type": "object"})]),
+        )
+
+        result = await manager.resolve_tool_server("wiki_read")
+        assert result == "wiki"
+
+    async def test_resolve_tool_server_not_found(self) -> None:
+        manager = MCPManager()
+        manager.register_server("wiki", _FakeServer([]))
+        with pytest.raises(ValueError, match="No MCP server exposes"):
+            await manager.resolve_tool_server("nonexistent_tool")
+
+    async def test_resolve_tool_server_ambiguous(self) -> None:
+        manager = MCPManager()
+        manager.register_server(
+            "server_a",
+            _FakeServer([MCPToolSpec("shared_tool", "Tool A", {"type": "object"})]),
+        )
+        manager.register_server(
+            "server_b",
+            _FakeServer([MCPToolSpec("shared_tool", "Tool B", {"type": "object"})]),
+        )
+        with pytest.raises(ValueError, match="ambiguous"):
+            await manager.resolve_tool_server("shared_tool")

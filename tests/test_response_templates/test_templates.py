@@ -1352,3 +1352,58 @@ class TestCrossTemplateConsistency:
             assert field_name.lower() in prefill.lower(), (
                 f"{name}: prefill '{prefill}' doesn't contain custom field '{field_name}'"
             )
+
+
+# ──────────────────────────────────────────────────────────────────
+# render_field_html tests
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestRenderFieldHtml:
+    def test_render_known_field_blockquote(self) -> None:
+        t = get_template("xml")
+        html = t.render_field_html("thought", "deep thinking")
+        assert "<blockquote>" in html
+        assert "deep thinking" in html
+
+    def test_render_unknown_field_passes_through(self) -> None:
+        t = get_template("xml")
+        html = t.render_field_html("nonexistent_field", "**bold text**")
+        assert "bold text" in html
+        assert "<blockquote>" not in html
+
+    def test_render_field_with_expandable(self) -> None:
+        t = get_template("xml")
+        html = t.render_field_html("thought", "expandable text", expandable=True)
+        assert "expandable" in html
+
+    def test_render_field_display_tag_none(self) -> None:
+        """Fields with display_tag='none' render without blockquote wrapper."""
+        t = get_template("xml")
+        html = t.render_field_html("content", "just text")
+        assert "<blockquote>" not in html
+
+
+# ──────────────────────────────────────────────────────────────────
+# Additional _resolve_params and base class tests
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestResolveParamsExtended:
+    def test_str_param_none_falls_to_default(self) -> None:
+        declared = {
+            "name": TemplateParam(key="name", label="Name", param_type="str", default="thought")
+        }
+        result = ResponseTemplate._resolve_params({"name": None}, declared)
+        assert result["name"] == "thought"
+
+    def test_get_effective_params_returns_defaults(self) -> None:
+        t = get_template("xml")
+        params = t.get_effective_params()
+        assert "reasoning_field" in params
+
+    def test_build_with_params_default_returns_self(self) -> None:
+        """The base _build_with_params returns self."""
+        t = get_template("empty")
+        result = t._build_with_params({"anything": "value"})
+        assert result is t

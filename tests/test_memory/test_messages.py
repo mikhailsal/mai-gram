@@ -93,6 +93,50 @@ class TestSaveMessage:
         assert parse_persisted_tool_calls("not-json", message_id=7) is None
         assert "Failed to parse tool_calls for message 7" in caplog.text
 
+    def test_parse_persisted_tool_calls_returns_none_for_non_list(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import json
+
+        assert parse_persisted_tool_calls(json.dumps({"not": "a list"}), message_id=8) is None
+        assert "Failed to parse tool_calls for message 8" in caplog.text
+
+    def test_parse_persisted_tool_calls_returns_none_for_non_dict_element(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import json
+
+        assert parse_persisted_tool_calls(json.dumps(["not_a_dict"]), message_id=9) is None
+        assert "Failed to parse tool_calls for message 9" in caplog.text
+
+    def test_parse_persisted_tool_calls_returns_none_for_missing_fields(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import json
+
+        data = json.dumps([{"id": "tc1", "name": "search"}])
+        assert parse_persisted_tool_calls(data, message_id=10) is None
+        assert "Failed to parse tool_calls for message 10" in caplog.text
+
+    def test_parse_persisted_tool_calls_returns_none_for_empty_list(self) -> None:
+        import json
+
+        assert parse_persisted_tool_calls(json.dumps([]), message_id=11) is None
+
+    def test_decode_persisted_message_unknown_role(
+        self, store: MessageStore, chat: Chat, session: AsyncSession
+    ) -> None:
+        from mai_gram.db.models import Message as MsgModel
+
+        msg = MsgModel(chat_id=chat.id, role="totally_unknown_role", content="test")
+        session.add(msg)
+
+        decoded = decode_persisted_message(msg)
+        assert decoded.role == MessageRole.ASSISTANT
+
 
 class TestGetRecent:
     async def test_returns_recent(self, store: MessageStore, chat: Chat) -> None:
@@ -173,6 +217,42 @@ class TestGetMessageContext:
         assert target.content == "msg-2"
         assert len(before) == 1
         assert len(after) == 1
+
+
+class TestGetRecentAfterMessageId:
+    async def test_after_message_id_filter(self, store: MessageStore, chat: Chat) -> None:
+        m1 = await store.save_message(chat.id, "user", "First")
+        await store.save_message(chat.id, "user", "Second")
+        await store.save_message(chat.id, "user", "Third")
+
+        recent = await store.get_recent(chat.id, limit=10, after_message_id=m1.id)
+        contents = {msg.content for msg in recent}
+        assert "First" not in contents
+        assert "Second" in contents
+        assert "Third" in contents
+
+
+class TestGetMessagesForDate:
+    async def test_returns_messages_for_date(self, store: MessageStore, chat: Chat) -> None:
+        from datetime import date
+
+        ts1 = datetime(2026, 4, 10, 10, 0, tzinfo=timezone.utc)
+        ts2 = datetime(2026, 4, 10, 14, 0, tzinfo=timezone.utc)
+        ts3 = datetime(2026, 4, 11, 9, 0, tzinfo=timezone.utc)
+        await store.save_message(chat.id, "user", "Morning", timestamp=ts1)
+        await store.save_message(chat.id, "user", "Afternoon", timestamp=ts2)
+        await store.save_message(chat.id, "user", "Next day", timestamp=ts3)
+
+        results = await store.get_messages_for_date(chat.id, date(2026, 4, 10))
+        assert len(results) == 2
+        assert results[0].content == "Morning"
+        assert results[1].content == "Afternoon"
+
+    async def test_empty_date(self, store: MessageStore, chat: Chat) -> None:
+        from datetime import date
+
+        results = await store.get_messages_for_date(chat.id, date(2026, 1, 1))
+        assert results == []
 
 
 class TestGetMessagesPaginated:

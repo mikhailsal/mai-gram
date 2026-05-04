@@ -359,3 +359,152 @@ class TestGetMessagesByTimerange:
         # Count message lines
         msg_lines = [line for line in result.split("\n") if line.startswith("[#")]
         assert len(msg_lines) == 20  # Clamped to max
+
+    async def test_get_messages_by_timerange_empty_with_end_date(
+        self, session: AsyncSession
+    ) -> None:
+        """Verify empty result message when end_date is different from start_date."""
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        result = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "end_date": "2026-02-16"},
+        )
+        assert "No messages found from 2026-02-14 to 2026-02-16" in result
+
+    async def test_get_messages_by_timerange_empty_same_date(self, session: AsyncSession) -> None:
+        """Verify empty result message when end_date == start_date."""
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        result = await server.call_tool(
+            "get_messages_by_timerange",
+            {"start_date": "2026-02-14", "end_date": "2026-02-14"},
+        )
+        assert "No messages found for 2026-02-14" in result
+
+
+class TestMessagesServerErrorHandling:
+    async def test_unknown_tool_raises(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="Unknown tool"):
+            await server.call_tool("nonexistent_tool", {})
+
+    async def test_search_messages_empty_query(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="non-empty string"):
+            await server.call_tool("search_messages", {"query": ""})
+
+    async def test_search_messages_non_string_query(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="non-empty string"):
+            await server.call_tool("search_messages", {"query": 123})
+
+    async def test_search_messages_non_int_limit(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="'limit' must be an integer"):
+            await server.call_tool("search_messages", {"query": "test", "limit": "ten"})
+
+    async def test_search_messages_non_bool_oldest_first(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="'oldest_first' must be a boolean"):
+            await server.call_tool("search_messages", {"query": "test", "oldest_first": "yes"})
+
+    async def test_get_context_non_int_before_after(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="must be integers"):
+            await server.call_tool("get_message_context", {"message_id": 1, "before": "abc"})
+
+    async def test_timerange_non_string_start_date(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="requires"):
+            await server.call_tool("get_messages_by_timerange", {"start_date": 123})
+
+    async def test_timerange_non_string_end_date(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="must be a string"):
+            await server.call_tool(
+                "get_messages_by_timerange",
+                {"start_date": "2026-02-14", "end_date": 123},
+            )
+
+    async def test_timerange_invalid_end_date(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="Invalid end_date"):
+            await server.call_tool(
+                "get_messages_by_timerange",
+                {"start_date": "2026-02-14", "end_date": "not-a-date"},
+            )
+
+    async def test_parse_bounded_int_non_integer(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="must be an integer"):
+            await server.call_tool(
+                "get_messages_by_timerange",
+                {"start_date": "2026-02-14", "limit": "abc"},
+            )
+
+    async def test_parse_boolean_non_bool(self, session: AsyncSession) -> None:
+        chat_id = await _create_companion(session)
+        server = MessagesMCPServer(MessageStore(session), chat_id)
+
+        with pytest.raises(ValueError, match="must be a boolean"):
+            await server.call_tool(
+                "get_messages_by_timerange",
+                {"start_date": "2026-02-14", "oldest_first": "yes"},
+            )
+
+
+class TestFormatMessageWithId:
+    async def test_format_invalid_timezone_fallback(self, session: AsyncSession) -> None:
+        """Messages with invalid timezone should fallback to UTC."""
+        chat_id = await _create_companion(session)
+        store = MessageStore(session)
+        msg = await store.save_message(
+            chat_id,
+            "user",
+            "test message",
+            timestamp=datetime(2026, 2, 14, 10, 0, tzinfo=timezone.utc),
+        )
+        msg.timezone = "Invalid/Timezone"
+
+        result = MessagesMCPServer._format_message_with_id(msg)
+        assert "UTC" in result
+        assert "test message" in result
+
+    async def test_format_message_show_datetime_false(self, session: AsyncSession) -> None:
+        """Messages with show_datetime=False use 'imported' text."""
+        chat_id = await _create_companion(session)
+        store = MessageStore(session)
+        msg = await store.save_message(
+            chat_id,
+            "user",
+            "imported msg",
+            timestamp=datetime(2026, 2, 14, 10, 0, tzinfo=timezone.utc),
+        )
+        msg.show_datetime = False
+
+        result = MessagesMCPServer._format_message_with_id(msg)
+        assert "imported, real date unknown" in result
+        assert "imported msg" in result
