@@ -56,19 +56,53 @@ can be fully rebuilt from the files using `mai-chat --repair-wiki`. See
 [DEVELOPMENT.md](DEVELOPMENT.md#wiki-knowledge-base-architecture) for
 details.
 
-## Model Whitelist
+## Model Registry
 
-Edit `config/models.toml` to control which models users can select:
+Edit `config/models.toml` to control which models users can select.
+Each `[models."<key>"]` section defines one selectable model:
 
 ```toml
 [models]
-allowed = [
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-sonnet-4",
-    "google/gemini-2.5-flash",
-]
 default = "openai/gpt-4o-mini"
+
+[models."openai/gpt-4o"]
+title = "GPT-4o"
+
+[models."openai/gpt-4o-mini"]
+title = "GPT-4o Mini"
+temperature = 0.7
+
+[models."google/gemini-2.5-flash"]
+title = "Gemini 2.5 Flash"
+reasoning.effort = "medium"
+provider.order = ["Google AI Studio"]
+```
+
+Per-model meta-keys (not sent to the LLM API):
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | Show this model in the `/start` selection UI |
+| `title` | string | derived from key | Custom display label (e.g. `"Gemini Flash @high"`) |
+| `id` | string | section key | Real OpenRouter model ID when the key is an alias |
+
+All other keys (`temperature`, `reasoning.effort`, `provider.order`, etc.)
+are merged into the OpenRouter request body as parameter overrides.
+
+To register the same model with different parameter presets, use a unique
+alias key and point `id` to the real model:
+
+```toml
+[models."flash-creative"]
+id = "google/gemini-2.5-flash"
+title = "Gemini Flash (creative)"
+temperature = 1.5
+
+[models."flash-precise"]
+id = "google/gemini-2.5-flash"
+title = "Gemini Flash (precise)"
+reasoning.effort = "high"
+temperature = 0.2
 ```
 
 Changes to `config/models.toml` are picked up automatically without

@@ -134,6 +134,91 @@ class TestHandleStart:
         workflow._messenger.build_inline_keyboard.assert_called_once()
 
 
+class TestModelDisplayLabels:
+    async def test_model_selection_uses_custom_titles(self, session: AsyncSession) -> None:
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = [
+            "google/gemini-2.5-flash",
+            "flash-creative",
+        ]
+        settings.get_default_model.return_value = "google/gemini-2.5-flash"
+        settings.get_model_title.side_effect = lambda key: {
+            "google/gemini-2.5-flash": "Gemini 2.5 Flash",
+            "flash-creative": "Gemini Flash (creative)",
+        }.get(key)
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty"]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        message = _make_message(chat_id="tg-chat", bot_id="test-bot")
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_start(message)
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        build_kb.assert_called_once()
+        rows = build_kb.call_args.args[0]
+        labels = [row[0][0] for row in rows]
+        assert labels == ["Gemini 2.5 Flash [default]", "Gemini Flash (creative)"]
+        callbacks = [row[0][1] for row in rows]
+        assert callbacks == ["model:google/gemini-2.5-flash", "model:flash-creative"]
+
+    async def test_model_selection_falls_back_to_last_path_segment(
+        self, session: AsyncSession
+    ) -> None:
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["vendor/some-model"]
+        settings.get_default_model.return_value = "vendor/some-model"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty"]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        message = _make_message(chat_id="tg-chat", bot_id="test-bot")
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_start(message)
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        rows = build_kb.call_args.args[0]
+        assert rows[0][0][0] == "some-model [default]"
+
+    async def test_model_selection_uses_key_as_label_without_slash(
+        self, session: AsyncSession
+    ) -> None:
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["my-alias"]
+        settings.get_default_model.return_value = ""
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty"]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        message = _make_message(chat_id="tg-chat", bot_id="test-bot")
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_start(message)
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        rows = build_kb.call_args.args[0]
+        assert rows[0][0][0] == "my-alias"
+
+
 class TestSetupCallbacks:
     async def test_rejects_disallowed_model(self) -> None:
         settings = MagicMock()

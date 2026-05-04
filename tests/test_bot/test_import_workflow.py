@@ -137,6 +137,68 @@ class TestImportWorkflow:
         assert sent.keyboard == messenger.build_inline_keyboard.return_value
         messenger.build_inline_keyboard.assert_called_once()
 
+    async def test_model_selection_uses_custom_titles(self, session: AsyncSession) -> None:
+        messenger = MagicMock()
+        messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+        messenger.build_inline_keyboard.return_value = {"inline_keyboard": []}
+
+        settings = MagicMock()
+        settings.get_default_model.return_value = "google/gemini-2.5-flash"
+        settings.get_model_title.side_effect = lambda key: {
+            "google/gemini-2.5-flash": "Gemini 2.5 Flash",
+            "flash-creative": "Gemini Flash (creative)",
+        }.get(key)
+        settings.default_timezone = "UTC"
+
+        workflow = ImportWorkflow(
+            messenger,
+            settings,
+            get_allowed_models=lambda: ["google/gemini-2.5-flash", "flash-creative"],
+            resolve_chat_id=lambda message: message.chat_id,
+        )
+
+        with patch("mai_gram.bot.import_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_import(_make_message(), in_setup=False)
+
+        build_kb = cast("MagicMock", messenger.build_inline_keyboard)
+        build_kb.assert_called_once()
+        rows = build_kb.call_args.args[0]
+        labels = [row[0][0] for row in rows]
+        assert labels == ["Gemini 2.5 Flash [default]", "Gemini Flash (creative)"]
+        callbacks = [row[0][1] for row in rows]
+        assert callbacks == [
+            "import_model:google/gemini-2.5-flash",
+            "import_model:flash-creative",
+        ]
+
+    async def test_model_selection_falls_back_to_path_segment(self, session: AsyncSession) -> None:
+        messenger = MagicMock()
+        messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+        messenger.build_inline_keyboard.return_value = {"inline_keyboard": []}
+
+        settings = MagicMock()
+        settings.get_default_model.return_value = ""
+        settings.get_model_title.return_value = None
+        settings.default_timezone = "UTC"
+
+        workflow = ImportWorkflow(
+            messenger,
+            settings,
+            get_allowed_models=lambda: ["vendor/some-model"],
+            resolve_chat_id=lambda message: message.chat_id,
+        )
+
+        with patch("mai_gram.bot.import_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_import(_make_message(), in_setup=False)
+
+        build_kb = cast("MagicMock", messenger.build_inline_keyboard)
+        rows = build_kb.call_args.args[0]
+        assert rows[0][0][0] == "some-model"
+
     async def test_handle_import_callback_rejects_disallowed_model(self) -> None:
         workflow, messenger, _ = _make_workflow()
         workflow._sessions["test-user"] = ImportSession(user_id="test-user", chat_id="test-chat")

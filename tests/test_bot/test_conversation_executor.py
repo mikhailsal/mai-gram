@@ -29,6 +29,7 @@ def _make_request(
     show_tool_calls: bool = False,
     extra_params: dict[str, Any] | None = None,
     failure_log_message: str = "Failed to generate response",
+    resolved_model: str | None = None,
 ) -> AssistantTurnRequest:
     chat = Chat(
         id="test-user@test-bot",
@@ -58,6 +59,7 @@ def _make_request(
         show_tool_calls=show_tool_calls,
         extra_params=extra_params,
         failure_log_message=failure_log_message,
+        resolved_model=resolved_model,
     )
 
 
@@ -281,6 +283,44 @@ class TestConversationExecutor:
         assert outcome.response_reasoning == "think"
         assert outcome.cost == 0.01
         assert outcome.is_byok is True
+
+    async def test_resolved_model_passed_to_streaming_call(self) -> None:
+        executor, _, _ = _make_executor()
+        request = _make_request(resolved_model="real/api-model-id")
+
+        assert request.model_for_api == "real/api-model-id"
+
+        captured_kwargs: dict[str, Any] = {}
+
+        async def _stream(*args: object, **kwargs: object) -> Any:
+            captured_kwargs.update(kwargs)
+            yield SimpleNamespace(
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2),
+                cost=0.01,
+                is_byok=False,
+                turn_complete=False,
+                reasoning="",
+                content="Hello",
+            )
+
+        with (
+            patch("mai_gram.bot.conversation_executor.run_with_tools_stream", _stream),
+            patch.object(executor, "_maybe_update_live_display", AsyncMock()),
+        ):
+            outcome = await executor._stream_response(
+                request,
+                [],
+                on_tool_call_display=AsyncMock(),
+                on_tool_result_display=AsyncMock(),
+            )
+
+        assert captured_kwargs["model"] == "real/api-model-id"
+        assert outcome.response_text == "Hello"
+
+    async def test_model_for_api_falls_back_to_chat_llm_model(self) -> None:
+        request = _make_request()
+        assert request.resolved_model is None
+        assert request.model_for_api == "test-model"
 
     async def test_maybe_update_live_display_covers_non_edit_and_placeholder_path(self) -> None:
         executor, _, _ = _make_executor()

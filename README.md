@@ -165,17 +165,31 @@ See [docs/DEBUGGING.md](docs/DEBUGGING.md) for the full CLI reference.
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference including `MEMORY_DATA_DIR`, `WIKI_CONTEXT_LIMIT`, `SHORT_TERM_LIMIT`, LLM timeout settings, and data directory layout.
 
-### Model Whitelist (`config/models.toml`)
+### Model Registry (`config/models.toml`)
+
+Each `[models."<key>"]` section defines an available model. Models are enabled by default; set `enabled = false` to hide one without removing its config.
 
 ```toml
 [models]
-allowed = [
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-sonnet-4",
-    "google/gemini-2.5-flash",
-]
 default = "openai/gpt-4o-mini"
+
+[models."openai/gpt-4o"]
+title = "GPT-4o"
+
+[models."openai/gpt-4o-mini"]
+title = "GPT-4o Mini"
+temperature = 0.7
+
+[models."google/gemini-2.5-flash"]
+title = "Gemini 2.5 Flash"
+reasoning.effort = "medium"
+provider.order = ["Google AI Studio"]
+
+# Same model with different parameters via alias
+[models."gemini-flash-creative"]
+id = "google/gemini-2.5-flash"
+title = "Gemini Flash (creative)"
+temperature = 1.5
 ```
 
 Changes are hot-reloaded — no restart required.
