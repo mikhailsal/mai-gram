@@ -468,6 +468,14 @@ class ImportWorkflow:
 
         return get_template(template_name, params=template_params)
 
+    @staticmethod
+    def _serialize_template_params(params: dict[str, str] | None) -> str | None:
+        if not params:
+            return None
+        import json as _json
+
+        return _json.dumps(params, ensure_ascii=False)
+
     async def _save_imported_chat(
         self,
         *,
@@ -491,6 +499,10 @@ class ImportWorkflow:
                     timezone=self._settings.default_timezone,
                     payload=parsed_document,
                     reasoning_template=reasoning_template,
+                    response_template_name=import_session.reasoning_template_name,
+                    template_params_json=self._serialize_template_params(
+                        import_session.reasoning_template_params,
+                    ),
                 )
             except ImportChatConflictError:
                 self.clear_import_session(message.user_id)

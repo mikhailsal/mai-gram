@@ -324,6 +324,12 @@ async def _import_json_dialogue(
         reasoning_template_name, reasoning_template_params
     )
 
+    template_params_json: str | None = None
+    if reasoning_template_params:
+        import json as _json
+
+        template_params_json = _json.dumps(reasoning_template_params, ensure_ascii=False)
+
     async with get_session() as session:
         try:
             imported = await import_into_existing_chat(
@@ -331,6 +337,8 @@ async def _import_json_dialogue(
                 chat_id=chat_id,
                 payload=payload,
                 reasoning_template=reasoning_template,
+                response_template_name=reasoning_template_name,
+                template_params_json=template_params_json,
             )
         except LookupError as exc:
             raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.") from exc

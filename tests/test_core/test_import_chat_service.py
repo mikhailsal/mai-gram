@@ -154,3 +154,77 @@ async def test_create_chat_from_import_creates_chat_and_messages(session: AsyncS
     assert chat.system_prompt == "Imported prompt"
     assert chat.send_datetime is False
     assert [message.role for message in messages] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_create_chat_from_import_sets_response_template_on_chat(
+    session: AsyncSession,
+) -> None:
+    """When a reasoning template is used, the Chat record stores the template name and params."""
+    from mai_gram.response_templates.gemma_reasoning_template import GemmaReasoningTemplate
+
+    template = GemmaReasoningTemplate(reasoning_field="analysis")
+    payload = parse_import_payload(
+        json.dumps(
+            [
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "Reply",
+                    "reasoning_content": "Thinking...",
+                },
+            ]
+        )
+    )
+
+    params_json = json.dumps({"reasoning_field": "analysis"})
+    await create_chat_from_import(
+        session,
+        chat_id="tpl-chat",
+        user_id="user-1",
+        bot_id="bot-1",
+        llm_model="openai/test-model",
+        timezone="UTC",
+        payload=payload,
+        reasoning_template=template,
+        response_template_name="gemma_reasoning",
+        template_params_json=params_json,
+    )
+    await session.commit()
+
+    chat = (await session.execute(select(Chat).where(Chat.id == "tpl-chat"))).scalar_one()
+    assert chat.response_template == "gemma_reasoning"
+    assert chat.template_params == params_json
+
+
+@pytest.mark.asyncio
+async def test_import_into_existing_chat_sets_response_template(
+    session: AsyncSession,
+) -> None:
+    """import_into_existing_chat updates the Chat's template fields when provided."""
+    session.add(
+        Chat(
+            id="existing-tpl-chat",
+            user_id="user-1",
+            bot_id="",
+            llm_model="openai/test-model",
+            system_prompt="prompt",
+            send_datetime=True,
+        )
+    )
+    await session.commit()
+
+    payload = parse_import_payload(json.dumps([{"role": "user", "content": "Hello"}]))
+
+    await import_into_existing_chat(
+        session,
+        chat_id="existing-tpl-chat",
+        payload=payload,
+        response_template_name="gemma_reasoning",
+        template_params_json='{"reasoning_field": "thought"}',
+    )
+    await session.commit()
+
+    chat = (await session.execute(select(Chat).where(Chat.id == "existing-tpl-chat"))).scalar_one()
+    assert chat.response_template == "gemma_reasoning"
+    assert chat.template_params == '{"reasoning_field": "thought"}'

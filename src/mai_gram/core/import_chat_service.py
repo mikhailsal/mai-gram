@@ -51,12 +51,18 @@ async def import_into_existing_chat(
     chat_id: str,
     payload: ParsedImportPayload,
     reasoning_template: ResponseTemplate | None = None,
+    response_template_name: str | None = None,
+    template_params_json: str | None = None,
 ) -> ImportedChatResult:
     """Import parsed messages into an already configured chat."""
     result = await session.execute(select(Chat).where(Chat.id == chat_id))
     chat = result.scalar_one_or_none()
     if chat is None:
         raise LookupError(chat_id)
+
+    if response_template_name is not None:
+        chat.response_template = response_template_name
+        chat.template_params = template_params_json
 
     message_store = MessageStore(session)
     imported_count = await save_imported_messages(
@@ -83,6 +89,8 @@ async def create_chat_from_import(
     timezone: str,
     payload: ParsedImportPayload,
     reasoning_template: ResponseTemplate | None = None,
+    response_template_name: str | None = None,
+    template_params_json: str | None = None,
 ) -> ImportedChatResult:
     """Create a new chat from parsed import data and persist its messages."""
     result = await session.execute(select(Chat).where(Chat.id == chat_id))
@@ -97,6 +105,8 @@ async def create_chat_from_import(
         llm_model=llm_model,
         system_prompt=payload.system_prompt,
         prompt_name=None,
+        response_template=response_template_name,
+        template_params=template_params_json,
         timezone=timezone,
         show_reasoning=True,
         show_tool_calls=True,
