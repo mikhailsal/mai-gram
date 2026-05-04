@@ -377,10 +377,14 @@ class CliHarness:
         json_path: Path,
         *,
         reasoning_template: str | None = None,
+        reasoning_template_params: dict[str, str] | None = None,
     ) -> CompletedCliRun:
         args = ["-c", chat_id, "--import-json", str(json_path)]
         if reasoning_template:
             args.extend(["--reasoning-template", reasoning_template])
+        if reasoning_template_params:
+            args.append("--reasoning-template-params")
+            args.extend(f"{k}={v}" for k, v in reasoning_template_params.items())
         return self.run_cli(*args)
 
     def chat_data_dir(self, chat_id: str) -> Path:

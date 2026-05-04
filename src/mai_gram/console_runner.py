@@ -259,10 +259,29 @@ async def _print_prompt(
 # -- Import command --
 
 
+def _parse_reasoning_template_params(
+    raw_params: list[str] | None,
+) -> dict[str, str] | None:
+    """Parse ``key=value`` pairs from the CLI into a params dict."""
+    if not raw_params:
+        return None
+    result: dict[str, str] = {}
+    for item in raw_params:
+        if "=" not in item:
+            continue
+        key, _, value = item.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key:
+            result[key] = value
+    return result or None
+
+
 def _resolve_reasoning_template(
     template_name: str | None,
+    template_params: dict[str, str] | None = None,
 ) -> ResponseTemplate | None:
-    """Resolve a reasoning template by name, or return ``None``."""
+    """Resolve a reasoning template by name with optional params."""
     if not template_name:
         return None
 
@@ -274,7 +293,7 @@ def _resolve_reasoning_template(
             f"Error: unknown reasoning template '{template_name}'. "
             f"Available: {', '.join(available)}"
         )
-    return get_template(template_name)
+    return get_template(template_name, params=template_params)
 
 
 async def _import_json_dialogue(
@@ -282,6 +301,7 @@ async def _import_json_dialogue(
     json_path: str,
     *,
     reasoning_template_name: str | None = None,
+    reasoning_template_params: dict[str, str] | None = None,
 ) -> int:
     """Import a dialogue from a JSON file using the shared importer module."""
     from mai_gram.core.importer import ImportDataError as ImportParseError
@@ -300,7 +320,9 @@ async def _import_json_dialogue(
     except ImportParseError as exc:
         raise SystemExit(f"Error: {exc}") from exc
 
-    reasoning_template = _resolve_reasoning_template(reasoning_template_name)
+    reasoning_template = _resolve_reasoning_template(
+        reasoning_template_name, reasoning_template_params
+    )
 
     async with get_session() as session:
         try:
@@ -419,10 +441,13 @@ async def _handle_console_inspection(
         await _print_wiki(chat_id, settings.memory_data_dir)
         return True
     if args.import_json:
+        raw_params = getattr(args, "reasoning_template_params", None)
+        parsed_params = _parse_reasoning_template_params(raw_params)
         count = await _import_json_dialogue(
             chat_id,
             args.import_json,
             reasoning_template_name=getattr(args, "reasoning_template", None),
+            reasoning_template_params=parsed_params,
         )
         tmpl_name = getattr(args, "reasoning_template", None)
         tmpl_info = f" (reasoning template: {tmpl_name})" if tmpl_name else ""

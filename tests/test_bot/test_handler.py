@@ -48,6 +48,8 @@ def _make_services() -> HandlerServices:
         import_workflow=MagicMock(
             handle_import=AsyncMock(),
             handle_document=AsyncMock(),
+            handle_import_text=AsyncMock(),
+            is_in_import=MagicMock(return_value=False),
         ),
         history_actions=MagicMock(
             get_message_preview=AsyncMock(return_value="preview"),

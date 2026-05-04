@@ -68,6 +68,17 @@ def _add_inspection_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--reasoning-template-params",
+        dest="reasoning_template_params",
+        metavar="KEY=VALUE",
+        nargs="*",
+        help=(
+            "Parameter overrides for the reasoning template as key=value pairs. "
+            "Requires --reasoning-template. "
+            "Example: --reasoning-template-params reasoning_field=analysis num_reasoning_blocks=6"
+        ),
+    )
+    parser.add_argument(
         "--repair-wiki",
         action="store_true",
         dest="repair_wiki",

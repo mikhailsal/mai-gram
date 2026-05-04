@@ -97,6 +97,36 @@ def test_import_with_reasoning_template_transforms_reasoning(functional_cli) -> 
     assert "The answer is 4." in history.stdout
 
 
+def test_import_with_reasoning_template_custom_params(functional_cli) -> None:
+    chat_id = "func-import-custom-params"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "Analyze this."},
+            {
+                "role": "assistant",
+                "content": "Here is my analysis.",
+                "reasoning_content": "*   Deep thought process here.",
+            },
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("custom-params-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    imported = functional_cli.import_json(
+        chat_id,
+        json_path,
+        reasoning_template="gemma_reasoning",
+        reasoning_template_params={"reasoning_field": "analysis"},
+    )
+    history = functional_cli.read_history(chat_id)
+
+    assert imported.returncode == 0
+    assert "<analysis>" in history.stdout
+    assert "Deep thought process here." in history.stdout
+    assert "<content>" in history.stdout
+    assert "Here is my analysis." in history.stdout
+
+
 def test_import_with_invalid_reasoning_template_fails(functional_cli) -> None:
     chat_id = "func-import-bad-tmpl"
     payload = json.dumps(

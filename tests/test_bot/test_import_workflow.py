@@ -44,6 +44,7 @@ def _make_message(
     *,
     user_id: str = "test-user",
     chat_id: str = "test-import-chat",
+    text: str = "",
     callback_data: str | None = None,
     document_file_id: str | None = None,
     document_file_name: str | None = None,
@@ -53,6 +54,7 @@ def _make_message(
 ) -> IncomingMessage:
     return IncomingMessage(
         platform="telegram",
+        text=text,
         user_id=user_id,
         chat_id=chat_id,
         message_id="msg-1",
@@ -260,7 +262,8 @@ class TestImportWorkflow:
         sent = cast("OutgoingMessage", await_args.args[0])
         assert "Now upload your JSON file" in sent.text
 
-    async def test_handle_reasoning_template_select_moves_to_file_upload(self) -> None:
+    async def test_handle_reasoning_template_with_params_shows_config(self) -> None:
+        """Templates with params go to CONFIGURING state instead of AWAITING_FILE."""
         workflow, messenger, _ = _make_workflow()
         workflow._sessions["test-user"] = ImportSession(
             user_id="test-user",
@@ -277,13 +280,91 @@ class TestImportWorkflow:
         await workflow.handle_import_callback(message)
 
         assert workflow._sessions["test-user"].reasoning_template_name == "gemma_reasoning_prefill"
+        assert (
+            workflow._sessions["test-user"].state
+            == ImportState.CONFIGURING_REASONING_TEMPLATE_PARAMS
+        )
+        send_message = cast("AsyncMock", messenger.send_message)
+        await_args = send_message.await_args
+        assert await_args is not None
+        sent = cast("OutgoingMessage", await_args.args[0])
+        assert "Configurable parameters" in sent.text
+        assert "reasoning_field" in sent.text
+
+    async def test_handle_reasoning_params_defaults_moves_to_file_upload(self) -> None:
+        workflow, messenger, _ = _make_workflow()
+        workflow._sessions["test-user"] = ImportSession(
+            user_id="test-user",
+            chat_id="test-chat",
+            selected_model="openai/test-model",
+            reasoning_template_name="gemma_reasoning_prefill",
+            state=ImportState.CONFIGURING_REASONING_TEMPLATE_PARAMS,
+        )
+        message = _make_message(
+            chat_id="test-chat",
+            callback_data="import_tpl_params:__defaults__",
+            message_type=MessageType.CALLBACK,
+        )
+
+        await workflow.handle_import_callback(message)
+
+        assert workflow._sessions["test-user"].reasoning_template_params is None
         assert workflow._sessions["test-user"].state == ImportState.AWAITING_FILE
         send_message = cast("AsyncMock", messenger.send_message)
         await_args = send_message.await_args
         assert await_args is not None
         sent = cast("OutgoingMessage", await_args.args[0])
         assert "Now upload your JSON file" in sent.text
-        assert "Reasoning template: gemma_reasoning_prefill" in sent.text
+
+    async def test_handle_reasoning_params_text_input(self) -> None:
+        workflow, _, _ = _make_workflow()
+        workflow._sessions["test-user"] = ImportSession(
+            user_id="test-user",
+            chat_id="test-chat",
+            selected_model="openai/test-model",
+            reasoning_template_name="gemma_reasoning_prefill",
+            state=ImportState.CONFIGURING_REASONING_TEMPLATE_PARAMS,
+        )
+        message = _make_message(
+            chat_id="test-chat",
+            text="reasoning_field=analysis\nnum_reasoning_blocks=6",
+        )
+
+        await workflow.handle_import_text(message)
+
+        session = workflow._sessions["test-user"]
+        assert session.reasoning_template_params == {
+            "reasoning_field": "analysis",
+            "num_reasoning_blocks": "6",
+        }
+        assert session.state == ImportState.AWAITING_FILE
+
+    async def test_file_upload_message_shows_template_params(self) -> None:
+        """The file upload prompt includes configured params when set via text."""
+        workflow, messenger, _ = _make_workflow()
+        workflow._sessions["test-user"] = ImportSession(
+            user_id="test-user",
+            chat_id="test-chat",
+            selected_model="openai/test-model",
+            reasoning_template_name="gemma_reasoning",
+            state=ImportState.CONFIGURING_REASONING_TEMPLATE_PARAMS,
+        )
+        message = _make_message(
+            chat_id="test-chat",
+            text="reasoning_field=analysis",
+        )
+
+        await workflow.handle_import_text(message)
+
+        session = workflow._sessions["test-user"]
+        assert session.state == ImportState.AWAITING_FILE
+        assert session.reasoning_template_params == {"reasoning_field": "analysis"}
+        send_message = cast("AsyncMock", messenger.send_message)
+        await_args = send_message.await_args
+        assert await_args is not None
+        sent = cast("OutgoingMessage", await_args.args[0])
+        assert "Now upload your JSON file" in sent.text
+        assert "reasoning_field=analysis" in sent.text
 
     async def test_handle_document_requires_active_session(self) -> None:
         workflow, messenger, _ = _make_workflow()

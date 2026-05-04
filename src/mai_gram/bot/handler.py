@@ -494,6 +494,10 @@ class BotHandler:
             await self._setup_workflow.handle_setup_text(message)
             return
 
+        if self._import_workflow.is_in_import(message.user_id):
+            await self._import_workflow.handle_import_text(message)
+            return
+
         await self._handle_conversation(message)
 
     async def _handle_callback(self, message: IncomingMessage) -> None:

@@ -39,6 +39,7 @@ class ImportState(str, enum.Enum):
 
     CHOOSING_MODEL = "choosing_model"
     CHOOSING_REASONING_TEMPLATE = "choosing_reasoning_template"
+    CONFIGURING_REASONING_TEMPLATE_PARAMS = "configuring_reasoning_template_params"
     AWAITING_FILE = "awaiting_file"
 
 
@@ -51,6 +52,7 @@ class ImportSession:
     state: ImportState = ImportState.CHOOSING_MODEL
     selected_model: str = ""
     reasoning_template_name: str | None = None
+    reasoning_template_params: dict[str, str] | None = None
     created_at: float = 0.0
 
 
@@ -180,6 +182,20 @@ class ImportWorkflow:
             await self._handle_model_callback(session, data)
         elif data.startswith("import_reasoning:"):
             await self._handle_reasoning_template_callback(session, data)
+        elif data.startswith("import_tpl_params:"):
+            await self._handle_reasoning_params_callback(session, data)
+
+    async def handle_import_text(self, message: IncomingMessage) -> None:
+        """Handle free-form text entered during the import flow (params config)."""
+        session = self._sessions.get(message.user_id)
+        if not session:
+            return
+
+        if session.state == ImportState.CONFIGURING_REASONING_TEMPLATE_PARAMS:
+            parsed = self._parse_kv_params(message.text)
+            if parsed:
+                session.reasoning_template_params = parsed
+            await self._transition_to_awaiting_file(session)
 
     async def _handle_model_callback(self, session: ImportSession, data: str) -> None:
         model = data.split(":", 1)[1]
@@ -229,13 +245,66 @@ class ImportWorkflow:
         template_name = data.split(":", 1)[1]
         if template_name == "__none__":
             session.reasoning_template_name = None
-        else:
-            session.reasoning_template_name = template_name
+            await self._transition_to_awaiting_file(session)
+            return
 
-        session.state = ImportState.AWAITING_FILE
-        template_info = (
-            f"Reasoning template: {template_name}\n" if session.reasoning_template_name else ""
+        session.reasoning_template_name = template_name
+
+        from mai_gram.response_templates.registry import get_template
+
+        tpl = get_template(template_name)
+        if tpl.get_params():
+            await self._show_reasoning_template_params(session, tpl)
+        else:
+            await self._transition_to_awaiting_file(session)
+
+    async def _show_reasoning_template_params(
+        self,
+        session: ImportSession,
+        tpl: ResponseTemplate,
+    ) -> None:
+        session.state = ImportState.CONFIGURING_REASONING_TEMPLATE_PARAMS
+        params = tpl.get_params()
+        lines = [f"Template: {tpl.description}\n\nConfigurable parameters:"]
+        for p in params:
+            hint = ""
+            if p.suggestions:
+                hint = f"\n  options: {', '.join(p.suggestions)}"
+            elif p.param_type == "int" and p.min_value is not None and p.max_value is not None:
+                hint = f"\n  range: {p.min_value}-{p.max_value}"
+            lines.append(f"  {p.key} = {p.default}  ({p.label}){hint}")
+
+        lines.append("\nTo customize, type key=value pairs, one per line:")
+        example_lines = "\n".join(f"{p.key}={p.default}" for p in params)
+        lines.append(example_lines)
+
+        keyboard_rows = [
+            [("Use defaults", "import_tpl_params:__defaults__")],
+        ]
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text="\n".join(lines),
+                chat_id=session.chat_id,
+                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
+            )
         )
+
+    async def _handle_reasoning_params_callback(self, session: ImportSession, data: str) -> None:
+        value = data.split(":", 1)[1]
+        if value == "__defaults__":
+            session.reasoning_template_params = None
+        await self._transition_to_awaiting_file(session)
+
+    async def _transition_to_awaiting_file(self, session: ImportSession) -> None:
+        session.state = ImportState.AWAITING_FILE
+        template_info = ""
+        if session.reasoning_template_name:
+            template_info = f"Reasoning template: {session.reasoning_template_name}\n"
+            if session.reasoning_template_params:
+                params_str = ", ".join(
+                    f"{k}={v}" for k, v in session.reasoning_template_params.items()
+                )
+                template_info += f"Template params: {params_str}\n"
         await self._messenger.send_message(
             OutgoingMessage(
                 text=(
@@ -250,6 +319,21 @@ class ImportWorkflow:
                 chat_id=session.chat_id,
             )
         )
+
+    @staticmethod
+    def _parse_kv_params(text: str) -> dict[str, str]:
+        """Parse 'key=value' lines from user text input."""
+        result: dict[str, str] = {}
+        for line in text.strip().splitlines():
+            line = line.strip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if key:
+                result[key] = value
+        return result
 
     async def handle_document(self, message: IncomingMessage) -> None:
         """Handle an uploaded JSON file for the active import session."""
@@ -376,12 +460,13 @@ class ImportWorkflow:
     def _resolve_reasoning_template(
         self,
         template_name: str | None,
+        template_params: dict[str, str] | None = None,
     ) -> ResponseTemplate | None:
         if not template_name:
             return None
         from mai_gram.response_templates.registry import get_template
 
-        return get_template(template_name)
+        return get_template(template_name, params=template_params)
 
     async def _save_imported_chat(
         self,
@@ -393,6 +478,7 @@ class ImportWorkflow:
         chat_id = self._resolve_chat_id(message)
         reasoning_template = self._resolve_reasoning_template(
             import_session.reasoning_template_name,
+            import_session.reasoning_template_params,
         )
         async with get_session() as db:
             try:
