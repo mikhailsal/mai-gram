@@ -361,3 +361,119 @@ class TestSaveImportedMessages:
         store = MessageStore(session)
         count = await save_imported_messages(chat.id, messages_data, store)
         assert count == 2
+
+    async def test_reasoning_template_wraps_reasoning_in_content(
+        self, session: AsyncSession, chat: Chat
+    ) -> None:
+        """When a reasoning template is provided, native reasoning is merged into content."""
+        from mai_gram.response_templates.gemma_reasoning_template import GemmaReasoningTemplate
+
+        template = GemmaReasoningTemplate(reasoning_field="thought")
+        messages_data = [
+            {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "reasoning_content": "Let me think about this carefully.",
+            },
+        ]
+        store = MessageStore(session)
+        count = await save_imported_messages(
+            chat.id, messages_data, store, reasoning_template=template
+        )
+        assert count == 1
+
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        saved = list(result.scalars().all())
+        assert "<thought>" in saved[0].content
+        assert "Let me think about this carefully." in saved[0].content
+        assert "<content>" in saved[0].content
+        assert "The answer is 42." in saved[0].content
+        assert saved[0].reasoning is None
+
+    async def test_reasoning_template_does_not_affect_user_messages(
+        self, session: AsyncSession, chat: Chat
+    ) -> None:
+        """User messages are never transformed, even when a reasoning template is set."""
+        from mai_gram.response_templates.gemma_reasoning_template import GemmaReasoningTemplate
+
+        template = GemmaReasoningTemplate()
+        messages_data = [
+            {"role": "user", "content": "Hello"},
+        ]
+        store = MessageStore(session)
+        count = await save_imported_messages(
+            chat.id, messages_data, store, reasoning_template=template
+        )
+        assert count == 1
+
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        saved = list(result.scalars().all())
+        assert saved[0].content == "Hello"
+        assert "<thought>" not in saved[0].content
+
+    async def test_reasoning_template_skips_assistant_without_reasoning(
+        self, session: AsyncSession, chat: Chat
+    ) -> None:
+        """Assistant messages without reasoning are stored as-is."""
+        from mai_gram.response_templates.gemma_reasoning_template import GemmaReasoningTemplate
+
+        template = GemmaReasoningTemplate()
+        messages_data = [
+            {"role": "assistant", "content": "Simple reply."},
+        ]
+        store = MessageStore(session)
+        count = await save_imported_messages(
+            chat.id, messages_data, store, reasoning_template=template
+        )
+        assert count == 1
+
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        saved = list(result.scalars().all())
+        assert saved[0].content == "Simple reply."
+        assert saved[0].reasoning is None
+
+    async def test_reasoning_template_uses_custom_field_name(
+        self, session: AsyncSession, chat: Chat
+    ) -> None:
+        """The reasoning field tag matches the template's configured field name."""
+        from mai_gram.response_templates.gemma_reasoning_template import GemmaReasoningTemplate
+
+        template = GemmaReasoningTemplate(reasoning_field="analysis")
+        messages_data = [
+            {
+                "role": "assistant",
+                "content": "Result.",
+                "reasoning_content": "Deep analysis here.",
+            },
+        ]
+        store = MessageStore(session)
+        count = await save_imported_messages(
+            chat.id, messages_data, store, reasoning_template=template
+        )
+        assert count == 1
+
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        saved = list(result.scalars().all())
+        assert "<analysis>" in saved[0].content
+        assert "</analysis>" in saved[0].content
+        assert "Deep analysis here." in saved[0].content
+
+    async def test_reasoning_template_none_preserves_native_reasoning(
+        self, session: AsyncSession, chat: Chat
+    ) -> None:
+        """Without a reasoning template, reasoning stays in the dedicated column."""
+        messages_data = [
+            {
+                "role": "assistant",
+                "content": "Answer",
+                "reasoning_content": "I thought about it.",
+            },
+        ]
+        store = MessageStore(session)
+        count = await save_imported_messages(chat.id, messages_data, store)
+        assert count == 1
+
+        result = await session.execute(select(Message).where(Message.chat_id == chat.id))
+        saved = list(result.scalars().all())
+        assert saved[0].content == "Answer"
+        assert saved[0].reasoning == "I thought about it."

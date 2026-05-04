@@ -371,8 +371,17 @@ class CliHarness:
     def list_chats(self) -> CompletedCliRun:
         return self.run_cli("--list")
 
-    def import_json(self, chat_id: str, json_path: Path) -> CompletedCliRun:
-        return self.run_cli("-c", chat_id, "--import-json", str(json_path))
+    def import_json(
+        self,
+        chat_id: str,
+        json_path: Path,
+        *,
+        reasoning_template: str | None = None,
+    ) -> CompletedCliRun:
+        args = ["-c", chat_id, "--import-json", str(json_path)]
+        if reasoning_template:
+            args.extend(["--reasoning-template", reasoning_template])
+        return self.run_cli(*args)
 
     def chat_data_dir(self, chat_id: str) -> Path:
         return self.data_dir / chat_id

@@ -14,6 +14,8 @@ from mai_gram.memory.messages import MessageStore
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from mai_gram.response_templates.base import ResponseTemplate
+
 
 class ImportChatConflictError(Exception):
     """Raised when an import would collide with an existing chat."""
@@ -48,6 +50,7 @@ async def import_into_existing_chat(
     *,
     chat_id: str,
     payload: ParsedImportPayload,
+    reasoning_template: ResponseTemplate | None = None,
 ) -> ImportedChatResult:
     """Import parsed messages into an already configured chat."""
     result = await session.execute(select(Chat).where(Chat.id == chat_id))
@@ -56,7 +59,12 @@ async def import_into_existing_chat(
         raise LookupError(chat_id)
 
     message_store = MessageStore(session)
-    imported_count = await save_imported_messages(chat_id, payload.messages_data, message_store)
+    imported_count = await save_imported_messages(
+        chat_id,
+        payload.messages_data,
+        message_store,
+        reasoning_template=reasoning_template,
+    )
     chat.send_datetime = False
     return ImportedChatResult(
         chat_id=chat_id,
@@ -74,6 +82,7 @@ async def create_chat_from_import(
     llm_model: str,
     timezone: str,
     payload: ParsedImportPayload,
+    reasoning_template: ResponseTemplate | None = None,
 ) -> ImportedChatResult:
     """Create a new chat from parsed import data and persist its messages."""
     result = await session.execute(select(Chat).where(Chat.id == chat_id))
@@ -97,7 +106,12 @@ async def create_chat_from_import(
     await session.flush()
 
     message_store = MessageStore(session)
-    imported_count = await save_imported_messages(chat_id, payload.messages_data, message_store)
+    imported_count = await save_imported_messages(
+        chat_id,
+        payload.messages_data,
+        message_store,
+        reasoning_template=reasoning_template,
+    )
     return ImportedChatResult(
         chat_id=chat_id,
         imported_count=imported_count,

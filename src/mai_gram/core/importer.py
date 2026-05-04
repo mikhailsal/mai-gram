@@ -15,6 +15,7 @@ from mai_gram.llm.provider import MessageRole, ToolCall
 
 if TYPE_CHECKING:
     from mai_gram.memory.messages import MessageStore
+    from mai_gram.response_templates.base import ResponseTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -93,19 +94,47 @@ def _validate_import_entry(entry: Any, *, entry_index: int) -> dict[str, Any] | 
     return entry
 
 
+def _wrap_reasoning_in_template(
+    reasoning: str,
+    content: str,
+    template: ResponseTemplate,
+) -> str:
+    """Merge native reasoning and content into a template-structured string.
+
+    Uses the template's field definitions to determine the tag names:
+    the first field (by order) becomes the reasoning wrapper, and the
+    content field wraps the original response body.
+    """
+    fields = sorted(template.get_fields(), key=lambda f: f.order)
+    reasoning_field = fields[0].name
+    content_field = template.content_field_name()
+    return (
+        f"<{reasoning_field}>\n{reasoning}\n</{reasoning_field}>\n"
+        f"<{content_field}>\n{content}\n</{content_field}>"
+    )
+
+
 def _build_import_message_payload(
     entry: dict[str, Any],
     *,
     entry_index: int,
     timestamp: datetime,
+    reasoning_template: ResponseTemplate | None = None,
 ) -> dict[str, Any]:
+    content = _normalize_import_content(entry.get("content", ""))
+    reasoning = _extract_reasoning_text(entry)
+
+    if reasoning_template is not None and reasoning and entry.get("role") == "assistant":
+        content = _wrap_reasoning_in_template(reasoning, content, reasoning_template)
+        reasoning = None
+
     return {
         "role": MessageRole(entry["role"]),
-        "content": _normalize_import_content(entry.get("content", "")),
+        "content": content,
         "timestamp": timestamp,
         "tool_calls": _normalize_tool_calls(entry, entry_index=entry_index),
         "tool_call_id": _normalize_tool_call_id(entry),
-        "reasoning": _extract_reasoning_text(entry),
+        "reasoning": reasoning,
         "show_datetime": False,
     }
 
@@ -212,6 +241,8 @@ async def save_imported_messages(
     chat_id: str,
     messages: list[dict[str, Any]],
     message_store: MessageStore,
+    *,
+    reasoning_template: ResponseTemplate | None = None,
 ) -> int:
     """Save a list of parsed message dicts to the database.
 
@@ -221,15 +252,23 @@ async def save_imported_messages(
     tells the formatter to display "[imported, real date unknown]" instead
     of the synthetic timestamp.
 
+    When *reasoning_template* is provided, assistant messages that carry
+    native ``reasoning_content`` are transformed: the reasoning and content
+    are merged into a single structured string using the template's field
+    tags (e.g. ``<thought>...<content>``), so the reasoning is preserved
+    in conversation history rather than being stored in a provider-strippable
+    side column.
+
     Returns the count of successfully imported messages.
     """
     imported = 0
     import_base = datetime.now(tz=timezone.utc)
 
     logger.info(
-        "save_imported_messages: chat_id=%s, total entries=%d",
+        "save_imported_messages: chat_id=%s, total entries=%d, reasoning_template=%s",
         chat_id,
         len(messages),
+        reasoning_template.name if reasoning_template else None,
     )
 
     for i, entry in enumerate(messages):
@@ -242,6 +281,7 @@ async def save_imported_messages(
             normalized_entry,
             entry_index=i,
             timestamp=timestamp,
+            reasoning_template=reasoning_template,
         )
         saved = await _save_import_entry(
             chat_id,

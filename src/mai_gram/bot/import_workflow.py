@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from mai_gram.config import Settings
     from mai_gram.messenger.base import Messenger
+    from mai_gram.response_templates.base import ResponseTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class ImportState(str, enum.Enum):
     """States in the import flow."""
 
     CHOOSING_MODEL = "choosing_model"
+    CHOOSING_REASONING_TEMPLATE = "choosing_reasoning_template"
     AWAITING_FILE = "awaiting_file"
 
 
@@ -48,6 +50,7 @@ class ImportSession:
     chat_id: str
     state: ImportState = ImportState.CHOOSING_MODEL
     selected_model: str = ""
+    reasoning_template_name: str | None = None
     created_at: float = 0.0
 
 
@@ -172,9 +175,13 @@ class ImportWorkflow:
             return
 
         data = message.callback_data
-        if not data.startswith("import_model:"):
-            return
 
+        if data.startswith("import_model:"):
+            await self._handle_model_callback(session, data)
+        elif data.startswith("import_reasoning:"):
+            await self._handle_reasoning_template_callback(session, data)
+
+    async def _handle_model_callback(self, session: ImportSession, data: str) -> None:
         model = data.split(":", 1)[1]
         allowed = self._get_allowed_models()
         if allowed and model not in allowed:
@@ -187,11 +194,53 @@ class ImportWorkflow:
             return
 
         session.selected_model = model
-        session.state = ImportState.AWAITING_FILE
+        await self._show_reasoning_template_selection(session)
+
+    async def _show_reasoning_template_selection(self, session: ImportSession) -> None:
+        session.state = ImportState.CHOOSING_REASONING_TEMPLATE
+        from mai_gram.response_templates.registry import list_template_names
+
+        template_names = list_template_names()
+        keyboard_rows = [
+            [("Skip (keep native reasoning)", "import_reasoning:__none__")],
+        ]
+        for name in template_names:
+            if name == "empty":
+                continue
+            keyboard_rows.append([(name, f"import_reasoning:{name}")])
+
+        kb = self._messenger.build_inline_keyboard(keyboard_rows)
         await self._messenger.send_message(
             OutgoingMessage(
                 text=(
-                    f"Model: {model}\n\n"
+                    f"Model: {session.selected_model}\n\n"
+                    "Transform native reasoning into a template format?\n\n"
+                    "If the imported conversation has reasoning_content "
+                    "(e.g. from Gemma models), you can wrap it in a template "
+                    "so it's preserved in conversation history.\n\n"
+                    "Choose a template or skip:"
+                ),
+                chat_id=session.chat_id,
+                keyboard=kb,
+            )
+        )
+
+    async def _handle_reasoning_template_callback(self, session: ImportSession, data: str) -> None:
+        template_name = data.split(":", 1)[1]
+        if template_name == "__none__":
+            session.reasoning_template_name = None
+        else:
+            session.reasoning_template_name = template_name
+
+        session.state = ImportState.AWAITING_FILE
+        template_info = (
+            f"Reasoning template: {template_name}\n" if session.reasoning_template_name else ""
+        )
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text=(
+                    f"Model: {session.selected_model}\n"
+                    f"{template_info}\n"
                     "Now upload your JSON file.\n\n"
                     "Supported formats:\n"
                     '1. Array of messages: [{"role": "user", "content": "..."}, ...]\n'
@@ -324,6 +373,16 @@ class ImportWorkflow:
 
         return parsed_payload
 
+    def _resolve_reasoning_template(
+        self,
+        template_name: str | None,
+    ) -> ResponseTemplate | None:
+        if not template_name:
+            return None
+        from mai_gram.response_templates.registry import get_template
+
+        return get_template(template_name)
+
     async def _save_imported_chat(
         self,
         *,
@@ -332,6 +391,9 @@ class ImportWorkflow:
         parsed_document: ParsedImportPayload,
     ) -> ImportedChatResult | None:
         chat_id = self._resolve_chat_id(message)
+        reasoning_template = self._resolve_reasoning_template(
+            import_session.reasoning_template_name,
+        )
         async with get_session() as db:
             try:
                 saved_chat = await create_chat_from_import(
@@ -342,6 +404,7 @@ class ImportWorkflow:
                     llm_model=import_session.selected_model,
                     timezone=self._settings.default_timezone,
                     payload=parsed_document,
+                    reasoning_template=reasoning_template,
                 )
             except ImportChatConflictError:
                 self.clear_import_session(message.user_id)

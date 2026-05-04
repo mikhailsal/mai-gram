@@ -57,6 +57,17 @@ def _add_inspection_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--reasoning-template",
+        dest="reasoning_template",
+        metavar="TEMPLATE_NAME",
+        help=(
+            "Transform native reasoning_content into a response template format "
+            "during import. The reasoning is wrapped in the template's field tags "
+            "(e.g. <thought>...<content>) so it's preserved in conversation history. "
+            "Requires --import-json."
+        ),
+    )
+    parser.add_argument(
         "--repair-wiki",
         action="store_true",
         dest="repair_wiki",

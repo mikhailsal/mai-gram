@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
     from mai_gram.llm.openrouter import OpenRouterProvider
     from mai_gram.mcp_servers.external import ExternalMCPPool
+    from mai_gram.response_templates.base import ResponseTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,30 @@ async def _print_prompt(
 # -- Import command --
 
 
-async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
+def _resolve_reasoning_template(
+    template_name: str | None,
+) -> ResponseTemplate | None:
+    """Resolve a reasoning template by name, or return ``None``."""
+    if not template_name:
+        return None
+
+    from mai_gram.response_templates.registry import get_template, list_template_names
+
+    available = list_template_names()
+    if template_name not in available:
+        raise SystemExit(
+            f"Error: unknown reasoning template '{template_name}'. "
+            f"Available: {', '.join(available)}"
+        )
+    return get_template(template_name)
+
+
+async def _import_json_dialogue(
+    chat_id: str,
+    json_path: str,
+    *,
+    reasoning_template_name: str | None = None,
+) -> int:
     """Import a dialogue from a JSON file using the shared importer module."""
     from mai_gram.core.importer import ImportDataError as ImportParseError
 
@@ -276,12 +300,15 @@ async def _import_json_dialogue(chat_id: str, json_path: str) -> int:
     except ImportParseError as exc:
         raise SystemExit(f"Error: {exc}") from exc
 
+    reasoning_template = _resolve_reasoning_template(reasoning_template_name)
+
     async with get_session() as session:
         try:
             imported = await import_into_existing_chat(
                 session,
                 chat_id=chat_id,
                 payload=payload,
+                reasoning_template=reasoning_template,
             )
         except LookupError as exc:
             raise SystemExit(f"Error: no chat found for '{chat_id}'. Run --start first.") from exc
@@ -392,8 +419,14 @@ async def _handle_console_inspection(
         await _print_wiki(chat_id, settings.memory_data_dir)
         return True
     if args.import_json:
-        count = await _import_json_dialogue(chat_id, args.import_json)
-        print(f"Imported {count} messages into chat '{chat_id}'.")
+        count = await _import_json_dialogue(
+            chat_id,
+            args.import_json,
+            reasoning_template_name=getattr(args, "reasoning_template", None),
+        )
+        tmpl_name = getattr(args, "reasoning_template", None)
+        tmpl_info = f" (reasoning template: {tmpl_name})" if tmpl_name else ""
+        print(f"Imported {count} messages into chat '{chat_id}'.{tmpl_info}")
         return True
     return False
 

@@ -69,6 +69,53 @@ def test_import_proxy_json_and_continue_conversation(
     assert "CONTINUED" in extract_last_response_body(follow_up.stdout).upper()
 
 
+def test_import_with_reasoning_template_transforms_reasoning(functional_cli) -> None:
+    chat_id = "func-import-reasoning-tmpl"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": "The answer is 4.",
+                "reasoning_content": "*   Simple arithmetic.\n    *   2 + 2 = 4.",
+            },
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("reasoning-tmpl-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    imported = functional_cli.import_json(
+        chat_id, json_path, reasoning_template="gemma_reasoning_prefill"
+    )
+    history = functional_cli.read_history(chat_id)
+
+    assert imported.returncode == 0
+    assert "reasoning template: gemma_reasoning_prefill" in imported.stdout
+    assert "<thought>" in history.stdout
+    assert "Simple arithmetic." in history.stdout
+    assert "<content>" in history.stdout
+    assert "The answer is 4." in history.stdout
+
+
+def test_import_with_invalid_reasoning_template_fails(functional_cli) -> None:
+    chat_id = "func-import-bad-tmpl"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("bad-tmpl-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    result = functional_cli.import_json(
+        chat_id, json_path, reasoning_template="nonexistent_template"
+    )
+
+    assert result.returncode != 0
+    assert "unknown reasoning template" in result.output
+
+
 def test_invalid_and_empty_import_inputs_fail(functional_cli) -> None:
     chat_id = "func-import-errors"
     invalid_json = functional_cli.write_json_fixture("invalid-import.json", "{not valid json")
