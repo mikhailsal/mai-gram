@@ -137,6 +137,40 @@ class TestSettings:
         assert "id" not in settings.get_model_params("flash-creative")
 
 
+class TestMaxContextTokens:
+    def test_get_max_context_tokens_delegates_to_loader(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text(
+            "\n".join(
+                [
+                    "[models]",
+                    "max_context_tokens = 100000",
+                    "",
+                    '[models."google/gemini"]',
+                    "max_context_tokens = 250000",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+        assert settings.get_max_context_tokens("google/gemini") == 250_000
+        assert settings.get_max_context_tokens("unknown/model") == 100_000
+
+    def test_get_max_context_tokens_defaults_to_zero(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text("[models]\n", encoding="utf-8")
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+        assert settings.get_max_context_tokens("any-model") == 0
+
+
 class TestSettingsLoaders:
     def test_get_available_templates_returns_list(self) -> None:
         settings = Settings(_env_file=None)  # type: ignore[call-arg]

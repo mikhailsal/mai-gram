@@ -100,6 +100,122 @@ async def test_build_context_truncates_oldest_messages_when_over_budget() -> Non
     assert llm.count_tokens.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_build_context_no_truncation_when_disabled() -> None:
+    """max_context_tokens=0 disables truncation entirely."""
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=999_999)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(
+        return_value=[
+            _make_message(1, "user", "first"),
+            _make_message(2, "assistant", "second"),
+            _make_message(3, "user", "third"),
+        ]
+    )
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store, max_context_tokens=0)
+    chat = cast("Any", SimpleNamespace(id="test-chat", system_prompt="System"))
+
+    context = await builder.build_context(chat)
+
+    assert [m.content for m in context] == ["System", "first", "second", "third"]
+    assert llm.count_tokens.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_build_context_default_max_context_tokens_is_disabled() -> None:
+    """Default max_context_tokens=0 means no truncation by default."""
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=500_000)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(
+        return_value=[
+            _make_message(1, "user", "a"),
+            _make_message(2, "assistant", "b"),
+            _make_message(3, "user", "c"),
+        ]
+    )
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store)
+    chat = cast("Any", SimpleNamespace(id="test-chat", system_prompt="Sys"))
+
+    context = await builder.build_context(chat)
+
+    assert len(context) == 4
+    assert llm.count_tokens.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_build_context_truncation_stops_at_minimum_two_messages() -> None:
+    """Truncation preserves at least 2 history messages even if over budget."""
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(return_value=100)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(
+        return_value=[
+            _make_message(1, "user", "only-user"),
+            _make_message(2, "assistant", "only-assistant"),
+        ]
+    )
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store, max_context_tokens=5)
+    chat = cast("Any", SimpleNamespace(id="test-chat", system_prompt="Sys"))
+
+    context = await builder.build_context(chat)
+
+    assert [m.content for m in context] == ["Sys", "only-user", "only-assistant"]
+    assert llm.count_tokens.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_build_context_truncation_drops_multiple_oldest() -> None:
+    """Truncation removes oldest messages iteratively until under budget."""
+    call_count = 0
+
+    async def descending_count(messages: list, **kwargs: object) -> int:
+        nonlocal call_count
+        call_count += 1
+        return max(100 - call_count * 25, 10)
+
+    llm = MagicMock()
+    llm.count_tokens = AsyncMock(side_effect=descending_count)
+
+    message_store = MagicMock()
+    message_store.get_recent = AsyncMock(
+        return_value=[
+            _make_message(1, "user", "oldest"),
+            _make_message(2, "assistant", "old"),
+            _make_message(3, "user", "recent"),
+            _make_message(4, "assistant", "latest"),
+        ]
+    )
+
+    wiki_store = MagicMock()
+    wiki_store.list_entries_sorted = AsyncMock(return_value=([], 0))
+
+    builder = PromptBuilder(llm, message_store, wiki_store, max_context_tokens=50)
+    chat = cast("Any", SimpleNamespace(id="test-chat", system_prompt="Sys"))
+
+    context = await builder.build_context(chat)
+
+    assert context[0].content == "Sys"
+    assert len(context) < 5
+    assert llm.count_tokens.await_count >= 2
+
+
 def test_normalize_conversation_handles_empty_and_merges_consecutive_users() -> None:
     builder = PromptBuilder(MagicMock(), MagicMock(), MagicMock())
 

@@ -105,12 +105,14 @@ class AssistantTurnBuilder:
         failure_log_message: str,
         current_time: datetime,
     ) -> AssistantTurnRequest:
+        model_key = chat.llm_model
         prompt_builder = PromptBuilder(
             self._llm,
             message_store,
             wiki_store,
             wiki_context_limit=self._wiki_context_limit,
             short_term_limit=self._short_term_limit,
+            max_context_tokens=self._settings.get_max_context_tokens(model_key),
             test_mode=self._test_mode,
         )
         await wiki_store.sync_from_disk(chat.id)
@@ -122,7 +124,6 @@ class AssistantTurnBuilder:
             chat_timezone=chat.timezone,
             cut_above_message_id=chat.cut_above_message_id,
         )
-        model_key = chat.llm_model
         return AssistantTurnRequest(
             chat=chat,
             message_store=message_store,

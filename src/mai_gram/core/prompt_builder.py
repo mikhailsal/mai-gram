@@ -34,7 +34,7 @@ class PromptBuilder:
         *,
         wiki_context_limit: int = 20,
         short_term_limit: int = 500,
-        max_context_tokens: int = 120_000,
+        max_context_tokens: int = 0,
         test_mode: bool = False,
     ) -> None:
         self._llm = llm_provider
@@ -126,6 +126,10 @@ class PromptBuilder:
     ) -> tuple[list[ChatMessage], int]:
         context = self._build_context_messages(system_prompt, llm_history)
         token_count = await self._llm.count_tokens(context)
+
+        if self._max_context_tokens <= 0:
+            return llm_history, token_count
+
         if token_count <= self._max_context_tokens or len(llm_history) <= 2:
             return llm_history, token_count
 

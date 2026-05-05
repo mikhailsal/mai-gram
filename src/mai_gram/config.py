@@ -230,6 +230,13 @@ class Settings(BaseSettings):
         """
         return self._models_loader().get_model_id(model_key)
 
+    def get_max_context_tokens(self, model_key: str) -> int:
+        """Resolve the context-truncation token budget for *model_key*.
+
+        Returns 0 when truncation is disabled.
+        """
+        return self._models_loader().get_max_context_tokens(model_key)
+
     def get_model_params(self, model_key: str) -> dict[str, Any]:
         """Load per-model parameter overrides from the TOML config.
 

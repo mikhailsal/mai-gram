@@ -282,6 +282,114 @@ class TestModelsConfigLoaderParams:
         assert loader.get_model_params("unknown") == {}
 
 
+class TestModelsConfigLoaderMaxContextTokens:
+    """max_context_tokens resolution: per-model → global → 0 (disabled)."""
+
+    def test_returns_zero_when_not_configured(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."my-model"]',
+                    "temperature = 0.5",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_context_tokens("my-model") == 0
+
+    def test_returns_global_default(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_context_tokens = 200000",
+                    "",
+                    '[models."my-model"]',
+                    "temperature = 0.5",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_context_tokens("my-model") == 200_000
+
+    def test_per_model_overrides_global(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_context_tokens = 200000",
+                    "",
+                    '[models."big-context"]',
+                    "max_context_tokens = 500000",
+                    "",
+                    '[models."small-context"]',
+                    "max_context_tokens = 50000",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_context_tokens("big-context") == 500_000
+        assert loader.get_max_context_tokens("small-context") == 50_000
+
+    def test_per_model_zero_disables_even_with_global(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_context_tokens = 120000",
+                    "",
+                    '[models."no-truncation"]',
+                    "max_context_tokens = 0",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_context_tokens("no-truncation") == 0
+
+    def test_unknown_model_falls_back_to_global(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_context_tokens = 150000",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_context_tokens("unknown/model") == 150_000
+
+    def test_not_included_in_model_params(self, tmp_path) -> None:
+        """max_context_tokens is a meta-key and must NOT be sent to the API."""
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "",
+                    '[models."my-model"]',
+                    "max_context_tokens = 120000",
+                    "temperature = 0.7",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+        params = loader.get_model_params("my-model")
+
+        assert "max_context_tokens" not in params
+        assert params == {"temperature": 0.7}
+
+
 class TestModelsConfigLoaderDuplicateModels:
     """Same base model with different parameter sets."""
 

@@ -44,7 +44,7 @@ class BotConfig:
     allowed_templates: list[str] | None = None
 
 
-_MODEL_META_KEYS = frozenset({"enabled", "title", "id"})
+_MODEL_META_KEYS = frozenset({"enabled", "title", "id", "max_context_tokens"})
 
 
 class ModelsConfigLoader:
@@ -128,6 +128,31 @@ class ModelsConfigLoader:
             if real_id:
                 return str(real_id)
         return model_key
+
+    def get_max_context_tokens(self, model_key: str) -> int:
+        """Resolve the context-truncation budget for *model_key*.
+
+        Resolution order:
+        1. Per-model ``max_context_tokens`` in ``[models."<key>"]``
+        2. Global ``max_context_tokens`` in ``[models]``
+        3. ``0`` (disabled -- no truncation)
+
+        A value of ``0`` disables automatic context truncation entirely.
+        """
+        data = self.refresh()
+        models = data.get("models", {})
+
+        section = models.get(model_key)
+        if isinstance(section, dict):
+            per_model = section.get("max_context_tokens")
+            if per_model is not None:
+                return int(per_model)
+
+        global_val = models.get("max_context_tokens")
+        if global_val is not None:
+            return int(global_val)
+
+        return 0
 
     def get_model_params(self, model_key: str) -> dict[str, Any]:
         """Return API-level overrides for *model_key* (meta-keys stripped)."""

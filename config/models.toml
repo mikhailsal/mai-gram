@@ -8,6 +8,7 @@
 
 [models]
 default = "google/gemma-4-31b-it:free"
+max_context_tokens = 0  # Global token budget for context truncation (0 = disabled)
 
 # ─────────────────────────────────────────────────────────────────────
 # Per-model sections
@@ -22,6 +23,8 @@ default = "google/gemma-4-31b-it:free"
 # All other keys are merged into the OpenRouter request body.
 # Supported API keys include:
 #
+#   max_context_tokens int      Token budget for context truncation (0 = disabled)
+#                               Overrides the global max_context_tokens for this model.
 #   temperature        float    Sampling temperature (0.0 – 2.0)
 #   max_tokens         int      Maximum response tokens
 #   top_p              float    Nucleus sampling threshold
@@ -73,7 +76,7 @@ title = "Gemini 3 Flash"
 [models."google/gemma-4-31b-it:free"]
 title = "Gemma 4 31B (free)"
 reasoning.effort = "none"
-temperature = 1.0
+temperature = 1.2
 
 # ── Grok 4.1 Fast ────────────────────────────────────────────────────
 [models."x-ai/grok-4.1-fast"]
@@ -89,7 +92,7 @@ reasoning.effort = "high"
 title = "Gemini 3.1 Pro"
 reasoning.effort = "low"
 temperature = 1.0
-max_tokens = 4096
+max_tokens = 65536
 
 # ── Gemini 2.5 Pro (disabled) ────────────────────────────────────────
 #[models."google/gemini-2.5-pro"]

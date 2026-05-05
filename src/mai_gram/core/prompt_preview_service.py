@@ -45,6 +45,7 @@ class PromptPreviewService:
         mcp_manager_factory: MCPManagerFactory | None = None,
     ) -> None:
         self._llm = llm_provider
+        self._settings = settings
         self._memory_data_dir = memory_data_dir
         self._wiki_context_limit = wiki_context_limit
         self._short_term_limit = short_term_limit
@@ -73,6 +74,7 @@ class PromptPreviewService:
             wiki_store,
             wiki_context_limit=self._wiki_context_limit,
             short_term_limit=self._short_term_limit,
+            max_context_tokens=self._settings.get_max_context_tokens(chat.llm_model),
             test_mode=self._test_mode,
         )
         await wiki_store.sync_from_disk(chat.id)
