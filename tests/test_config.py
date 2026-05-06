@@ -171,6 +171,40 @@ class TestMaxContextTokens:
         assert settings.get_max_context_tokens("any-model") == 0
 
 
+class TestMaxOutputTokens:
+    def test_get_max_output_tokens_delegates_to_loader(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text(
+            "\n".join(
+                [
+                    "[models]",
+                    "max_output_tokens = 16384",
+                    "",
+                    '[models."google/gemini"]',
+                    "max_output_tokens = 65536",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+        assert settings.get_max_output_tokens("google/gemini") == 65536
+        assert settings.get_max_output_tokens("unknown/model") == 16384
+
+    def test_get_max_output_tokens_defaults_to_zero(self, tmp_path) -> None:
+        models_path = tmp_path / "models.toml"
+        models_path.write_text("[models]\n", encoding="utf-8")
+        settings = Settings(
+            models_config_path=str(models_path),
+            _env_file=None,  # type: ignore[call-arg]
+        )
+
+        assert settings.get_max_output_tokens("any-model") == 0
+
+
 class TestSettingsLoaders:
     def test_get_available_templates_returns_list(self) -> None:
         settings = Settings(_env_file=None)  # type: ignore[call-arg]

@@ -237,6 +237,13 @@ class Settings(BaseSettings):
         """
         return self._models_loader().get_max_context_tokens(model_key)
 
+    def get_max_output_tokens(self, model_key: str) -> int:
+        """Resolve the maximum output token limit for *model_key*.
+
+        Returns 0 when the limit is disabled (provider decides).
+        """
+        return self._models_loader().get_max_output_tokens(model_key)
+
     def get_model_params(self, model_key: str) -> dict[str, Any]:
         """Load per-model parameter overrides from the TOML config.
 

@@ -8,7 +8,8 @@
 
 [models]
 default = "google/gemma-4-31b-it:free"
-max_context_tokens = 0  # Global token budget for context truncation (0 = disabled)
+max_context_tokens = 0   # Global token budget for context truncation (0 = disabled)
+max_output_tokens = 16384 # Global cap on response length to prevent runaway generation (0 = disabled)
 
 # ─────────────────────────────────────────────────────────────────────
 # Per-model sections
@@ -25,6 +26,9 @@ max_context_tokens = 0  # Global token budget for context truncation (0 = disabl
 #
 #   max_context_tokens int      Token budget for context truncation (0 = disabled)
 #                               Overrides the global max_context_tokens for this model.
+#   max_output_tokens  int      Cap on response length (0 = disabled)
+#                               Overrides the global max_output_tokens for this model.
+#                               Ignored when an explicit max_tokens is set.
 #   temperature        float    Sampling temperature (0.0 – 2.0)
 #   max_tokens         int      Maximum response tokens
 #   top_p              float    Nucleus sampling threshold
@@ -74,9 +78,11 @@ title = "Gemini 3 Flash"
 
 # ── Gemma 4 31B (free tier) ──────────────────────────────────────────
 [models."google/gemma-4-31b-it:free"]
-title = "Gemma 4 31B (free)"
+title = "Gemma 4 31B (free) @none t1.2"
 reasoning.effort = "none"
-temperature = 1.2
+temperature = 1.0
+provider.order = ["ai-studio"]
+provider.allow_fallbacks = false
 
 # ── Grok 4.1 Fast ────────────────────────────────────────────────────
 [models."x-ai/grok-4.1-fast"]

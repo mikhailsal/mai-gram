@@ -390,6 +390,138 @@ class TestModelsConfigLoaderMaxContextTokens:
         assert params == {"temperature": 0.7}
 
 
+class TestModelsConfigLoaderMaxOutputTokens:
+    """max_output_tokens resolution: per-model → global → 0 (disabled)."""
+
+    def test_returns_zero_when_not_configured(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    '[models."my-model"]',
+                    "temperature = 0.5",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_output_tokens("my-model") == 0
+
+    def test_returns_global_default(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_output_tokens = 16384",
+                    "",
+                    '[models."my-model"]',
+                    "temperature = 0.5",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_output_tokens("my-model") == 16384
+
+    def test_per_model_overrides_global(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_output_tokens = 16384",
+                    "",
+                    '[models."big-output"]',
+                    "max_output_tokens = 65536",
+                    "",
+                    '[models."small-output"]',
+                    "max_output_tokens = 4096",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_output_tokens("big-output") == 65536
+        assert loader.get_max_output_tokens("small-output") == 4096
+
+    def test_per_model_zero_disables_even_with_global(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_output_tokens = 16384",
+                    "",
+                    '[models."unlimited"]',
+                    "max_output_tokens = 0",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_output_tokens("unlimited") == 0
+
+    def test_unknown_model_falls_back_to_global(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_output_tokens = 8192",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_output_tokens("unknown/model") == 8192
+
+    def test_not_included_in_model_params(self, tmp_path) -> None:
+        """max_output_tokens is a meta-key and must NOT be sent to the API."""
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "",
+                    '[models."my-model"]',
+                    "max_output_tokens = 16384",
+                    "temperature = 0.7",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+        params = loader.get_model_params("my-model")
+
+        assert "max_output_tokens" not in params
+        assert params == {"temperature": 0.7}
+
+    def test_coexists_with_explicit_max_tokens(self, tmp_path) -> None:
+        """max_output_tokens and max_tokens are independent; both can be set."""
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[models]",
+                    "max_output_tokens = 16384",
+                    "",
+                    '[models."my-model"]',
+                    "max_tokens = 65536",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+
+        assert loader.get_max_output_tokens("my-model") == 16384
+        assert loader.get_model_params("my-model") == {"max_tokens": 65536}
+
+    def test_missing_file_returns_zero(self, tmp_path) -> None:
+        loader = ModelsConfigLoader(str(tmp_path / "missing.toml"))
+
+        assert loader.get_max_output_tokens("any-model") == 0
+
+
 class TestModelsConfigLoaderDuplicateModels:
     """Same base model with different parameter sets."""
 

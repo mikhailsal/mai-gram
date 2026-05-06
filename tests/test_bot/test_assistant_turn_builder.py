@@ -16,11 +16,17 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-def _make_builder(*, build_mcp_manager: MagicMock | None = None) -> AssistantTurnBuilder:
+def _make_builder(
+    *,
+    build_mcp_manager: MagicMock | None = None,
+    model_params: dict | None = None,
+    max_output_tokens: int = 0,
+) -> AssistantTurnBuilder:
     llm = MagicMock()
     settings = MagicMock()
-    settings.get_model_params.return_value = {"temperature": 0.2}
+    settings.get_model_params.return_value = dict(model_params or {"temperature": 0.2})
     settings.get_model_id.return_value = "resolved/model-id"
+    settings.get_max_output_tokens.return_value = max_output_tokens
     return AssistantTurnBuilder(
         llm,
         settings,
@@ -129,3 +135,79 @@ class TestAssistantTurnBuilder:
         prompt_builder_cls.return_value.build_context.assert_awaited_once()
         assert builder._build_mcp_manager.call_args.args[2] is wiki_store
         wiki_store.sync_from_disk.assert_awaited_once_with(chat.id)
+
+
+class TestMaxOutputTokensInjection:
+    """Verify max_output_tokens is applied as max_tokens in extra_params."""
+
+    async def test_injects_max_tokens_when_max_output_tokens_set(
+        self, session: AsyncSession
+    ) -> None:
+        builder = _make_builder(max_output_tokens=16384)
+        chat = _make_chat()
+        session.add(chat)
+        await session.commit()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
+
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as pb_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
+            pb_cls.return_value.build_context = AsyncMock(return_value=[])
+
+            request = await builder.build_request(
+                session,
+                chat=chat,
+                telegram_chat_id="tg-chat",
+                failure_log_message="fail",
+            )
+
+        assert request.extra_params["max_tokens"] == 16384
+        assert request.extra_params["temperature"] == 0.2
+
+    async def test_explicit_max_tokens_takes_precedence(self, session: AsyncSession) -> None:
+        builder = _make_builder(
+            model_params={"temperature": 0.5, "max_tokens": 65536},
+            max_output_tokens=16384,
+        )
+        chat = _make_chat()
+        session.add(chat)
+        await session.commit()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
+
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as pb_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
+            pb_cls.return_value.build_context = AsyncMock(return_value=[])
+
+            request = await builder.build_request(
+                session,
+                chat=chat,
+                telegram_chat_id="tg-chat",
+                failure_log_message="fail",
+            )
+
+        assert request.extra_params["max_tokens"] == 65536
+
+    async def test_zero_max_output_tokens_does_not_inject(self, session: AsyncSession) -> None:
+        builder = _make_builder(max_output_tokens=0)
+        chat = _make_chat()
+        session.add(chat)
+        await session.commit()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
+
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as pb_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
+            pb_cls.return_value.build_context = AsyncMock(return_value=[])
+
+            request = await builder.build_request(
+                session,
+                chat=chat,
+                telegram_chat_id="tg-chat",
+                failure_log_message="fail",
+            )
+
+        assert "max_tokens" not in request.extra_params

@@ -44,7 +44,7 @@ class BotConfig:
     allowed_templates: list[str] | None = None
 
 
-_MODEL_META_KEYS = frozenset({"enabled", "title", "id", "max_context_tokens"})
+_MODEL_META_KEYS = frozenset({"enabled", "title", "id", "max_context_tokens", "max_output_tokens"})
 
 
 class ModelsConfigLoader:
@@ -149,6 +149,33 @@ class ModelsConfigLoader:
                 return int(per_model)
 
         global_val = models.get("max_context_tokens")
+        if global_val is not None:
+            return int(global_val)
+
+        return 0
+
+    def get_max_output_tokens(self, model_key: str) -> int:
+        """Resolve the maximum output token limit for *model_key*.
+
+        Resolution order:
+        1. Per-model ``max_output_tokens`` in ``[models."<key>"]``
+        2. Global ``max_output_tokens`` in ``[models]``
+        3. ``0`` (disabled -- provider decides the limit)
+
+        A value of ``0`` disables the output token cap entirely,
+        letting the provider or per-model ``max_tokens`` API parameter
+        control the output length.
+        """
+        data = self.refresh()
+        models = data.get("models", {})
+
+        section = models.get(model_key)
+        if isinstance(section, dict):
+            per_model = section.get("max_output_tokens")
+            if per_model is not None:
+                return int(per_model)
+
+        global_val = models.get("max_output_tokens")
         if global_val is not None:
             return int(global_val)
 
