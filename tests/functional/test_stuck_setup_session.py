@@ -1,12 +1,11 @@
-"""Regression test for the stuck setup-session deadlock.
+"""Regression tests for the stuck setup/import session deadlock.
 
-Previously, if /start was called but setup was never completed (user abandons
-the model/prompt selection flow), a SetupSession remained in memory.  Subsequent
-/reset said "No chat to reset." (correct -- no chat was created) but did NOT
-clear the stale setup session.  Then /import was permanently blocked by
-"You are in the middle of a setup. Finish it first or use /reset."
+Previously, if /start or /import was initiated but never completed, the
+in-memory session lingered.  /reset said "No chat to reset." without clearing
+it, leaving the user permanently stuck.
 
-Fix: handle_reset now clears any dangling setup session even when no chat exists.
+Fix: handle_reset detects pending setup/import sessions, clears them, and
+responds with a context-specific message instead of the generic "no chat" text.
 """
 
 from __future__ import annotations
@@ -33,6 +32,18 @@ def _command_message(command: str) -> IncomingMessage:
         message_type=MessageType.COMMAND,
         text=f"/{command}",
         command=command,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+def _callback_message(data: str) -> IncomingMessage:
+    return IncomingMessage(
+        platform="console",
+        chat_id=CHAT_ID,
+        user_id=USER_ID,
+        message_id=f"cb-{data}",
+        message_type=MessageType.CALLBACK,
+        callback_data=data,
         timestamp=datetime.now(timezone.utc),
     )
 
@@ -98,41 +109,73 @@ async def _teardown():
     reset_settings()
 
 
-async def test_import_after_abandoned_start_and_reset_is_not_stuck(tmp_path) -> None:
-    """Verify /reset clears an orphaned setup session so /import can proceed.
+def _flush_and_read(buf: io.StringIO) -> str:
+    buf.truncate(0)
+    buf.seek(0)
+    return ""
 
-    Sequence:
-    1. /start (creates setup session, user abandons without completing)
-    2. /reset (no chat exists -> clears stale setup session)
-    3. /import (should proceed to model selection, not be blocked)
+
+def _read(buf: io.StringIO) -> str:
+    return buf.getvalue()
+
+
+async def test_reset_clears_abandoned_setup_and_unblocks_import(tmp_path) -> None:
+    """Abandoned /start -> /reset -> /import should work.
+
+    /reset must say "New chat setup has been reset." and clear the session.
     """
     handler, messenger, output_buf = await _build_handler(tmp_path)
 
     try:
-        # Step 1: User sends /start -- setup session is created, model selection shown.
-        # User never picks a model (abandons the flow).
         await messenger.dispatch_message(_command_message("start"))
-        start_output = output_buf.getvalue()
-        assert "Choose an LLM model" in start_output
+        assert "Choose an LLM model" in _read(output_buf)
         assert handler.is_in_setup(USER_ID) is True
 
-        # Step 2: User sends /reset -- no chat was created, but the stale session is cleared.
-        output_buf.truncate(0)
-        output_buf.seek(0)
+        _flush_and_read(output_buf)
         await messenger.dispatch_message(_command_message("reset"))
-        reset_output = output_buf.getvalue()
-        assert "No chat to reset" in reset_output
+        reset_output = _read(output_buf)
+        assert "New chat setup has been reset" in reset_output
+        assert "/start" in reset_output
         assert handler.is_in_setup(USER_ID) is False
 
-        # Step 3: User sends /import -- proceeds normally (no stale session blocking it).
-        output_buf.truncate(0)
-        output_buf.seek(0)
+        _flush_and_read(output_buf)
         await messenger.dispatch_message(_command_message("import"))
-        import_output = output_buf.getvalue()
-
-        assert "middle of a setup" not in import_output, (
-            f"/import should not be blocked after /reset. Got: {import_output!r}"
-        )
+        import_output = _read(output_buf)
+        assert "middle of a setup" not in import_output
         assert "Import Mode" in import_output
+    finally:
+        await _teardown()
+
+
+async def test_reset_clears_abandoned_import_session(tmp_path) -> None:
+    """Abandoned /import -> /reset should say "Import procedure has been reset."."""
+    _handler, messenger, output_buf = await _build_handler(tmp_path)
+
+    try:
+        await messenger.dispatch_message(_command_message("import"))
+        assert "Import Mode" in _read(output_buf)
+
+        _flush_and_read(output_buf)
+        await messenger.dispatch_message(_command_message("reset"))
+        reset_output = _read(output_buf)
+        assert "Import procedure has been reset" in reset_output
+        assert "/import" in reset_output
+
+        _flush_and_read(output_buf)
+        await messenger.dispatch_message(_command_message("start"))
+        assert "Choose an LLM model" in _read(output_buf)
+    finally:
+        await _teardown()
+
+
+async def test_reset_with_no_session_says_no_chat(tmp_path) -> None:
+    """/reset with no pending session and no chat shows the generic message."""
+    _, messenger, output_buf = await _build_handler(tmp_path)
+
+    try:
+        await messenger.dispatch_message(_command_message("reset"))
+        reset_output = _read(output_buf)
+        assert "No chat to reset" in reset_output
+        assert "/start" in reset_output
     finally:
         await _teardown()

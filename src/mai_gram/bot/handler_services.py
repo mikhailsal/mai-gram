@@ -243,13 +243,20 @@ def _build_workflow_bases(
     memory_data_dir: str,
     bot_config: BotConfig | None,
 ) -> _WorkflowBases:
+    import_workflow = ImportWorkflow(
+        messenger,
+        settings,
+        get_allowed_models=lambda: _allowed_models(settings, bot_config),
+        resolve_chat_id=resolve_chat_id,
+    )
+    setup_workflow = SetupWorkflow(
+        messenger,
+        settings,
+        bot_config=bot_config,
+        resolve_chat_id=resolve_chat_id,
+    )
     return _WorkflowBases(
-        import_workflow=ImportWorkflow(
-            messenger,
-            settings,
-            get_allowed_models=lambda: _allowed_models(settings, bot_config),
-            resolve_chat_id=resolve_chat_id,
-        ),
+        import_workflow=import_workflow,
         history_actions=HistoryActions(
             messenger,
             resolve_chat_id=resolve_chat_id,
@@ -259,15 +266,13 @@ def _build_workflow_bases(
             presenter=presenter,
             resolve_chat_id=resolve_chat_id,
             clear_setup_session=clear_setup_session,
+            is_in_setup=setup_workflow.is_in_setup,
+            is_in_import=import_workflow.is_in_import,
+            clear_import_session=import_workflow.clear_import_session,
             memory_data_dir=memory_data_dir,
             database_url=settings.database_url,
         ),
-        setup_workflow=SetupWorkflow(
-            messenger,
-            settings,
-            bot_config=bot_config,
-            resolve_chat_id=resolve_chat_id,
-        ),
+        setup_workflow=setup_workflow,
     )
 
 

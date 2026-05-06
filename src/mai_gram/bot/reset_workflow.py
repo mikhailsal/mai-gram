@@ -44,6 +44,9 @@ class ResetWorkflow:
         presenter: ResetPresenter,
         resolve_chat_id: Callable[[IncomingMessage], str],
         clear_setup_session: Callable[[str], None],
+        is_in_setup: Callable[[str], bool],
+        is_in_import: Callable[[str], bool],
+        clear_import_session: Callable[[str], None],
         memory_data_dir: str,
         database_url: str = "",
     ) -> None:
@@ -51,6 +54,9 @@ class ResetWorkflow:
         self._presenter = presenter
         self._resolve_chat_id = resolve_chat_id
         self._clear_setup_session = clear_setup_session
+        self._is_in_setup = is_in_setup
+        self._is_in_import = is_in_import
+        self._clear_import_session = clear_import_session
         self._memory_data_dir = memory_data_dir
         self._database_url = database_url
 
@@ -62,13 +68,8 @@ class ResetWorkflow:
             chat = await self._get_chat(session, chat_id)
 
         if not chat:
-            self._clear_setup_session(message.user_id)
-            await self._messenger.send_message(
-                OutgoingMessage(
-                    text="No chat to reset. Use /start to create one.",
-                    chat_id=message.chat_id,
-                )
-            )
+            text = self._clear_pending_sessions(message.user_id)
+            await self._messenger.send_message(OutgoingMessage(text=text, chat_id=message.chat_id))
             return
 
         async with get_session() as session:
@@ -90,6 +91,16 @@ class ResetWorkflow:
             confirm_data=f"confirm_reset:{chat_id}",
             cancel_data="cancel_action",
         )
+
+    def _clear_pending_sessions(self, user_id: str) -> str:
+        """Clear any dangling setup/import session and return an appropriate message."""
+        if self._is_in_setup(user_id):
+            self._clear_setup_session(user_id)
+            return "New chat setup has been reset. Start over with /start."
+        if self._is_in_import(user_id):
+            self._clear_import_session(user_id)
+            return "Import procedure has been reset. Start over with /import."
+        return "No chat to reset. Use /start to create one."
 
     async def create_reset_backup(self, chat_id: str) -> Path | None:
         """Create a backup archive for the chat before deletion."""

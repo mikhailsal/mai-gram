@@ -57,6 +57,8 @@ def _make_reset_workflow(
     *,
     memory_data_dir: str = "./data",
     database_url: str = "sqlite+aiosqlite:///./data/test.db",
+    is_in_setup: MagicMock | None = None,
+    is_in_import: MagicMock | None = None,
 ) -> tuple[ResetWorkflow, MagicMock, MagicMock]:
     messenger = MagicMock()
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
@@ -71,6 +73,9 @@ def _make_reset_workflow(
             f"{message.user_id}@{message.bot_id}" if message.bot_id else message.chat_id
         ),
         clear_setup_session=clear_setup_session,
+        is_in_setup=is_in_setup or MagicMock(return_value=False),
+        is_in_import=is_in_import or MagicMock(return_value=False),
+        clear_import_session=MagicMock(),
         memory_data_dir=memory_data_dir,
         database_url=database_url,
     )
@@ -226,13 +231,10 @@ class TestResetConfirmation:
         assert "Reset this chat?" in await_args.args[1]
         assert await_args.kwargs["confirm_data"] == "confirm_reset:test-user@test-bot"
 
-    async def test_reset_no_chat_responds_immediately(self) -> None:
-        """If there is no chat, /reset should respond immediately without confirmation."""
+    async def test_reset_no_chat_no_session_responds_immediately(self) -> None:
+        """No chat and no pending session -> generic 'no chat to reset' message."""
         workflow, presenter, _ = _make_reset_workflow()
-        message = _make_message(
-            user_id="test-user",
-            chat_id="test-chat",
-        )
+        message = _make_message(user_id="test-user", chat_id="test-chat")
 
         with patch("mai_gram.bot.reset_workflow.get_session") as mock_get_session:
             mock_session = AsyncMock()
@@ -247,10 +249,56 @@ class TestResetConfirmation:
         send_message = cast("AsyncMock", workflow._messenger.send_message)
         calls = send_message.call_args_list
         assert len(calls) == 1
-        assert calls[0].args
         sent_msg = calls[0].args[0]
         assert "No chat to reset" in sent_msg.text
+        assert "/start" in sent_msg.text
         assert cast("AsyncMock", presenter._show_confirmation).await_count == 0
+
+    async def test_reset_clears_stale_setup_session(self) -> None:
+        """No chat but setup session active -> clear it and tell the user."""
+        workflow, _presenter, clear_setup = _make_reset_workflow(
+            is_in_setup=MagicMock(return_value=True),
+        )
+        message = _make_message(user_id="test-user", chat_id="test-chat")
+
+        with patch("mai_gram.bot.reset_workflow.get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(
+                return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+            )
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await workflow.handle_reset(message)
+
+        clear_setup.assert_called_once_with("test-user")
+        send_message = cast("AsyncMock", workflow._messenger.send_message)
+        sent_msg = send_message.call_args_list[0].args[0]
+        assert "New chat setup has been reset" in sent_msg.text
+        assert "/start" in sent_msg.text
+
+    async def test_reset_clears_stale_import_session(self) -> None:
+        """No chat but import session active -> clear it and tell the user."""
+        workflow, _presenter, _ = _make_reset_workflow(
+            is_in_import=MagicMock(return_value=True),
+        )
+        message = _make_message(user_id="test-user", chat_id="test-chat")
+
+        with patch("mai_gram.bot.reset_workflow.get_session") as mock_get_session:
+            mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(
+                return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+            )
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await workflow.handle_reset(message)
+
+        workflow._clear_import_session.assert_called_once_with("test-user")
+        send_message = cast("AsyncMock", workflow._messenger.send_message)
+        sent_msg = send_message.call_args_list[0].args[0]
+        assert "Import procedure has been reset" in sent_msg.text
+        assert "/import" in sent_msg.text
 
 
 class TestExecuteReset:
