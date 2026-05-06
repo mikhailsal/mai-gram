@@ -501,7 +501,10 @@ class ConversationExecutor:
         template: ResponseTemplate | None = None,
     ) -> None:
         keyboard_buttons = [
-            [("🔄 Regenerate", "regen"), ("✂ Cut this & above", f"cut:{saved_msg_id}")]
+            [
+                ("🔄 Regenerate", f"regen:{saved_msg_id}"),
+                ("✂ Cut this & above", f"cut:{saved_msg_id}"),
+            ]
         ]
         action_keyboard = self._messenger.build_inline_keyboard(keyboard_buttons)
         usage_footer = self._renderer._format_usage_footer(

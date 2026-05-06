@@ -191,5 +191,8 @@ def needs_live_llm(args: argparse.Namespace) -> bool:
     if bool(args.message):
         return True
     if args.callbacks:
-        return any(cb_data == "confirm_regen" for cb_data in args.callbacks)
+        return any(
+            cb_data == "confirm_regen" or cb_data.startswith("confirm_regen:")
+            for cb_data in args.callbacks
+        )
     return False

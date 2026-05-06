@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
@@ -43,17 +43,28 @@ class RegenerateService:
         message: IncomingMessage,
         *,
         previous_response_ids: list[str],
+        target_assistant_msg_id: int | None = None,
     ) -> list[str]:
-        """Delete or preserve prior output as needed, then re-run the turn."""
+        """Delete or preserve prior output as needed, then re-run the turn.
+
+        When *target_assistant_msg_id* is provided the service deletes that
+        assistant message **and all newer messages** so the conversation is
+        rolled back to the user message that preceded the target.  Without a
+        target the legacy behaviour (prune only the trailing assistant chain)
+        is used.
+        """
         if not message.callback_data:
             return []
 
         chat_id = self._resolve_chat_id(message)
-        has_tool_chain = await self._preserve_or_prune_trailing_turns(chat_id)
 
-        if not has_tool_chain:
-            for message_id in previous_response_ids:
-                await self._messenger.delete_message(message.chat_id, message_id)
+        if target_assistant_msg_id is not None:
+            await self._rollback_to_before(chat_id, target_assistant_msg_id)
+        else:
+            has_tool_chain = await self._preserve_or_prune_trailing_turns(chat_id)
+            if not has_tool_chain:
+                for message_id in previous_response_ids:
+                    await self._messenger.delete_message(message.chat_id, message_id)
 
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
@@ -84,6 +95,24 @@ class RegenerateService:
 
             result = await self._conversation_executor.execute(request)
             return result.sent_message_ids
+
+    async def _rollback_to_before(self, chat_id: str, assistant_msg_id: int) -> None:
+        """Delete the target assistant message and everything after it."""
+        async with get_session() as session:
+            chat = await self._get_chat(session, chat_id)
+            if not chat:
+                return
+            result = await session.execute(
+                select(Message).where(
+                    and_(
+                        Message.chat_id == chat.id,
+                        Message.id >= assistant_msg_id,
+                    )
+                )
+            )
+            for msg in result.scalars():
+                await session.delete(msg)
+            await session.flush()
 
     async def _preserve_or_prune_trailing_turns(self, chat_id: str) -> bool:
         async with get_session() as session:

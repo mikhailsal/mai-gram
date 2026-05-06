@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,29 @@ if TYPE_CHECKING:
     from mai_gram.messenger.base import Messenger
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_sibling_msg_id(message: IncomingMessage, *, prefix: str) -> str:
+    """Extract a DB message ID from a sibling button on the same inline keyboard.
+
+    When a bare ``"regen"`` callback arrives from a pre-fix button, the
+    sibling ``"cut:<id>"`` button on the same message carries the target
+    DB message ID.  This lets old buttons work without needing the new
+    ``regen:<id>`` format.
+    """
+    raw = getattr(message, "raw", None)
+    callback_query = getattr(raw, "callback_query", None)
+    source_msg = getattr(callback_query, "message", None)
+    markup = getattr(source_msg, "reply_markup", None)
+    keyboard = getattr(markup, "inline_keyboard", None)
+    if not keyboard:
+        return ""
+    for row in keyboard:
+        for button in row:
+            cb = getattr(button, "callback_data", None) or ""
+            if cb.startswith(prefix):
+                return cb.split(":", 1)[1]
+    return ""
 
 
 class CallbackRouter:
@@ -60,11 +84,15 @@ class CallbackRouter:
         if await self._handle_stale_setup_callback(message, data):
             return
 
-        if data == "regen":
+        if data == "regen" or data.startswith("regen:"):
+            suffix = data.split(":", 1)[1] if ":" in data else ""
+            if not suffix:
+                suffix = _extract_sibling_msg_id(message, prefix="cut:")
+            confirm_data = f"confirm_regen:{suffix}" if suffix else "confirm_regen"
             await self._show_confirmation(
                 message,
                 "Regenerate this response?",
-                confirm_data="confirm_regen",
+                confirm_data=confirm_data,
                 cancel_data="cancel_action",
             )
             return
@@ -94,8 +122,8 @@ class CallbackRouter:
         return True
 
     async def _handle_confirmation_callback(self, message: IncomingMessage, data: str) -> bool:
-        if data == "confirm_regen":
-            await self._confirm_regenerate(message)
+        if data == "confirm_regen" or data.startswith("confirm_regen:"):
+            await self._confirm_regenerate(message, data)
             return True
         if data.startswith("confirm_cut:"):
             await self._confirm_cut(message, data)
@@ -108,11 +136,16 @@ class CallbackRouter:
             return True
         return False
 
-    async def _confirm_regenerate(self, message: IncomingMessage) -> None:
+    async def _confirm_regenerate(self, message: IncomingMessage, data: str) -> None:
         await self._messenger.delete_callback_source_message(message)
+        target_msg_id: int | None = None
+        if ":" in data:
+            with contextlib.suppress(ValueError, IndexError):
+                target_msg_id = int(data.split(":", 1)[1])
         sent_ids = await self._regenerate_service.handle_regenerate(
             message,
             previous_response_ids=self._response_message_ids.get(message.chat_id, []),
+            target_assistant_msg_id=target_msg_id,
         )
         self._response_message_ids[message.chat_id] = sent_ids
 

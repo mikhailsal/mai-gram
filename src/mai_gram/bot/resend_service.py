@@ -74,7 +74,7 @@ class ResendService:
         for old_id in previous_response_ids:
             await self._messenger.delete_message(tg_chat_id, old_id)
 
-        kb_buttons = [[("🔄 Regenerate", "regen")]]
+        kb_buttons = [[("🔄 Regenerate", f"regen:{last_msg.id}")]]
         kb_buttons[0].append(("✂ Cut this & above", f"cut:{last_msg.id}"))
         action_kb = self._messenger.build_inline_keyboard(kb_buttons)
 
