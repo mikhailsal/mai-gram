@@ -62,6 +62,7 @@ class ResetWorkflow:
             chat = await self._get_chat(session, chat_id)
 
         if not chat:
+            self._clear_setup_session(message.user_id)
             await self._messenger.send_message(
                 OutgoingMessage(
                     text="No chat to reset. Use /start to create one.",
