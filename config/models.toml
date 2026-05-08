@@ -79,10 +79,21 @@ title = "Gemini 3 Flash"
 # ── Gemma 4 31B (free tier) ──────────────────────────────────────────
 [models."google/gemma-4-31b-it:free"]
 title = "Gemma 4 31B (free)"
-#reasoning.effort = "none"
-temperature = 1.2
+reasoning.effort = "none"
+temperature = 1.5
 top_p = 0.99
 provider.order = ["ai-studio"]
+provider.allow_fallbacks = false
+#stop = ["</content>"]
+max_output_tokens = 4096
+
+# ── Gemma 4 31B (parasail) ──────────────────────────────────────────
+[models."google/gemma-4-31b-it"]
+title = "Gemma 4 31B (parasail)"
+reasoning.effort = "none"
+temperature = 1.3
+#top_p = 0.99
+provider.order = ["parasail"]
 provider.allow_fallbacks = false
 #stop = ["</content>"]
 max_output_tokens = 4096
