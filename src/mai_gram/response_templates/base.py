@@ -236,6 +236,22 @@ class ResponseTemplate(ABC):
         """Return the name of the primary content field (rendered as main body)."""
         return "content"
 
+    def wrap_reasoning_for_import(self, reasoning: str, content: str) -> str:
+        """Wrap reasoning and content into this template's native format for import.
+
+        Called during chat import when reasoning_content needs to be merged
+        into the stored message body. The default implementation uses XML tags
+        matching the template's field names -- correct for XML-based templates.
+        Non-XML templates (JSON, markdown headers) must override this.
+        """
+        fields = sorted(self.get_fields(), key=lambda f: f.order)
+        reasoning_field = fields[0].name
+        content_field = self.content_field_name()
+        return (
+            f"<{reasoning_field}>\n{reasoning}\n</{reasoning_field}>\n"
+            f"<{content_field}>\n{content}\n</{content_field}>"
+        )
+
     def _field_by_name(self, name: str) -> FieldDescriptor | None:
         for f in self.get_fields():
             if f.name == name:

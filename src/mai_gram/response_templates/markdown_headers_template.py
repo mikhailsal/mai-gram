@@ -120,6 +120,10 @@ class MarkdownHeadersTemplate(ResponseTemplate):
     def content_field_name(self) -> str:
         return "Content"
 
+    def wrap_reasoning_for_import(self, reasoning: str, content: str) -> str:
+        rf = self._reasoning_field
+        return f"## {rf}\n{reasoning}\n\n## Content\n{content}"
+
     def format_instruction(self) -> str:
         rf = self._reasoning_field
         n = self._num_reasoning_paragraphs

@@ -101,17 +101,10 @@ def _wrap_reasoning_in_template(
 ) -> str:
     """Merge native reasoning and content into a template-structured string.
 
-    Uses the template's field definitions to determine the tag names:
-    the first field (by order) becomes the reasoning wrapper, and the
-    content field wraps the original response body.
+    Delegates to the template's own wrapping logic so each format (XML,
+    markdown headers, JSON) produces its native structure.
     """
-    fields = sorted(template.get_fields(), key=lambda f: f.order)
-    reasoning_field = fields[0].name
-    content_field = template.content_field_name()
-    return (
-        f"<{reasoning_field}>\n{reasoning}\n</{reasoning_field}>\n"
-        f"<{content_field}>\n{content}\n</{content_field}>"
-    )
+    return template.wrap_reasoning_for_import(reasoning, content)
 
 
 def _build_import_message_payload(

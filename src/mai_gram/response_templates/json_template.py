@@ -124,6 +124,10 @@ class JsonTemplate(ResponseTemplate):
             ),
         ]
 
+    def wrap_reasoning_for_import(self, reasoning: str, content: str) -> str:
+        rf = self._reasoning_field
+        return json.dumps({rf: reasoning, "content": content}, ensure_ascii=False)
+
     def format_instruction(self) -> str:
         rf = self._reasoning_field
         n = self._num_reasoning_paragraphs

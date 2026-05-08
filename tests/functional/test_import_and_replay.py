@@ -127,6 +127,163 @@ def test_import_with_reasoning_template_custom_params(functional_cli) -> None:
     assert "Here is my analysis." in history.stdout
 
 
+def test_import_with_markdown_headers_template_uses_markdown_not_xml(functional_cli) -> None:
+    """Importing with markdown_headers template must wrap reasoning in ## headers, not XML tags.
+
+    Regression: _wrap_reasoning_in_template used hardcoded XML wrapping regardless of template
+    type, producing <Thought>...</Thought> instead of ## Thought / ## Content for markdown
+    templates.
+    """
+    chat_id = "func-import-md-headers"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": "The answer is 4.",
+                "reasoning_content": "Simple arithmetic. 2 + 2 = 4.",
+            },
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("md-headers-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    imported = functional_cli.import_json(chat_id, json_path, reasoning_template="markdown_headers")
+    history = functional_cli.read_history(chat_id)
+
+    assert imported.returncode == 0
+    assert "reasoning template: markdown_headers" in imported.stdout
+
+    hist_text = history.stdout
+    assert "## Thought" in hist_text, (
+        f"Expected '## Thought' header, got XML instead:\n{hist_text[:500]}"
+    )
+    assert "## Content" in hist_text, (
+        f"Expected '## Content' header, got XML instead:\n{hist_text[:500]}"
+    )
+    assert "<Thought>" not in hist_text, (
+        f"Found <Thought> XML tag -- should use ## headers:\n{hist_text[:500]}"
+    )
+    assert "<Content>" not in hist_text, (
+        f"Found <Content> XML tag -- should use ## headers:\n{hist_text[:500]}"
+    )
+    assert "Simple arithmetic." in hist_text
+    assert "The answer is 4." in hist_text
+
+
+def test_import_with_markdown_headers_prefill_uses_markdown_not_xml(
+    functional_cli,
+) -> None:
+    """Same regression as markdown_headers but for the prefill variant."""
+    chat_id = "func-import-md-prefill"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "Explain recursion."},
+            {
+                "role": "assistant",
+                "content": "Recursion is when a function calls itself.",
+                "reasoning_content": "User wants a short definition of recursion.",
+            },
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("md-prefill-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    imported = functional_cli.import_json(
+        chat_id, json_path, reasoning_template="markdown_headers_prefill"
+    )
+    history = functional_cli.read_history(chat_id)
+
+    assert imported.returncode == 0
+
+    hist_text = history.stdout
+    assert "## Thought" in hist_text, (
+        f"Expected '## Thought' header, got XML instead:\n{hist_text[:500]}"
+    )
+    assert "## Content" in hist_text, (
+        f"Expected '## Content' header, got XML instead:\n{hist_text[:500]}"
+    )
+    assert "<Thought>" not in hist_text
+    assert "<Content>" not in hist_text
+    assert "User wants a short definition" in hist_text
+    assert "Recursion is when a function calls itself." in hist_text
+
+
+def test_import_with_json_template_uses_json_not_xml(functional_cli) -> None:
+    """Importing with json template must wrap reasoning as a JSON object, not XML tags.
+
+    Regression: _wrap_reasoning_in_template used hardcoded XML wrapping for all templates,
+    producing <thought>...</thought> instead of {"thought": "...", "content": "..."}.
+    """
+    chat_id = "func-import-json-tmpl"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "What is 3+3?"},
+            {
+                "role": "assistant",
+                "content": "The answer is 6.",
+                "reasoning_content": "Basic addition.",
+            },
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("json-tmpl-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    imported = functional_cli.import_json(chat_id, json_path, reasoning_template="json")
+    history = functional_cli.read_history(chat_id)
+
+    assert imported.returncode == 0
+    assert "reasoning template: json" in imported.stdout
+
+    hist_text = history.stdout
+    assert '"thought"' in hist_text or '"content"' in hist_text, (
+        f"Expected JSON keys in history, got XML tags instead:\n{hist_text[:500]}"
+    )
+    assert "<thought>" not in hist_text.lower(), (
+        f"Found XML-style <thought> tag -- json template should produce JSON:\n{hist_text[:500]}"
+    )
+    assert "<content>" not in hist_text.lower(), (
+        f"Found XML-style <content> tag -- json template should produce JSON:\n{hist_text[:500]}"
+    )
+    assert "Basic addition." in hist_text
+    assert "The answer is 6." in hist_text
+
+
+def test_import_with_json_prefill_template_uses_json_not_xml(functional_cli) -> None:
+    """Same regression as json but for the prefill variant."""
+    chat_id = "func-import-json-prefill"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "What is 5+5?"},
+            {
+                "role": "assistant",
+                "content": "The answer is 10.",
+                "reasoning_content": "Simple math again.",
+            },
+        ]
+    )
+    json_path = functional_cli.write_json_fixture("json-prefill-import.json", payload)
+
+    functional_cli.start_chat(chat_id).require_ok()
+    imported = functional_cli.import_json(chat_id, json_path, reasoning_template="json_prefill")
+    history = functional_cli.read_history(chat_id)
+
+    assert imported.returncode == 0
+
+    hist_text = history.stdout
+    assert '"thought"' in hist_text or '"content"' in hist_text, (
+        f"Expected JSON keys in history, got XML tags instead:\n{hist_text[:500]}"
+    )
+    assert "<thought>" not in hist_text.lower(), (
+        f"Found XML-style <thought> tag -- json_prefill should produce JSON:\n{hist_text[:500]}"
+    )
+    assert "<content>" not in hist_text.lower(), (
+        f"Found XML-style <content> tag -- json_prefill should produce JSON:\n{hist_text[:500]}"
+    )
+    assert "Simple math again." in hist_text
+    assert "The answer is 10." in hist_text
+
+
 def test_import_with_invalid_reasoning_template_fails(functional_cli) -> None:
     chat_id = "func-import-bad-tmpl"
     payload = json.dumps(
