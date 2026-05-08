@@ -249,6 +249,7 @@ class TestConversationExecutor:
                 turn_complete=False,
                 reasoning="think",
                 content="First",
+                finish_reason=None,
             )
             yield SimpleNamespace(
                 usage=None,
@@ -257,6 +258,7 @@ class TestConversationExecutor:
                 turn_complete=True,
                 reasoning="",
                 content="",
+                finish_reason=None,
             )
             yield SimpleNamespace(
                 usage=None,
@@ -265,6 +267,7 @@ class TestConversationExecutor:
                 turn_complete=False,
                 reasoning="",
                 content="Second",
+                finish_reason="stop",
             )
 
         with (
@@ -283,6 +286,7 @@ class TestConversationExecutor:
         assert outcome.response_reasoning == "think"
         assert outcome.cost == 0.01
         assert outcome.is_byok is True
+        assert outcome.finish_reason == "stop"
 
     async def test_resolved_model_passed_to_streaming_call(self) -> None:
         executor, _, _ = _make_executor()
@@ -301,6 +305,7 @@ class TestConversationExecutor:
                 turn_complete=False,
                 reasoning="",
                 content="Hello",
+                finish_reason="stop",
             )
 
         with (
@@ -759,3 +764,100 @@ class TestTierCorrection:
             )
 
         mock_repair.assert_not_awaited()
+
+    async def test_finish_reason_length_skips_repair_and_retries(self) -> None:
+        """Responses truncated by token limit bypass repair tiers entirely."""
+        executor, messenger, _ = _make_executor()
+
+        from mai_gram.response_templates.registry import get_template
+
+        template = get_template("xml")
+        request = _make_request()
+
+        truncated_outcome = _StreamOutcome(
+            response_text="//_api:search_" * 100,
+            response_reasoning=None,
+            placeholder_msg_id="ph-1",
+            committed_content_offset=0,
+            reasoning_committed=False,
+            usage=None,
+            cost=None,
+            is_byok=False,
+            finish_reason="length",
+        )
+        good_outcome = _StreamOutcome(
+            response_text="<thought>thinking</thought>\n<content>answer</content>",
+            response_reasoning=None,
+            placeholder_msg_id="ph-2",
+            committed_content_offset=0,
+            reasoning_committed=False,
+            usage=None,
+            cost=None,
+            is_byok=False,
+            finish_reason="stop",
+        )
+
+        stream_mock = AsyncMock(side_effect=[truncated_outcome, good_outcome])
+        with (
+            patch.object(executor, "_stream_response", stream_mock),
+            patch(
+                "mai_gram.bot.conversation_executor.llm_repair",
+                AsyncMock(),
+            ) as mock_repair,
+        ):
+            outcome, parsed = await executor._stream_with_validation(
+                request,
+                [],
+                template=template,
+                total_attempts=3,
+                on_tool_call_display=AsyncMock(),
+                on_tool_result_display=AsyncMock(),
+            )
+
+        assert stream_mock.await_count == 2
+        mock_repair.assert_not_awaited()
+        assert outcome.finish_reason == "stop"
+        assert parsed.fields["content"] == "answer"
+        messenger.edit_message.assert_awaited_with(
+            request.telegram_chat_id,
+            "ph-1",
+            "\u26a0\ufe0f Response truncated, retrying...",
+        )
+
+    async def test_finish_reason_length_all_attempts_raises(self) -> None:
+        """All attempts truncated raises LLMProviderError with length message."""
+        executor, _, _ = _make_executor()
+
+        from mai_gram.response_templates.registry import get_template
+
+        template = get_template("xml")
+        request = _make_request()
+
+        truncated = _StreamOutcome(
+            response_text="garbage" * 50,
+            response_reasoning=None,
+            placeholder_msg_id=None,
+            committed_content_offset=0,
+            reasoning_committed=False,
+            usage=None,
+            cost=None,
+            is_byok=False,
+            finish_reason="length",
+        )
+
+        with (
+            patch.object(
+                executor,
+                "_stream_response",
+                AsyncMock(return_value=truncated),
+            ),
+            pytest.raises(LLMProviderError, match="truncated by token limit"),
+        ):
+            await executor._stream_with_validation(
+                request,
+                [],
+                template=template,
+                total_attempts=2,
+                on_tool_call_display=AsyncMock(),
+                on_tool_result_display=AsyncMock(),
+            )

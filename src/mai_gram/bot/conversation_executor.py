@@ -92,6 +92,7 @@ class _StreamOutcome:
     usage: object | None
     cost: float | None
     is_byok: bool
+    finish_reason: str | None = None
 
 
 class ConversationRenderer(Protocol):
@@ -235,6 +236,11 @@ class ConversationExecutor:
         Applies a two-tier correction pipeline before falling back to retry:
         - Tier 1: deterministic regex sanitization via template.sanitize()
         - Tier 2: LLM-based structural repair via a cheap auxiliary model
+
+        Responses truncated by the token limit (finish_reason="length") are
+        treated as inherently broken and immediately retried -- the repair
+        tiers cannot fix incomplete output, so skipping them saves latency
+        and avoids feeding garbage to the auxiliary model.
         """
         last_errors: list[str] = []
         prefill = template.assistant_prefill() or ""
@@ -256,7 +262,25 @@ class ConversationExecutor:
                     usage=outcome.usage,
                     cost=outcome.cost,
                     is_byok=outcome.is_byok,
+                    finish_reason=outcome.finish_reason,
                 )
+
+            if outcome.finish_reason == "length":
+                last_errors = ["response truncated by token limit (finish_reason=length)"]
+                logger.warning(
+                    "Response truncated (finish_reason=length) on attempt %d/%d "
+                    "for chat %s — skipping repair tiers, retrying directly",
+                    attempt,
+                    total_attempts,
+                    request.chat.id,
+                )
+                if attempt < total_attempts and outcome.placeholder_msg_id:
+                    await self._messenger.edit_message(
+                        request.telegram_chat_id,
+                        outcome.placeholder_msg_id,
+                        "\u26a0\ufe0f Response truncated, retrying...",
+                    )
+                continue
 
             # Tier 1: regex-based sanitization
             sanitized = template.sanitize(outcome.response_text)
@@ -333,6 +357,7 @@ class ConversationExecutor:
         stream_usage = None
         stream_cost: float | None = None
         stream_is_byok = False
+        stream_finish_reason: str | None = None
 
         async for chunk in run_with_tools_stream(
             self._llm,
@@ -348,6 +373,8 @@ class ConversationExecutor:
                 stream_usage = chunk.usage
                 stream_cost = chunk.cost
                 stream_is_byok = chunk.is_byok
+            if chunk.finish_reason:
+                stream_finish_reason = chunk.finish_reason
             if chunk.turn_complete:
                 await self._handle_turn_complete(request, state, sent_msg_ids)
                 continue
@@ -369,6 +396,7 @@ class ConversationExecutor:
             usage=stream_usage,
             cost=stream_cost,
             is_byok=stream_is_byok,
+            finish_reason=stream_finish_reason,
         )
 
     async def _handle_turn_complete(
@@ -711,6 +739,7 @@ def _replace_response_text(outcome: _StreamOutcome, new_text: str) -> _StreamOut
         usage=outcome.usage,
         cost=outcome.cost,
         is_byok=outcome.is_byok,
+        finish_reason=outcome.finish_reason,
     )
 
 
