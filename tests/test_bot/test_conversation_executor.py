@@ -612,3 +612,150 @@ class TestConversationExecutor:
             is_byok=False,
         )
         assert ConversationExecutor._final_header_html(request, outcome) == ""
+
+
+class TestTierCorrection:
+    """Tests for the two-tier correction logic in _stream_with_validation."""
+
+    async def test_tier1_regex_sanitization_fixes_output(self) -> None:
+        """Tier 1 regex sanitization should fix malformed XML before parsing."""
+        executor, _, _ = _make_executor()
+
+        from mai_gram.response_templates.registry import get_template
+
+        template = get_template("xml")
+        request = _make_request()
+
+        malformed = "<thought>thinking</thought>\n<content>answer<///content>"
+        stream_outcome = _StreamOutcome(
+            response_text=malformed,
+            response_reasoning=None,
+            placeholder_msg_id=None,
+            committed_content_offset=0,
+            reasoning_committed=False,
+            usage=None,
+            cost=None,
+            is_byok=False,
+        )
+
+        with patch.object(
+            executor,
+            "_stream_response",
+            AsyncMock(return_value=stream_outcome),
+        ):
+            outcome, parsed = await executor._stream_with_validation(
+                request,
+                [],
+                template=template,
+                total_attempts=1,
+                on_tool_call_display=AsyncMock(),
+                on_tool_result_display=AsyncMock(),
+            )
+
+        assert "</content>" in outcome.response_text
+        assert "<///content>" not in outcome.response_text
+        assert parsed.fields["content"] == "answer"
+
+    async def test_tier2_llm_repair_called_when_tier1_insufficient(self) -> None:
+        """When Tier 1 cannot fix the output, Tier 2 LLM repair is invoked."""
+        executor, _, _ = _make_executor()
+        executor._format_repair_config = {
+            "model": "openrouter/free",
+            "temperature": 0.0,
+            "max_tokens": 8192,
+            "enabled": True,
+        }
+
+        from mai_gram.response_templates.registry import get_template
+
+        template = get_template("xml")
+        request = _make_request()
+
+        # Missing <thought> entirely -- regex can't fix this
+        malformed = "<content>answer</content>"
+        stream_outcome = _StreamOutcome(
+            response_text=malformed,
+            response_reasoning=None,
+            placeholder_msg_id=None,
+            committed_content_offset=0,
+            reasoning_committed=False,
+            usage=None,
+            cost=None,
+            is_byok=False,
+        )
+
+        repaired_text = "<thought>thinking</thought>\n<content>answer</content>"
+        with (
+            patch.object(
+                executor,
+                "_stream_response",
+                AsyncMock(return_value=stream_outcome),
+            ),
+            patch(
+                "mai_gram.bot.conversation_executor.llm_repair",
+                AsyncMock(return_value=repaired_text),
+            ) as mock_repair,
+        ):
+            outcome, parsed = await executor._stream_with_validation(
+                request,
+                [],
+                template=template,
+                total_attempts=1,
+                on_tool_call_display=AsyncMock(),
+                on_tool_result_display=AsyncMock(),
+            )
+
+        mock_repair.assert_awaited_once()
+        assert outcome.response_text == repaired_text
+        assert parsed.fields["thought"] == "thinking"
+        assert parsed.fields["content"] == "answer"
+
+    async def test_tier2_disabled_skips_llm_repair(self) -> None:
+        """When format_repair is disabled, Tier 2 is skipped."""
+        executor, _, _ = _make_executor()
+        executor._format_repair_config = {
+            "model": "openrouter/free",
+            "temperature": 0.0,
+            "max_tokens": 8192,
+            "enabled": False,
+        }
+
+        from mai_gram.response_templates.registry import get_template
+
+        template = get_template("xml")
+        request = _make_request()
+
+        malformed = "<content>answer</content>"
+        stream_outcome = _StreamOutcome(
+            response_text=malformed,
+            response_reasoning=None,
+            placeholder_msg_id=None,
+            committed_content_offset=0,
+            reasoning_committed=False,
+            usage=None,
+            cost=None,
+            is_byok=False,
+        )
+
+        with (
+            patch.object(
+                executor,
+                "_stream_response",
+                AsyncMock(return_value=stream_outcome),
+            ),
+            patch(
+                "mai_gram.bot.conversation_executor.llm_repair",
+                AsyncMock(),
+            ) as mock_repair,
+            pytest.raises(LLMProviderError, match="Format error"),
+        ):
+            await executor._stream_with_validation(
+                request,
+                [],
+                template=template,
+                total_attempts=1,
+                on_tool_call_display=AsyncMock(),
+                on_tool_result_display=AsyncMock(),
+            )
+
+        mock_repair.assert_not_awaited()

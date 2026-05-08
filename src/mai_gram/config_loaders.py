@@ -189,6 +189,23 @@ class ModelsConfigLoader:
             return {}
         return {k: v for k, v in section.items() if k not in _MODEL_META_KEYS}
 
+    def get_format_repair_config(self) -> dict[str, Any]:
+        """Return configuration for the format-repair auxiliary model."""
+        data = self.refresh()
+        section = data.get("format_repair", {})
+        reserved = {"model", "temperature", "max_tokens", "enabled"}
+        extra_params: dict[str, Any] = {}
+        for key, value in section.items():
+            if key not in reserved:
+                extra_params[key] = value
+        return {
+            "model": section.get("model", "openrouter/free"),
+            "temperature": float(section.get("temperature", 0.0)),
+            "max_tokens": int(section.get("max_tokens", 8192)),
+            "enabled": bool(section.get("enabled", True)),
+            "extra_params": extra_params or None,
+        }
+
     def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
         data = self.refresh()
         tools_section = data.get("tools", {})

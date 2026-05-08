@@ -26,9 +26,9 @@ Supports user-configurable parameters:
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
+from mai_gram.response_templates._sanitize import extract_xml_fields, sanitize_xml_tags
 from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
@@ -37,22 +37,6 @@ from mai_gram.response_templates.base import (
     TemplateParam,
 )
 from mai_gram.response_templates.registry import register_template
-
-_TAG_RE = re.compile(r"<(\w+)>(.*?)</\1>", re.DOTALL)
-
-
-def _extract_xml_fields(
-    raw_text: str,
-    field_names: list[str],
-) -> dict[str, str]:
-    """Extract content from XML-like tags, preserving order of first occurrence."""
-    fields: dict[str, str] = {}
-    for match in _TAG_RE.finditer(raw_text):
-        tag_name = match.group(1)
-        if tag_name in field_names and tag_name not in fields:
-            fields[tag_name] = match.group(2).strip()
-    return fields
-
 
 _EXAMPLE_BLOCKS: list[list[str]] = [
     # Block 0 -- parse user input
@@ -257,9 +241,19 @@ class GemmaReasoningTemplate(ResponseTemplate):
             ),
         ]
 
+    def sanitize(self, raw_text: str) -> str:
+        field_names = [f.name for f in self.get_fields()]
+        return sanitize_xml_tags(raw_text, field_names)
+
+    def llm_repair_prompt(self) -> str:
+        field_names = [f.name for f in self.get_fields()]
+        tags = "\n".join(f"<{n}>...</{n}>" for n in field_names)
+        order = " -> ".join(f"<{n}>" for n in field_names)
+        return f"XML format with tags in strict order: {order}\n\n{tags}"
+
     def parse(self, raw_text: str) -> ParsedResponse:
         field_names = [f.name for f in self.get_fields()]
-        fields = _extract_xml_fields(raw_text, field_names)
+        fields = extract_xml_fields(raw_text, field_names)
         return ParsedResponse(fields=fields, raw=raw_text)
 
     def validate(self, parsed: ParsedResponse) -> list[str]:

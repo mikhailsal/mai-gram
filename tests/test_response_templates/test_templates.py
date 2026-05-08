@@ -7,7 +7,11 @@ template parameters, and assistant prefill support.
 from __future__ import annotations
 
 from typing import ClassVar
+from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from mai_gram.response_templates._sanitize import llm_repair
 from mai_gram.response_templates.base import FieldDescriptor, ResponseTemplate, TemplateParam
 from mai_gram.response_templates.registry import get_template, list_template_names
 
@@ -1749,3 +1753,288 @@ class TestResolveParamsExtended:
         t = get_template("empty")
         result = t._build_with_params({"anything": "value"})
         assert result is t
+
+
+# ──────────────────────────────────────────────────────────────────
+# Sanitization Tests (Tier 1 regex-based correction)
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestXmlSanitization:
+    """Tests for XML template Tier 1 regex sanitization."""
+
+    def test_sanitize_corrupted_closing_tag_triple_slash(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking</thought>\n<content>reply<///content>"
+        result = t.sanitize(raw)
+        assert result == "<thought>thinking</thought>\n<content>reply</content>"
+
+    def test_sanitize_corrupted_closing_tag_many_slashes(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking</thought>\n<content>reply<//////content>"
+        result = t.sanitize(raw)
+        assert result == "<thought>thinking</thought>\n<content>reply</content>"
+
+    def test_sanitize_duplicate_closing_tag(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking</thought></thought>\n<content>reply</content>"
+        result = t.sanitize(raw)
+        assert result == "<thought>thinking</thought>\n<content>reply</content>"
+
+    def test_sanitize_unclosed_content_tag(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking</thought>\n<content>reply"
+        result = t.sanitize(raw)
+        assert "</content>" in result
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+
+    def test_sanitize_unclosed_thought_tag(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking\n<content>reply</content>"
+        result = t.sanitize(raw)
+        assert "</thought>" in result
+
+    def test_sanitize_leaves_valid_text_unchanged(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking</thought>\n<content>reply</content>"
+        result = t.sanitize(raw)
+        assert result == raw
+
+    def test_sanitize_combined_errors(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>thinking</thought></thought>\n<content>reply<///content>"
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert parsed.fields["thought"] == "thinking"
+        assert parsed.fields["content"] == "reply"
+
+    def test_sanitize_only_affects_declared_fields(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>has <code>inline</code> stuff</thought>\n<content>reply<///code></content>"
+        result = t.sanitize(raw)
+        assert "<///code>" in result
+
+    def test_sanitize_with_custom_reasoning_field(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        raw = "<think>reasoning</think></think>\n<content>reply<///content>"
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert parsed.fields["think"] == "reasoning"
+
+    def test_sanitize_real_world_proxy_example(self) -> None:
+        """Test with the actual malformed output from proxy log 7d7d07e7."""
+        t = get_template("xml")
+        raw = (
+            "<thought>\nLumen has now successfully searched.\n"
+            'Address the "Tool" struggle.\n</thought>\n'
+            "<content>\nReal content here.\n<///content>"
+        )
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        errors = t.validate(parsed)
+        assert errors == []
+        assert "Real content here." in parsed.fields["content"]
+
+
+class TestGemmaReasoningSanitization:
+    """Gemma reasoning template inherits XML sanitization."""
+
+    def test_sanitize_corrupted_closing(self) -> None:
+        t = get_template("gemma_reasoning")
+        raw = "<thought>*   block\n</thought>\n<content>reply<///content>"
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+
+    def test_sanitize_with_custom_field(self) -> None:
+        t = get_template("gemma_reasoning", {"reasoning_field": "analysis"})
+        raw = "<analysis>blocks</analysis></analysis>\n<content>reply</content>"
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+
+
+class TestJsonSanitization:
+    """Tests for JSON template Tier 1 regex sanitization."""
+
+    def test_sanitize_trailing_comma(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "thinking", "content": "reply",}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert parsed.fields["content"] == "reply"
+
+    def test_sanitize_missing_closing_brace(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "thinking", "content": "reply"'
+        result = t.sanitize(raw)
+        assert result.rstrip().endswith("}")
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+
+    def test_sanitize_leaves_valid_json_unchanged(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "thinking", "content": "reply"}'
+        result = t.sanitize(raw)
+        assert result == raw
+
+    def test_sanitize_trailing_comma_in_nested(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "analysis,", "content": "reply",}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert parsed.fields["thought"] == "analysis,"
+
+    def test_sanitize_multiple_missing_braces(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "thinking", "content": "reply'
+        result = t.sanitize(raw)
+        assert "}" in result
+
+
+class TestLlmRepairPrompt:
+    """Tests for llm_repair_prompt() method on all template types."""
+
+    def test_xml_repair_prompt_contains_field_names(self) -> None:
+        t = get_template("xml")
+        prompt = t.llm_repair_prompt()
+        assert "<thought>" in prompt
+        assert "</thought>" in prompt
+        assert "<content>" in prompt
+        assert "</content>" in prompt
+        assert "strict order" in prompt
+
+    def test_xml_repair_prompt_respects_custom_field(self) -> None:
+        t = get_template("xml", {"reasoning_field": "think"})
+        prompt = t.llm_repair_prompt()
+        assert "<think>" in prompt
+        assert "thought" not in prompt
+
+    def test_json_repair_prompt_contains_keys(self) -> None:
+        t = get_template("json")
+        prompt = t.llm_repair_prompt()
+        assert '"thought"' in prompt
+        assert '"content"' in prompt
+
+    def test_json_repair_prompt_respects_custom_field(self) -> None:
+        t = get_template("json", {"reasoning_field": "reasoning"})
+        prompt = t.llm_repair_prompt()
+        assert '"reasoning"' in prompt
+        assert '"thought"' not in prompt
+
+    def test_gemma_repair_prompt_contains_fields(self) -> None:
+        t = get_template("gemma_reasoning")
+        prompt = t.llm_repair_prompt()
+        assert "<thought>" in prompt
+        assert "<content>" in prompt
+
+    def test_empty_template_returns_empty_repair_prompt(self) -> None:
+        t = get_template("empty")
+        assert t.llm_repair_prompt() == ""
+
+    def test_xml_emotions_repair_prompt_includes_all_fields(self) -> None:
+        t = get_template("xml_emotions")
+        prompt = t.llm_repair_prompt()
+        assert "<thought>" in prompt
+        assert "<emotions>" in prompt
+        assert "<content>" in prompt
+
+
+class TestSanitizeIdempotent:
+    """Verify that sanitize() is a no-op on already-valid text."""
+
+    VALID_XML: ClassVar[str] = "<thought>thinking</thought>\n<content>reply</content>"
+    VALID_JSON: ClassVar[str] = '{"thought": "thinking", "content": "reply"}'
+
+    def test_xml_idempotent(self) -> None:
+        t = get_template("xml")
+        assert t.sanitize(self.VALID_XML) == self.VALID_XML
+
+    def test_xml_double_sanitize(self) -> None:
+        t = get_template("xml")
+        raw = "<thought>t</thought></thought>\n<content>c<///content>"
+        first = t.sanitize(raw)
+        second = t.sanitize(first)
+        assert first == second
+
+    def test_json_idempotent(self) -> None:
+        t = get_template("json")
+        assert t.sanitize(self.VALID_JSON) == self.VALID_JSON
+
+    def test_json_double_sanitize(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "t", "content": "c",}'
+        first = t.sanitize(raw)
+        second = t.sanitize(first)
+        assert first == second
+
+    def test_gemma_idempotent(self) -> None:
+        t = get_template("gemma_reasoning")
+        assert t.sanitize(self.VALID_XML) == self.VALID_XML
+
+    def test_empty_template_sanitize_is_noop(self) -> None:
+        t = get_template("empty")
+        text = "Hello, this is plain text with <random> tags"
+        assert t.sanitize(text) == text
+
+
+class TestLlmRepairMocked:
+    """Unit tests for llm_repair using a mocked LLM provider."""
+
+    @pytest.mark.asyncio
+    async def test_successful_repair(self) -> None:
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(
+            return_value=AsyncMock(content="<thought>t</thought>\n<content>c</content>")
+        )
+        result = await llm_repair(mock_llm, "broken", "format spec")
+        assert result == "<thought>t</thought>\n<content>c</content>"
+        mock_llm.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_original_on_all_retries_exhausted(self) -> None:
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(side_effect=RuntimeError("API down"))
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(mock_llm, "original", "spec", max_retries=1)
+        assert result == "original"
+
+    @pytest.mark.asyncio
+    async def test_retries_on_empty_response(self) -> None:
+        mock_llm = AsyncMock()
+        empty_resp = AsyncMock(content="")
+        good_resp = AsyncMock(content="<thought>t</thought>\n<content>c</content>")
+        mock_llm.generate = AsyncMock(side_effect=[empty_resp, good_resp])
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(mock_llm, "broken", "spec", max_retries=1)
+        assert result == "<thought>t</thought>\n<content>c</content>"
+        assert mock_llm.generate.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_returns_original_on_persistent_empty(self) -> None:
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(return_value=AsyncMock(content=""))
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(mock_llm, "original", "spec", max_retries=2)
+        assert result == "original"
+
+    @pytest.mark.asyncio
+    async def test_retries_on_exception_then_succeeds(self) -> None:
+        mock_llm = AsyncMock()
+        good_resp = AsyncMock(content="fixed output")
+        mock_llm.generate = AsyncMock(side_effect=[RuntimeError("transient"), good_resp])
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(mock_llm, "broken", "spec", max_retries=1)
+        assert result == "fixed output"
+
+    @pytest.mark.asyncio
+    async def test_json_no_brace_returns_text(self) -> None:
+        """sanitize_json_structure returns text unchanged if no braces found."""
+        from mai_gram.response_templates._sanitize import sanitize_json_structure
+
+        assert sanitize_json_structure("no json here") == "no json here"

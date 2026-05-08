@@ -11,6 +11,7 @@ import json
 import re
 from typing import Any
 
+from mai_gram.response_templates._sanitize import sanitize_json_structure
 from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
@@ -155,6 +156,13 @@ class JsonTemplate(ResponseTemplate):
                 is_positive=False,
             ),
         ]
+
+    def sanitize(self, raw_text: str) -> str:
+        return sanitize_json_structure(raw_text)
+
+    def llm_repair_prompt(self) -> str:
+        keys = [f.name for f in self.get_fields()]
+        return f"JSON object with exactly these keys: {json.dumps(keys)}"
 
     def parse(self, raw_text: str) -> ParsedResponse:
         data = _extract_json(raw_text)

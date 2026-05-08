@@ -13,6 +13,7 @@ from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.llm.provider import LLMProviderError
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.messenger.base import OutgoingMessage
+from mai_gram.response_templates._sanitize import llm_repair
 from mai_gram.response_templates.registry import get_template
 
 if TYPE_CHECKING:
@@ -160,12 +161,19 @@ class ConversationExecutor:
         *,
         tool_max_iterations: int,
         renderer: ConversationRenderer,
+        format_repair_config: dict[str, Any] | None = None,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
         self._tool_max_iterations = tool_max_iterations
         self._renderer = renderer
         self._tool_activity = ToolActivityNotifier(messenger)
+        self._format_repair_config = format_repair_config or {
+            "model": "openrouter/free",
+            "temperature": 0.0,
+            "max_tokens": 8192,
+            "enabled": True,
+        }
 
     async def execute(
         self,
@@ -222,7 +230,12 @@ class ConversationExecutor:
         on_tool_call_display: Callable[..., Awaitable[None]],
         on_tool_result_display: Callable[..., Awaitable[None]],
     ) -> tuple[_StreamOutcome, ParsedResponse]:
-        """Stream response and validate against template, retrying on failure."""
+        """Stream response and validate against template, retrying on failure.
+
+        Applies a two-tier correction pipeline before falling back to retry:
+        - Tier 1: deterministic regex sanitization via template.sanitize()
+        - Tier 2: LLM-based structural repair via a cheap auxiliary model
+        """
         last_errors: list[str] = []
         prefill = template.assistant_prefill() or ""
 
@@ -244,11 +257,50 @@ class ConversationExecutor:
                     cost=outcome.cost,
                     is_byok=outcome.is_byok,
                 )
+
+            # Tier 1: regex-based sanitization
+            sanitized = template.sanitize(outcome.response_text)
+            if sanitized != outcome.response_text:
+                logger.info(
+                    "Tier 1 (regex) corrected format for chat %s",
+                    request.chat.id,
+                )
+                outcome = _replace_response_text(outcome, sanitized)
+
             parsed = template.parse(outcome.response_text)
             errors = template.validate(parsed)
 
             if not errors:
                 return outcome, parsed
+
+            # Tier 2: LLM-based repair
+            repair_config = self._format_repair_config
+            format_spec = template.llm_repair_prompt()
+            if repair_config["enabled"] and format_spec:
+                logger.info(
+                    "Tier 2 (LLM repair) attempting fix for chat %s: %s",
+                    request.chat.id,
+                    "; ".join(errors),
+                )
+                repaired = await llm_repair(
+                    self._llm,
+                    outcome.response_text,
+                    format_spec,
+                    model=repair_config["model"],
+                    temperature=repair_config["temperature"],
+                    max_tokens=repair_config["max_tokens"],
+                    extra_params=repair_config.get("extra_params"),
+                )
+                if repaired != outcome.response_text:
+                    outcome = _replace_response_text(outcome, repaired)
+                    parsed = template.parse(outcome.response_text)
+                    errors = template.validate(parsed)
+                    if not errors:
+                        logger.info(
+                            "Tier 2 (LLM) successfully corrected format for chat %s",
+                            request.chat.id,
+                        )
+                        return outcome, parsed
 
             last_errors = errors
             logger.warning(
@@ -646,6 +698,20 @@ class ConversationExecutor:
         from mai_gram.core.md_to_telegram import format_reasoning_html
 
         return format_reasoning_html(outcome.response_reasoning, expandable=True)
+
+
+def _replace_response_text(outcome: _StreamOutcome, new_text: str) -> _StreamOutcome:
+    """Return a copy of *outcome* with response_text replaced."""
+    return _StreamOutcome(
+        response_text=new_text,
+        response_reasoning=outcome.response_reasoning,
+        placeholder_msg_id=outcome.placeholder_msg_id,
+        committed_content_offset=outcome.committed_content_offset,
+        reasoning_committed=outcome.reasoning_committed,
+        usage=outcome.usage,
+        cost=outcome.cost,
+        is_byok=outcome.is_byok,
+    )
 
 
 def _parse_hidden_fields(hidden_json: str | None) -> set[str]:

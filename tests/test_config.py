@@ -306,6 +306,18 @@ class TestSettingsLoaders:
         assert s1 is not s2
 
 
+class TestFormatRepairConfig:
+    def test_get_format_repair_config_returns_dict(self) -> None:
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        config = settings.get_format_repair_config()
+        assert isinstance(config, dict)
+        assert "model" in config
+        assert "temperature" in config
+        assert "max_tokens" in config
+        assert "enabled" in config
+        assert config["model"] == "openrouter/free"
+
+
 class TestAllowedUsers:
     def test_empty_allowed_users_returns_empty_set(self) -> None:
         settings = Settings(allowed_users="", _env_file=None)  # type: ignore[call-arg]

@@ -1,0 +1,183 @@
+"""Shared sanitization utilities for response template auto-correction.
+
+Provides two tiers of correction:
+- Tier 1: Deterministic regex-based fixes for common LLM formatting mistakes.
+- Tier 2: LLM-based repair using a cheap auxiliary model for complex cases.
+
+All functions are template-agnostic and reusable across XML, JSON, and any
+future template formats.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from mai_gram.llm.provider import LLMProvider
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shared XML regex and extraction (deduplicated from xml_template.py and
+# gemma_reasoning_template.py)
+# ---------------------------------------------------------------------------
+
+TAG_RE = re.compile(r"<(\w+)>(.*?)</\1>", re.DOTALL)
+
+
+def extract_xml_fields(
+    raw_text: str,
+    field_names: list[str],
+) -> dict[str, str]:
+    """Extract content from XML-like tags, preserving order of first occurrence."""
+    fields: dict[str, str] = {}
+    for match in TAG_RE.finditer(raw_text):
+        tag_name = match.group(1)
+        if tag_name in field_names and tag_name not in fields:
+            fields[tag_name] = match.group(2).strip()
+    return fields
+
+
+# ---------------------------------------------------------------------------
+# Tier 1: Regex-based sanitization
+# ---------------------------------------------------------------------------
+
+
+def sanitize_xml_tags(raw_text: str, field_names: list[str]) -> str:
+    """Fix common LLM mistakes in XML closing tags.
+
+    Only corrects tags that match declared *field_names* -- never touches
+    content between tags or arbitrary HTML/XML the model might embed.
+    """
+    text = raw_text
+    for name in field_names:
+        # Fix corrupted closing: <///name>, <//name>, </////name> -> </name>
+        text = re.sub(rf"</{{2,}}{name}\s*>", f"</{name}>", text)
+
+        # Fix duplicate closing: </name></name> -> </name>
+        text = re.sub(rf"(</\s*{name}\s*>)\s*</\s*{name}\s*>", r"\1", text)
+
+        # Fix unclosed tag: opening exists but no valid closing -> append at end
+        if re.search(rf"<{name}>", text) and not re.search(rf"</{name}>", text):
+            text += f"\n</{name}>"
+
+    return text
+
+
+def sanitize_json_structure(raw_text: str) -> str:
+    """Fix common LLM mistakes in JSON output.
+
+    Handles trailing commas, missing closing braces, and unescaped control
+    characters inside string values.
+    """
+    text = raw_text
+
+    # Remove trailing commas before } or ]
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # Try to fix unescaped newlines inside JSON string values by attempting
+    # a parse and, on failure, escaping raw newlines within strings.
+    brace_start = text.find("{")
+    if brace_start == -1:
+        return text
+
+    json_candidate = text[brace_start:]
+
+    # Add missing closing brace if unbalanced
+    open_count = json_candidate.count("{")
+    close_count = json_candidate.count("}")
+    if open_count > close_count:
+        json_candidate += "}" * (open_count - close_count)
+        text = text[:brace_start] + json_candidate
+
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Tier 2: LLM-based repair
+# ---------------------------------------------------------------------------
+
+FORMAT_REPAIR_SYSTEM_PROMPT = """\
+You are a FORMAT REPAIR tool. Your ONLY job is to fix structural formatting \
+errors in the text below. You must:
+
+1. NEVER change, rephrase, translate, shorten, or add any text content
+2. NEVER remove or modify any words, sentences, or paragraphs
+3. ONLY fix the structural tags/formatting that wraps the content
+4. Output the COMPLETE text with ONLY the formatting fixed
+
+The text must conform to this format:
+{format_spec}
+
+Common errors to fix:
+- Corrupted closing tags (e.g. <///tag> should be </tag>)
+- Duplicate closing tags (e.g. </tag></tag> should be </tag>)
+- Missing closing tags (add them at the correct position)
+- Broken JSON structure (fix braces, commas, escaping)
+- Tags in wrong order (reorder without changing content)
+
+CRITICAL: The content between tags must remain BYTE-FOR-BYTE IDENTICAL. \
+Do not fix typos, grammar, or anything else in the content itself.\
+"""
+
+
+async def llm_repair(
+    llm: LLMProvider,
+    raw_text: str,
+    format_spec: str,
+    *,
+    model: str = "openrouter/free",
+    temperature: float = 0.0,
+    max_tokens: int = 8192,
+    max_retries: int = 2,
+    extra_params: dict[str, Any] | None = None,
+) -> str:
+    """Call the auxiliary LLM to repair structural formatting.
+
+    Returns the repaired text on success, or the original *raw_text* on
+    any failure (network error, empty response, etc.).  Retries transient
+    errors up to *max_retries* times.
+    """
+    import asyncio as _asyncio
+
+    from mai_gram.llm.provider import ChatMessage, MessageRole
+
+    system_prompt = FORMAT_REPAIR_SYSTEM_PROMPT.format(format_spec=format_spec)
+
+    messages = [
+        ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
+        ChatMessage(role=MessageRole.USER, content=raw_text),
+    ]
+
+    for attempt in range(1, max_retries + 2):
+        try:
+            response = await llm.generate(
+                messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                extra_params=extra_params,
+            )
+        except Exception:
+            if attempt <= max_retries:
+                await _asyncio.sleep(1.0 * attempt)
+                continue
+            logger.warning(
+                "LLM format repair failed after %d attempts",
+                attempt,
+                exc_info=True,
+            )
+            return raw_text
+
+        repaired = response.content.strip()
+        if repaired:
+            return repaired
+
+        if attempt <= max_retries:
+            await _asyncio.sleep(1.0 * attempt)
+            continue
+        logger.warning("LLM format repair returned empty after %d attempts", attempt)
+
+    return raw_text

@@ -78,11 +78,14 @@ title = "Gemini 3 Flash"
 
 # ── Gemma 4 31B (free tier) ──────────────────────────────────────────
 [models."google/gemma-4-31b-it:free"]
-title = "Gemma 4 31B (free) @none t1.2"
-reasoning.effort = "none"
-temperature = 1.0
+title = "Gemma 4 31B (free)"
+#reasoning.effort = "none"
+temperature = 1.2
+top_p = 0.99
 provider.order = ["ai-studio"]
 provider.allow_fallbacks = false
+#stop = ["</content>"]
+max_output_tokens = 4096
 
 # ── Grok 4.1 Fast ────────────────────────────────────────────────────
 [models."x-ai/grok-4.1-fast"]
@@ -98,7 +101,6 @@ reasoning.effort = "high"
 title = "Gemini 3.1 Pro"
 reasoning.effort = "low"
 temperature = 1.0
-max_tokens = 65536
 
 # ── Gemini 2.5 Pro (disabled) ────────────────────────────────────────
 #[models."google/gemini-2.5-pro"]
@@ -107,6 +109,20 @@ max_tokens = 65536
 #reasoning.effort = "high"
 #provider.order = ["Google AI Studio"]
 #provider.allow_fallbacks = false
+
+# ─────────────────────────────────────────────────────────────────────
+# Format repair -- auxiliary model for fixing malformed template output
+# ─────────────────────────────────────────────────────────────────────
+# When a response passes Tier 1 regex sanitization but still fails
+# template validation, this cheap model is called to fix structural
+# formatting (XML tags, JSON braces) without modifying content.
+
+[format_repair]
+model = "openrouter/free"                  # Routes to a capable free model
+temperature = 0.0                      # Deterministic -- no creativity needed
+max_tokens = 8192                      # Must be enough to reproduce the full response
+enabled = true                         # Set to false to skip LLM repair tier
+reasoning.effort = "none"              # Disable reasoning -- speed over quality
 
 # ─────────────────────────────────────────────────────────────────────
 # Tool configuration

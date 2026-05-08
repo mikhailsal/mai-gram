@@ -253,6 +253,13 @@ class Settings(BaseSettings):
         """
         return self._models_loader().get_model_params(model_key)
 
+    def get_format_repair_config(self) -> dict[str, Any]:
+        """Load format-repair auxiliary model configuration.
+
+        Returns a dict with keys: model, temperature, max_tokens, enabled.
+        """
+        return self._models_loader().get_format_repair_config()
+
     def get_tool_filter(self) -> tuple[list[str] | None, list[str] | None]:
         """Load tool enable/disable lists from the models config.
 

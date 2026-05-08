@@ -668,6 +668,58 @@ class TestModelsConfigLoaderRefresh:
         assert loader.get_enabled_models("fb") == ["model-b", "model-c"]
 
 
+class TestModelsConfigLoaderFormatRepair:
+    """get_format_repair_config() resolution."""
+
+    def test_reads_format_repair_section(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[format_repair]",
+                    'model = "openrouter/free"',
+                    "temperature = 0.0",
+                    "max_tokens = 8192",
+                    "enabled = true",
+                    "[format_repair.reasoning]",
+                    'effort = "none"',
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+        config = loader.get_format_repair_config()
+        assert config["model"] == "openrouter/free"
+        assert config["temperature"] == 0.0
+        assert config["max_tokens"] == 8192
+        assert config["enabled"] is True
+        assert config["extra_params"] == {"reasoning": {"effort": "none"}}
+
+    def test_defaults_when_section_missing(self, tmp_path) -> None:
+        toml = _write_models_toml(tmp_path, "[models]\n")
+        loader = ModelsConfigLoader(toml)
+        config = loader.get_format_repair_config()
+        assert config["model"] == "openrouter/free"
+        assert config["temperature"] == 0.0
+        assert config["max_tokens"] == 8192
+        assert config["enabled"] is True
+        assert config["extra_params"] is None
+
+    def test_disabled_config(self, tmp_path) -> None:
+        toml = _write_models_toml(
+            tmp_path,
+            "\n".join(
+                [
+                    "[format_repair]",
+                    'model = "openrouter/free"',
+                    "enabled = false",
+                ]
+            ),
+        )
+        loader = ModelsConfigLoader(toml)
+        config = loader.get_format_repair_config()
+        assert config["enabled"] is False
+
+
 # ── BotsConfigLoader ─────────────────────────────────────────────────
 
 

@@ -200,6 +200,27 @@ class ResponseTemplate(ABC):
         close_tag = tag.split()[0]
         return f"<{tag}>{descriptor.label}\n{inner_html}</{close_tag}>"
 
+    def sanitize(self, raw_text: str) -> str:
+        """Tier 1: regex-based normalization of raw LLM output.
+
+        Auto-corrects known structural formatting mistakes (e.g. corrupted
+        closing tags, duplicate tags, trailing commas) without altering
+        semantic content.  The default implementation returns the text
+        unchanged.  Override in subclasses with format-specific rules.
+        """
+        return raw_text
+
+    def llm_repair_prompt(self) -> str:
+        """Return a format specification for the LLM repair prompt.
+
+        When non-empty, enables Tier 2 LLM-based correction: the executor
+        will call a cheap auxiliary model with this spec to fix structural
+        errors that regex sanitization could not handle.
+
+        Return an empty string to skip LLM repair for this template.
+        """
+        return ""
+
     def assistant_prefill(self) -> str | None:
         """Return text for an assistant prefill message, or ``None`` to skip.
 

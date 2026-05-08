@@ -159,6 +159,7 @@ def _build_conversation_services(
         llm_provider,
         tool_max_iterations=tool_max_iterations,
         renderer=response_renderer,
+        format_repair_config=settings.get_format_repair_config(),
     )
     conversation_service = ConversationService(
         messenger,
