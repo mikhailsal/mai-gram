@@ -72,13 +72,13 @@ def sanitize_json_structure(raw_text: str) -> str:
     Handles trailing commas, missing closing braces, and unescaped control
     characters inside string values.
     """
+    import json
+
     text = raw_text
 
     # Remove trailing commas before } or ]
     text = re.sub(r",\s*([}\]])", r"\1", text)
 
-    # Try to fix unescaped newlines inside JSON string values by attempting
-    # a parse and, on failure, escaping raw newlines within strings.
     brace_start = text.find("{")
     if brace_start == -1:
         return text
@@ -92,7 +92,53 @@ def sanitize_json_structure(raw_text: str) -> str:
         json_candidate += "}" * (open_count - close_count)
         text = text[:brace_start] + json_candidate
 
+    # If JSON parses successfully already, return as-is
+    try:
+        json.loads(text[brace_start:])
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # Escape unescaped control characters (newlines, tabs, carriage returns)
+    # inside JSON string values. We walk through the JSON candidate and only
+    # escape raw control chars that appear between unescaped quotes.
+    json_part = text[brace_start:]
+    fixed = _escape_control_chars_in_json_strings(json_part)
+    text = text[:brace_start] + fixed
+
     return text
+
+
+def _escape_control_chars_in_json_strings(json_text: str) -> str:
+    """Escape raw newlines, tabs, and carriage returns inside JSON strings.
+
+    Walks through the text character-by-character, tracking whether we are
+    inside a JSON string value, and replaces unescaped control characters
+    with their proper escape sequences.
+    """
+    result: list[str] = []
+    in_string = False
+    i = 0
+    n = len(json_text)
+
+    while i < n:
+        ch = json_text[i]
+
+        if ch == '"' and (i == 0 or json_text[i - 1] != "\\"):
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch == "\n":
+            result.append("\\n")
+        elif in_string and ch == "\r":
+            result.append("\\r")
+        elif in_string and ch == "\t":
+            result.append("\\t")
+        else:
+            result.append(ch)
+
+        i += 1
+
+    return "".join(result)
 
 
 # ---------------------------------------------------------------------------

@@ -1896,6 +1896,62 @@ class TestJsonSanitization:
         result = t.sanitize(raw)
         assert "}" in result
 
+    def test_sanitize_unescaped_newline_in_value(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "line1\nline2", "content": "reply"}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert "line1" in parsed.fields["thought"]
+        assert "line2" in parsed.fields["thought"]
+
+    def test_sanitize_unescaped_newline_in_content(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "thinking", "content": "para1\n\npara2"}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert "para1" in parsed.fields["content"]
+        assert "para2" in parsed.fields["content"]
+
+    def test_sanitize_unescaped_tab_in_value(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "col1\tcol2", "content": "reply"}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert "col1" in parsed.fields["thought"]
+
+    def test_sanitize_unescaped_carriage_return(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "line1\r\nline2", "content": "reply"}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+
+    def test_sanitize_multiple_issues_combined(self) -> None:
+        """Trailing comma + unescaped newlines should both be fixed."""
+        t = get_template("json")
+        raw = '{"thought": "line1\nline2", "content": "reply",}'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+        assert "line1" in parsed.fields["thought"]
+
+    def test_sanitize_preserves_already_escaped_newlines(self) -> None:
+        t = get_template("json")
+        raw = '{"thought": "line1\\nline2", "content": "reply"}'
+        result = t.sanitize(raw)
+        assert result == raw
+
+    def test_sanitize_newlines_with_missing_brace(self) -> None:
+        """Unescaped newlines + missing brace should both be fixed."""
+        t = get_template("json")
+        raw = '{"thought": "line1\nline2", "content": "reply"'
+        result = t.sanitize(raw)
+        parsed = t.parse(result)
+        assert t.validate(parsed) == []
+
 
 class TestLlmRepairPrompt:
     """Tests for llm_repair_prompt() method on all template types."""
