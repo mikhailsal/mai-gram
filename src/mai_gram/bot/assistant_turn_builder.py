@@ -52,6 +52,7 @@ class AssistantTurnBuilder:
         telegram_chat_id: str,
         failure_log_message: str,
         current_time: datetime | None = None,
+        image_urls: list[str] | None = None,
     ) -> AssistantTurnRequest:
         now = current_time or datetime.now(timezone.utc)
         message_store, wiki_store = self._make_stores(session)
@@ -70,6 +71,7 @@ class AssistantTurnBuilder:
             telegram_chat_id=telegram_chat_id,
             failure_log_message=failure_log_message,
             current_time=now,
+            image_urls=image_urls,
         )
 
     async def build_request(
@@ -104,6 +106,7 @@ class AssistantTurnBuilder:
         telegram_chat_id: str,
         failure_log_message: str,
         current_time: datetime,
+        image_urls: list[str] | None = None,
     ) -> AssistantTurnRequest:
         model_key = chat.llm_model
         prompt_builder = PromptBuilder(
@@ -123,6 +126,7 @@ class AssistantTurnBuilder:
             send_datetime=chat.send_datetime,
             chat_timezone=chat.timezone,
             cut_above_message_id=chat.cut_above_message_id,
+            image_urls=image_urls,
         )
         extra_params = self._settings.get_model_params(model_key)
         max_output = self._settings.get_max_output_tokens(model_key)

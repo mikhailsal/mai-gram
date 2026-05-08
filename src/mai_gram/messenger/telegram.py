@@ -77,6 +77,7 @@ class TelegramMessenger(Messenger):
         self._message_handlers: list[MessageHandler] = []
         self._callback_handlers: list[MessageHandler] = []
         self._document_handlers: list[MessageHandler] = []
+        self._photo_handlers: list[MessageHandler] = []
         self._command_handlers: dict[str, MessageHandler] = {}
         self._command_descriptions: dict[str, str] = {}
 
@@ -113,9 +114,11 @@ class TelegramMessenger(Messenger):
             callback_handlers=self._callback_handlers,
             document_handlers=self._document_handlers,
             message_handlers=self._message_handlers,
+            photo_handlers=self._photo_handlers,
             make_command_wrapper=self._make_command_wrapper,
             handle_callback_query=self._handle_callback_query,
             handle_document=self._handle_document,
+            handle_photo=self._handle_photo,
             handle_message=self._handle_message,
         )
         await self._app.initialize()
@@ -241,6 +244,10 @@ class TelegramMessenger(Messenger):
         """Register a handler for incoming document uploads."""
         self._document_handlers.append(handler)
 
+    def register_photo_handler(self, handler: MessageHandler) -> None:
+        """Register a handler for incoming photo messages."""
+        self._photo_handlers.append(handler)
+
     def build_inline_keyboard(self, buttons: InlineKeyboardSpec) -> Any:
         """Build Telegram inline keyboard markup for shared workflows."""
         return build_inline_keyboard(buttons)
@@ -304,6 +311,14 @@ class TelegramMessenger(Messenger):
                 await handler(msg)
 
         return wrapper
+
+    async def _handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle incoming photo messages."""
+        _ = context
+        msg = convert_update_to_message(update, bot_id=self._bot_id)
+        if msg:
+            for handler in self._photo_handlers:
+                await handler(msg)
 
     async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming document uploads."""

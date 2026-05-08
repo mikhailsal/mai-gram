@@ -82,6 +82,7 @@ def _make_handler(monkeypatch, *, bot_allowed_users: list[object] | None = None)
     messenger.register_message_handler = MagicMock()
     messenger.register_callback_handler = MagicMock()
     messenger.register_document_handler = MagicMock()
+    messenger.register_photo_handler = MagicMock()
     messenger.send_message = AsyncMock()
     messenger.build_inline_keyboard = MagicMock(return_value="keyboard")
 
@@ -348,3 +349,93 @@ async def test_get_chat_and_chat_id_for_bot_scoped_messages(monkeypatch) -> None
 
     assert handler._chat_id_for(message) == "user-1@bot-9"
     assert chat.id == "chat-1"
+
+
+async def test_handle_photo_delegates_to_conversation_service(monkeypatch) -> None:
+    handler, _, services, _, _, _ = _make_handler(monkeypatch)
+    services.conversation_service.handle_message.return_value = ["img-resp-1"]
+
+    msg = _make_message(chat_id="chat-photo")
+    msg = IncomingMessage(
+        platform=msg.platform,
+        user_id=msg.user_id,
+        chat_id=msg.chat_id,
+        message_id=msg.message_id,
+        message_type=MessageType.TEXT,
+        text="Describe this",
+        photo_file_id="photo-file-123",
+    )
+
+    await handler._handle_photo(msg)
+
+    services.conversation_service.handle_message.assert_awaited_once()
+    assert handler._response_message_ids["chat-photo"] == ["img-resp-1"]
+
+
+async def test_handle_photo_rejects_during_setup(monkeypatch) -> None:
+    handler, messenger, services, _, _, _ = _make_handler(monkeypatch)
+    services.setup_workflow.is_in_setup.return_value = True
+
+    msg = IncomingMessage(
+        platform="telegram",
+        user_id="user-1",
+        chat_id="chat-1",
+        message_id="msg-1",
+        message_type=MessageType.TEXT,
+        text="",
+        photo_file_id="photo-file-123",
+    )
+
+    await handler._handle_photo(msg)
+
+    services.conversation_service.handle_message.assert_not_called()
+    sent_text = messenger.send_message.await_args.args[0].text
+    assert "setup" in sent_text.lower()
+
+
+async def test_handle_photo_stops_when_access_denied(monkeypatch) -> None:
+    handler, _, services, access_control, _, _ = _make_handler(monkeypatch)
+    access_control.check_access.return_value = False
+
+    msg = IncomingMessage(
+        platform="telegram",
+        user_id="user-1",
+        chat_id="chat-1",
+        message_id="msg-1",
+        message_type=MessageType.TEXT,
+        text="",
+        photo_file_id="photo-file-123",
+    )
+
+    await handler._handle_photo(msg)
+
+    services.conversation_service.handle_message.assert_not_called()
+
+
+async def test_handle_photo_stops_when_rate_limited(monkeypatch) -> None:
+    handler, _, services, _, rate_limiter, _ = _make_handler(monkeypatch)
+    rate_limiter.check_rate_limit.return_value = False
+
+    msg = IncomingMessage(
+        platform="telegram",
+        user_id="user-1",
+        chat_id="chat-1",
+        message_id="msg-1",
+        message_type=MessageType.TEXT,
+        text="",
+        photo_file_id="photo-file-123",
+    )
+
+    await handler._handle_photo(msg)
+
+    services.conversation_service.handle_message.assert_not_called()
+
+
+async def test_handle_photo_noop_without_photo_file_id(monkeypatch) -> None:
+    handler, _, services, _, _, _ = _make_handler(monkeypatch)
+
+    msg = _make_message(chat_id="chat-nophoto")
+
+    await handler._handle_photo(msg)
+
+    services.conversation_service.handle_message.assert_not_called()

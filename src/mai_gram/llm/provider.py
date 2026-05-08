@@ -49,13 +49,20 @@ class ToolCall:
 
 @dataclass(frozen=True, slots=True)
 class ChatMessage:
-    """A single message in a conversation."""
+    """A single message in a conversation.
+
+    When ``image_urls`` is provided alongside text content, the message
+    is serialized as a multimodal content array for vision-capable models.
+    Each URL may be an ``https://`` link or a ``data:image/...;base64,...``
+    data-URI.
+    """
 
     role: MessageRole
     content: str
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     reasoning: str | None = None
+    image_urls: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------

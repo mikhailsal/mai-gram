@@ -212,9 +212,10 @@ class OpenRouterProvider(LLMProvider):
         """
         total_chars = 0
         for msg in messages:
-            # ~4 tokens of overhead per message (role, delimiters)
-            total_chars += 16  # 4 tokens x 4 chars/token
+            total_chars += 16  # ~4 tokens overhead per message
             total_chars += len(msg.content)
+            if msg.image_urls:
+                total_chars += 3400 * len(msg.image_urls)  # ~850 tokens per image
         return total_chars // 4
 
     async def close(self) -> None:

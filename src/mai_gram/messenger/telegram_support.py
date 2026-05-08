@@ -61,6 +61,7 @@ def convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingMe
     document_file_id, document_file_name, document_mime_type, document_file_size = (
         _extract_document_fields(message)
     )
+    photo_file_id = _extract_photo_file_id(message)
     return IncomingMessage(
         platform="telegram",
         chat_id=str(message.chat_id),
@@ -76,6 +77,7 @@ def convert_update_to_message(update: Update, *, bot_id: str = "") -> IncomingMe
         document_file_name=document_file_name,
         document_mime_type=document_mime_type,
         document_file_size=document_file_size,
+        photo_file_id=photo_file_id,
         raw=update,
     )
 
@@ -133,9 +135,11 @@ def register_handlers(
     callback_handlers: list[IncomingMessageHandler],
     document_handlers: list[IncomingMessageHandler],
     message_handlers: list[IncomingMessageHandler],
+    photo_handlers: list[IncomingMessageHandler],
     make_command_wrapper: Callable[[IncomingMessageHandler], Any],
     handle_callback_query: TelegramUpdateHandler,
     handle_document: TelegramUpdateHandler,
+    handle_photo: TelegramUpdateHandler,
     handle_message: TelegramUpdateHandler,
 ) -> None:
     """Register the active Telegram handlers onto the application."""
@@ -147,6 +151,9 @@ def register_handlers(
 
     if document_handlers:
         app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+
+    if photo_handlers:
+        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     if message_handlers:
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -298,6 +305,14 @@ def _extract_document_fields(
         message.document.mime_type,
         message.document.file_size,
     )
+
+
+def _extract_photo_file_id(message: Any) -> str | None:
+    """Return the file_id of the highest-resolution photo, if present."""
+    if not message.photo:
+        return None
+    file_id: str = message.photo[-1].file_id
+    return file_id
 
 
 async def _send_once(

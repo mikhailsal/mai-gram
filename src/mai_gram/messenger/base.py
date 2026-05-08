@@ -66,6 +66,9 @@ class IncomingMessage:
         MIME type of the uploaded document.
     document_file_size:
         Size of the uploaded document in bytes.
+    photo_file_id:
+        Platform-specific file identifier for the highest-resolution photo
+        attached to the message. Populated when ``message_type`` is PHOTO.
     raw:
         The original platform-specific message object for advanced use cases.
     """
@@ -85,6 +88,7 @@ class IncomingMessage:
     document_file_name: str | None = None
     document_mime_type: str | None = None
     document_file_size: int | None = None
+    photo_file_id: str | None = None
     raw: Any = field(default=None, repr=False, compare=False)
 
 
@@ -307,6 +311,19 @@ class Messenger(ABC):
         ----------
         handler:
             Async function that will be called for document messages.
+        """
+        del handler
+        return None
+
+    def register_photo_handler(self, handler: MessageHandler) -> None:
+        """Register a handler for incoming photo messages.
+
+        Not all platforms support photo uploads. The default is a no-op.
+
+        Parameters
+        ----------
+        handler:
+            Async function that will be called for photo messages.
         """
         del handler
         return None

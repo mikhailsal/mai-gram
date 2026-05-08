@@ -33,10 +33,14 @@ def serialize_tool_definition(tool: ToolDefinition) -> dict[str, Any]:
 
 
 def serialize_message(message: ChatMessage) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "role": message.role.value,
-        "content": message.content,
-    }
+    if message.image_urls:
+        content: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
+        for url in message.image_urls:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        payload: dict[str, Any] = {"role": message.role.value, "content": content}
+    else:
+        payload = {"role": message.role.value, "content": message.content}
+
     if message.reasoning is not None:
         payload["reasoning"] = message.reasoning
     if message.tool_call_id is not None:

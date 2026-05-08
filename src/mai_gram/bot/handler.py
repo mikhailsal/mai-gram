@@ -186,6 +186,7 @@ class BotHandler:
         self._messenger.register_message_handler(self._handle_message)
         self._messenger.register_callback_handler(self._handle_callback)
         self._messenger.register_document_handler(self._handle_document)
+        self._messenger.register_photo_handler(self._handle_photo)
 
     # -- Setup session helpers --
 
@@ -480,6 +481,28 @@ class BotHandler:
         if not await self._access_control.check_access(message):
             return
         await self._import_workflow.handle_document(message)
+
+    async def _handle_photo(self, message: IncomingMessage) -> None:
+        """Handle incoming photo messages -- download and forward to conversation."""
+        self._message_logger.log_incoming(message)
+        if not await self._access_control.check_access(message):
+            return
+        if not await self._rate_limiter.check_rate_limit(message.user_id, message.chat_id):
+            return
+
+        if self.is_in_setup(message.user_id):
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text="Please finish setup first, then send images.",
+                    chat_id=message.chat_id,
+                )
+            )
+            return
+
+        if not message.photo_file_id:
+            return
+
+        await self._handle_conversation(message)
 
     # -- Message handler --
 

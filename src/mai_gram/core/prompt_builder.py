@@ -53,6 +53,7 @@ class PromptBuilder:
         send_datetime: bool = True,
         chat_timezone: str = "UTC",
         cut_above_message_id: int | None = None,
+        image_urls: list[str] | None = None,
     ) -> list[ChatMessage]:
         """Build full model context: system message + message history."""
         self._chat_timezone = chat_timezone
@@ -76,6 +77,10 @@ class PromptBuilder:
             system_prompt,
             llm_history,
         )
+
+        if image_urls:
+            llm_history = self._attach_images_to_last_user_message(llm_history, image_urls)
+
         context = self._build_context_messages(
             system_prompt,
             llm_history,
@@ -93,6 +98,22 @@ class PromptBuilder:
         )
 
         return context
+
+    @staticmethod
+    def _attach_images_to_last_user_message(
+        history: list[ChatMessage],
+        image_urls: list[str],
+    ) -> list[ChatMessage]:
+        """Attach image_urls to the last user message in the history."""
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].role == MessageRole.USER:
+                history[i] = ChatMessage(
+                    role=history[i].role,
+                    content=history[i].content,
+                    image_urls=image_urls,
+                )
+                break
+        return history
 
     async def _load_wiki_entries(self, chat_id: str) -> list[KnowledgeEntry]:
         wiki_entries, _ = await self._wiki_store.list_entries_sorted(
@@ -171,7 +192,12 @@ class PromptBuilder:
             last = normalized[-1]
             if msg.role == MessageRole.USER and last.role == MessageRole.USER:
                 merged = f"{last.content}\n{msg.content}"
-                normalized[-1] = ChatMessage(role=MessageRole.USER, content=merged)
+                merged_images = (last.image_urls or []) + (msg.image_urls or []) or None
+                normalized[-1] = ChatMessage(
+                    role=MessageRole.USER,
+                    content=merged,
+                    image_urls=merged_images,
+                )
                 continue
 
             normalized.append(msg)

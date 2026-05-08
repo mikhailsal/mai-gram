@@ -475,3 +475,30 @@ def test_resolve_template_handles_invalid_json_params() -> None:
     result = PromptBuilder._resolve_template(chat)
     assert result is not None
     assert result.get_fields()[0].name == "thought"
+
+
+def test_attach_images_to_last_user_message() -> None:
+    history = [
+        ChatMessage(role=MessageRole.SYSTEM, content="You are helpful."),
+        ChatMessage(role=MessageRole.USER, content="First question"),
+        ChatMessage(role=MessageRole.ASSISTANT, content="First answer"),
+        ChatMessage(role=MessageRole.USER, content="Describe this"),
+    ]
+    urls = ["data:image/png;base64,abc123"]
+
+    result = PromptBuilder._attach_images_to_last_user_message(history, urls)
+
+    assert result[-1].image_urls == urls
+    assert result[-1].content == "Describe this"
+    assert result[1].image_urls is None
+
+
+def test_attach_images_noop_when_no_user_messages() -> None:
+    history = [
+        ChatMessage(role=MessageRole.SYSTEM, content="system"),
+    ]
+    urls = ["data:image/png;base64,abc123"]
+
+    result = PromptBuilder._attach_images_to_last_user_message(history, urls)
+
+    assert all(m.image_urls is None for m in result)

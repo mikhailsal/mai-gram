@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -86,3 +87,51 @@ class TestConversationService:
         messenger.send_typing_indicator.assert_awaited_once_with("telegram-chat")
         turn_builder.save_user_message_and_build_request.assert_awaited_once()
         executor.execute.assert_awaited_once_with(request)
+
+    async def test_download_photo_returns_data_uri(self) -> None:
+        service, messenger, _, _ = _make_service()
+        photo_bytes = b"\x89PNG_fake_data"
+        messenger.download_file = AsyncMock(return_value=photo_bytes)
+
+        msg = IncomingMessage(
+            platform="telegram",
+            user_id="test-user",
+            chat_id="test-chat",
+            message_id="msg-1",
+            message_type=MessageType.TEXT,
+            text="",
+            photo_file_id="file-id-123",
+        )
+
+        result = await service._download_photo(msg)
+
+        expected_b64 = base64.b64encode(photo_bytes).decode("ascii")
+        assert result == [f"data:image/jpeg;base64,{expected_b64}"]
+        messenger.download_file.assert_awaited_once_with("file-id-123")
+
+    async def test_download_photo_returns_none_without_photo(self) -> None:
+        service, _, _, _ = _make_service()
+
+        msg = _make_message()
+
+        result = await service._download_photo(msg)
+
+        assert result is None
+
+    async def test_download_photo_returns_none_on_error(self) -> None:
+        service, messenger, _, _ = _make_service()
+        messenger.download_file = AsyncMock(side_effect=RuntimeError("download failed"))
+
+        msg = IncomingMessage(
+            platform="telegram",
+            user_id="test-user",
+            chat_id="test-chat",
+            message_id="msg-1",
+            message_type=MessageType.TEXT,
+            text="",
+            photo_file_id="file-id-broken",
+        )
+
+        result = await service._download_photo(msg)
+
+        assert result is None

@@ -87,9 +87,29 @@ def test_convert_update_to_message_parses_command_document_and_callback() -> Non
         edited_message=None,
     )
 
+    photo_update = SimpleNamespace(
+        callback_query=None,
+        message=SimpleNamespace(
+            chat_id=42,
+            from_user=SimpleNamespace(id=99),
+            message_id=9,
+            text=None,
+            caption="a red square",
+            photo=[
+                SimpleNamespace(file_id="small-id", width=90, height=90),
+                SimpleNamespace(file_id="large-id", width=800, height=800),
+            ],
+            voice=None,
+            document=None,
+            date=datetime.now(timezone.utc),
+        ),
+        edited_message=None,
+    )
+
     callback_message = convert_update_to_message(cast("Update", callback_update), bot_id="bot-a")
     command_message = convert_update_to_message(cast("Update", command_update), bot_id="bot-a")
     document_message = convert_update_to_message(cast("Update", document_update), bot_id="bot-a")
+    photo_message = convert_update_to_message(cast("Update", photo_update), bot_id="bot-a")
 
     assert callback_message is not None
     assert callback_message.message_type is MessageType.CALLBACK
@@ -102,6 +122,9 @@ def test_convert_update_to_message_parses_command_document_and_callback() -> Non
     assert document_message.message_type is MessageType.DOCUMENT
     assert document_message.text == "attached"
     assert document_message.document_file_name == "notes.txt"
+    assert photo_message is not None
+    assert photo_message.photo_file_id == "large-id"
+    assert photo_message.text == "a red square"
 
 
 def test_build_reply_markup_and_parse_mode_helpers() -> None:
@@ -139,18 +162,21 @@ def test_register_handlers_adds_expected_handler_types() -> None:
         callback_handlers=[AsyncMock()],
         document_handlers=[AsyncMock()],
         message_handlers=[AsyncMock()],
+        photo_handlers=[AsyncMock()],
         make_command_wrapper=make_command_wrapper,
         handle_callback_query=AsyncMock(),
         handle_document=AsyncMock(),
+        handle_photo=AsyncMock(),
         handle_message=AsyncMock(),
     )
 
     added_handlers = [call.args[0] for call in app.add_handler.call_args_list]
-    assert len(added_handlers) == 4
+    assert len(added_handlers) == 5
     assert isinstance(added_handlers[0], CommandHandler)
     assert isinstance(added_handlers[1], CallbackQueryHandler)
     assert isinstance(added_handlers[2], MessageHandler)
     assert isinstance(added_handlers[3], MessageHandler)
+    assert isinstance(added_handlers[4], MessageHandler)
 
 
 @pytest.mark.asyncio

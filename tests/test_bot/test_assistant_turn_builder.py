@@ -101,6 +101,7 @@ class TestAssistantTurnBuilder:
             send_datetime=True,
             chat_timezone="UTC",
             cut_above_message_id=None,
+            image_urls=None,
         )
         assert build_mcp_manager.call_args.args[2] is wiki_store
         wiki_store.sync_from_disk.assert_awaited_once_with(chat.id)
