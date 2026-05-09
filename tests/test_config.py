@@ -82,6 +82,9 @@ class TestSettings:
 
     def test_get_all_bot_tokens_empty(self) -> None:
         settings = Settings(
+            telegram_bot_token="",
+            telegram_bot_token_2="",
+            telegram_bot_token_3="",
             bots_config_path="/nonexistent/bots.toml",
             _env_file=None,  # type: ignore[call-arg]
         )
