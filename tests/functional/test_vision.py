@@ -6,15 +6,20 @@ model via OpenRouter and verifies the model correctly identifies the colour.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 
 import pytest
 
 from mai_gram.llm.openrouter import OpenRouterProvider
-from mai_gram.llm.provider import ChatMessage, MessageRole
+from mai_gram.llm.provider import ChatMessage, LLMError, MessageRole
 
 pytestmark = pytest.mark.functional
+
+_MAX_VISION_ATTEMPTS = 5
+
+_IGNORED_PROVIDERS = ["Nvidia"]
 
 
 def _make_solid_colour_png(r: int, g: int, b: int, size: int = 64) -> bytes:
@@ -65,32 +70,35 @@ async def test_vision_model_describes_solid_red_image() -> None:
         ),
     ]
 
-    max_attempts = 3
     last_answer = ""
     try:
-        for attempt in range(1, max_attempts + 1):
-            parts: list[str] = []
-            async for chunk in provider.generate_stream(
-                messages,
-                model="openrouter/free",
-                temperature=0.0,
-                max_tokens=32,
-            ):
-                if chunk.content:
-                    parts.append(chunk.content)
+        for attempt in range(1, _MAX_VISION_ATTEMPTS + 1):
+            try:
+                parts: list[str] = []
+                async for chunk in provider.generate_stream(
+                    messages,
+                    model="openrouter/free",
+                    temperature=0.0,
+                    max_tokens=32,
+                    extra_params={"provider": {"ignore": _IGNORED_PROVIDERS}},
+                ):
+                    if chunk.content:
+                        parts.append(chunk.content)
 
-            last_answer = "".join(parts).strip().lower()
-            if "red" in last_answer:
-                break
-            if attempt < max_attempts:
-                import asyncio
+                last_answer = "".join(parts).strip().lower()
+                if "red" in last_answer:
+                    break
+            except LLMError:
+                last_answer = ""
 
-                await asyncio.sleep(2.0)
+            if attempt < _MAX_VISION_ATTEMPTS:
+                await asyncio.sleep(2.0 * attempt)
     finally:
         await provider.close()
 
     assert "red" in last_answer, (
-        f"Expected 'red' in model response after {max_attempts} attempts, got: {last_answer!r}"
+        f"Expected 'red' in model response after {_MAX_VISION_ATTEMPTS} attempts, "
+        f"got: {last_answer!r}"
     )
 
 

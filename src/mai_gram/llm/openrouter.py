@@ -463,11 +463,11 @@ class OpenRouterProvider(LLMProvider):
             body = response.json()
             error = body.get("error", {})
             msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        except (ValueError, json.JSONDecodeError):
+        except (ValueError, json.JSONDecodeError, httpx.ResponseNotRead):
             try:
                 if response.text:
                     msg = response.text[:500]
-            except (UnicodeDecodeError, AttributeError):
+            except (UnicodeDecodeError, AttributeError, httpx.ResponseNotRead):
                 logger.debug("Failed to read error response body text")
 
         if status == 401:

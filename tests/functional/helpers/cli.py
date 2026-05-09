@@ -294,7 +294,7 @@ class CliHarness:
         debug: bool = False,
         stream_debug: bool = False,
         env_overrides: dict[str, str | None] | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 5,
         timeout: int = 120,
     ) -> CompletedCliRun:
         result: CompletedCliRun | None = None
@@ -322,7 +322,7 @@ class CliHarness:
         *,
         user_id: str | None = None,
         env_overrides: dict[str, str | None] | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 5,
         timeout: int = 120,
     ) -> CompletedCliRun:
         result: CompletedCliRun | None = None

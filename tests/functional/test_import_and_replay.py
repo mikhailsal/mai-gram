@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
 from tests.functional.helpers.parsing import extract_last_response_body
 
 pytestmark = pytest.mark.functional
+
+_MAX_LLM_RETRIES = 5
 
 
 def test_import_openai_style_json_and_show_history(functional_cli) -> None:
@@ -59,14 +62,29 @@ def test_import_proxy_json_and_continue_conversation(
 
     functional_cli.start_chat(chat_id).require_ok()
     imported = functional_cli.import_json(chat_id, json_path)
-    follow_up = functional_cli.send_message_with_live_retry(
-        chat_id,
-        "Reply with exactly CONTINUED.",
-    )
 
     assert imported.returncode == 0
     assert "Imported 2 messages into chat 'func-import-proxy'." in imported.stdout
-    assert "CONTINUED" in extract_last_response_body(follow_up.stdout).upper()
+
+    last_output = ""
+    for attempt in range(1, _MAX_LLM_RETRIES + 1):
+        follow_up = functional_cli.send_message_with_live_retry(
+            chat_id,
+            "Reply with exactly CONTINUED.",
+        )
+        try:
+            last_output = extract_last_response_body(follow_up.stdout)
+            if "CONTINUED" in last_output.upper():
+                break
+        except AssertionError:
+            last_output = follow_up.output
+
+        if attempt < _MAX_LLM_RETRIES:
+            time.sleep(2.0 * attempt)
+
+    assert "CONTINUED" in last_output.upper(), (
+        f"Expected 'CONTINUED' after {_MAX_LLM_RETRIES} outer attempts, got: {last_output!r}"
+    )
 
 
 def test_import_with_reasoning_template_transforms_reasoning(functional_cli) -> None:

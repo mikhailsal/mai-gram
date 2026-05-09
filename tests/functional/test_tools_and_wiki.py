@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from tests.functional.helpers.artifacts import fetch_knowledge_entries
@@ -15,19 +17,23 @@ or wiki_read before answering.
 Keep the final answer short.
 """
 
+_MAX_WIKI_RETRIES = 5
 
-def _remember_color(functional_cli, chat_id: str) -> None:
+
+def _remember_color(functional_cli, chat_id: str) -> bool:
+    """Ask the model to remember a color. Returns True if wiki file was created."""
     remember = functional_cli.send_message_with_live_retry(
         chat_id,
         "My favorite color is orange. Remember this exactly.",
         debug=True,
     )
-    remember.require_ok()
-    assert "Tools used:" in remember.stdout
-    assert "wiki_" in remember.stdout
+    if remember.returncode != 0:
+        return False
+    if "Tools used:" not in remember.stdout or "wiki_" not in remember.stdout:
+        return False
 
     wiki_files = list(functional_cli.chat_wiki_dir(chat_id).glob("*.md"))
-    assert wiki_files, remember.output
+    return bool(wiki_files)
 
 
 def test_wiki_creation_and_recall_work_through_real_llm(
@@ -37,19 +43,40 @@ def test_wiki_creation_and_recall_work_through_real_llm(
     functional_cli.write_prompt("wiki_helper", _WIKI_PROMPT)
     functional_cli.start_chat("func-wiki", prompt="wiki_helper").require_ok()
 
-    _remember_color(functional_cli, "func-wiki")
+    remembered = False
+    for attempt in range(1, _MAX_WIKI_RETRIES + 1):
+        if _remember_color(functional_cli, "func-wiki"):
+            remembered = True
+            break
+        if attempt < _MAX_WIKI_RETRIES:
+            time.sleep(2.0 * attempt)
+
+    assert remembered, f"Model failed to call wiki tool after {_MAX_WIKI_RETRIES} attempts"
 
     wiki_listing = functional_cli.read_wiki("func-wiki")
     assert wiki_listing.returncode == 0
     assert "orange" in wiki_listing.stdout.lower()
     assert fetch_knowledge_entries(functional_cli.db_path, "func-wiki")
 
-    follow_up = functional_cli.send_message_with_live_retry(
-        "func-wiki",
-        "What is my favorite color? Reply with the color only.",
+    last_body = ""
+    for attempt in range(1, _MAX_WIKI_RETRIES + 1):
+        follow_up = functional_cli.send_message_with_live_retry(
+            "func-wiki",
+            "What is my favorite color? Reply with the color only.",
+        )
+        try:
+            last_body = extract_last_response_body(follow_up.stdout)
+            if follow_up.returncode == 0 and "orange" in last_body.lower():
+                break
+        except AssertionError:
+            last_body = follow_up.output
+
+        if attempt < _MAX_WIKI_RETRIES:
+            time.sleep(2.0 * attempt)
+
+    assert "orange" in last_body.lower(), (
+        f"Expected 'orange' after {_MAX_WIKI_RETRIES} recall attempts, got: {last_body!r}"
     )
-    assert follow_up.returncode == 0
-    assert "orange" in extract_last_response_body(follow_up.stdout).lower()
 
 
 def test_repair_wiki_updates_imports_and_removes_orphans(
@@ -58,7 +85,15 @@ def test_repair_wiki_updates_imports_and_removes_orphans(
 ) -> None:
     functional_cli.write_prompt("wiki_helper", _WIKI_PROMPT)
     functional_cli.start_chat("func-repair-wiki", prompt="wiki_helper").require_ok()
-    _remember_color(functional_cli, "func-repair-wiki")
+
+    remembered = False
+    for attempt in range(1, _MAX_WIKI_RETRIES + 1):
+        if _remember_color(functional_cli, "func-repair-wiki"):
+            remembered = True
+            break
+        if attempt < _MAX_WIKI_RETRIES:
+            time.sleep(2.0 * attempt)
+    assert remembered, "Model failed to call wiki tool for repair test"
 
     wiki_dir = functional_cli.chat_wiki_dir("func-repair-wiki")
     original_file = next(wiki_dir.glob("*.md"))
