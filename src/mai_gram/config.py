@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         default="INFO",
         description="Python logging level",
     )
+    log_dir: str = Field(
+        default="data/logs",
+        description="Directory for application log files",
+    )
 
     # -- Access Control --
     allowed_users: str = Field(

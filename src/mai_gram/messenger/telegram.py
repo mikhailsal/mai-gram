@@ -189,7 +189,7 @@ class TelegramMessenger(Messenger):
             return SendResult(success=True, message_id=message_id)
 
         except TelegramError as e:
-            logger.error("Failed to edit Telegram message: %s", e)
+            logger.debug("Failed to edit Telegram message: %s", e)
             return SendResult(success=False, error=str(e))
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:

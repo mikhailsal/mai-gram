@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import builtins
 import contextlib
+import logging
 import os
 import sys
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ class FakeSettings:
         external_mcp_config: dict[str, object] | None = None,
     ) -> None:
         self.log_level = "INFO"
+        self.log_dir = "data/logs"
         self.openrouter_api_key = "test-key"
         self.llm_model = "openrouter/free"
         self.openrouter_base_url = "https://openrouter.example/v1"
@@ -164,20 +166,28 @@ def test_release_pid_lock_only_unlinks_current_pid(monkeypatch, tmp_path) -> Non
     assert pid_file.exists()
 
 
-def test_configure_logging_and_bot_token_validation(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+def test_configure_logging_and_bot_token_validation(tmp_path) -> None:
+    from logging.handlers import RotatingFileHandler
 
-    def fake_basic_config(**kwargs: object) -> None:
-        captured.update(kwargs)
+    root = logging.getLogger()
+    original_handlers = root.handlers[:]
+    original_level = root.level
 
-    monkeypatch.setattr(main.logging, "basicConfig", fake_basic_config)
+    try:
+        root.handlers.clear()
+        settings = FakeSettings(["token-1"])
+        settings.log_level = "not-a-level"
+        settings.log_dir = str(tmp_path / "logs")
+        main._configure_logging(settings)
 
-    settings = FakeSettings(["token-1"])
-    settings.log_level = "not-a-level"
-    main._configure_logging(settings)
-
-    assert captured["level"] == main.logging.INFO
-    assert captured["stream"] is sys.stdout
+        assert root.level == logging.INFO
+        handler_types = {type(h) for h in root.handlers}
+        assert logging.StreamHandler in handler_types
+        assert RotatingFileHandler in handler_types
+        assert (tmp_path / "logs" / "mai-gram.log").exists()
+    finally:
+        root.handlers[:] = original_handlers
+        root.setLevel(original_level)
 
     assert main._get_bot_tokens(FakeSettings(["token-1"])) == ["token-1"]
 
