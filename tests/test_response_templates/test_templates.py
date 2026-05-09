@@ -2164,6 +2164,64 @@ class TestLlmRepairMocked:
         assert result == "fixed output"
 
     @pytest.mark.asyncio
+    async def test_validator_rejects_bad_output_and_retries(self) -> None:
+        mock_llm = AsyncMock()
+        bad_resp = AsyncMock(content="garbage from OCR model")
+        good_resp = AsyncMock(content="<thought>t</thought>\n<content>c</content>")
+        mock_llm.generate = AsyncMock(side_effect=[bad_resp, good_resp])
+        validator = lambda text: "</thought>" in text and "</content>" in text  # noqa: E731
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(
+                mock_llm,
+                "broken",
+                "spec",
+                max_retries=1,
+                validator=validator,
+            )
+        assert result == "<thought>t</thought>\n<content>c</content>"
+        assert mock_llm.generate.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_validator_returns_original_when_all_attempts_fail(self) -> None:
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(return_value=AsyncMock(content="always invalid"))
+        validator = lambda text: False  # noqa: E731
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(
+                mock_llm,
+                "original",
+                "spec",
+                max_retries=2,
+                validator=validator,
+            )
+        assert result == "original"
+        assert mock_llm.generate.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_validator_not_called_on_empty_response(self) -> None:
+        mock_llm = AsyncMock()
+        empty_resp = AsyncMock(content="")
+        good_resp = AsyncMock(content="valid output")
+        mock_llm.generate = AsyncMock(side_effect=[empty_resp, good_resp])
+        call_count = 0
+
+        def counting_validator(text: str) -> bool:
+            nonlocal call_count
+            call_count += 1
+            return True
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await llm_repair(
+                mock_llm,
+                "broken",
+                "spec",
+                max_retries=1,
+                validator=counting_validator,
+            )
+        assert result == "valid output"
+        assert call_count == 1
+
+    @pytest.mark.asyncio
     async def test_json_no_brace_returns_text(self) -> None:
         """sanitize_json_structure returns text unchanged if no braces found."""
         from mai_gram.response_templates._sanitize import sanitize_json_structure

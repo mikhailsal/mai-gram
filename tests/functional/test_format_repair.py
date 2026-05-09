@@ -9,14 +9,26 @@ All tests use `func-tpl-repair-*` companion IDs.
 
 from __future__ import annotations
 
+import asyncio
 import os
+from typing import TYPE_CHECKING
 
 import pytest
 
 from mai_gram.response_templates._sanitize import llm_repair
 from mai_gram.response_templates.registry import get_template
 
+if TYPE_CHECKING:
+    from mai_gram.response_templates.base import ResponseTemplate
+
 pytestmark = pytest.mark.functional
+
+# Provider slugs known to route to models unsuitable for text repair tasks
+# (e.g. OCR-only models, omni-modal models that ignore system prompts).
+# Discovered via proxy log analysis -- see commit message for details.
+_IGNORED_PROVIDERS = ["Baidu"]
+
+MAX_REPAIR_ATTEMPTS = 3
 
 
 @pytest.fixture
@@ -32,8 +44,16 @@ def repair_model() -> str:
 
 @pytest.fixture
 def repair_extra_params() -> dict:
-    """Extra API params for repair calls -- reasoning disabled for speed."""
-    return {"reasoning": {"effort": "none"}}
+    """Extra API params for repair calls.
+
+    - reasoning disabled for speed
+    - provider.ignore excludes providers whose free models are fundamentally
+      incapable of structured text repair (e.g. Baidu's OCR model)
+    """
+    return {
+        "reasoning": {"effort": "none"},
+        "provider": {"ignore": _IGNORED_PROVIDERS},
+    }
 
 
 @pytest.fixture
@@ -44,6 +64,57 @@ def llm_provider():
     api_key = os.environ["OPENROUTER_API_KEY"]
     base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     return OpenRouterProvider(api_key=api_key, base_url=base_url)
+
+
+def _make_validator(template: ResponseTemplate):
+    """Build a validator callback for llm_repair that checks template conformance."""
+
+    def _validate(text: str) -> bool:
+        parsed = template.parse(text)
+        return template.validate(parsed) == []
+
+    return _validate
+
+
+async def _repair_with_retry(
+    llm_provider,
+    template: ResponseTemplate,
+    malformed: str,
+    repair_model: str,
+    repair_extra_params: dict,
+) -> str:
+    """Call llm_repair with validation, retrying at the test level on failure.
+
+    The inner llm_repair already retries on empty/invalid responses (Option D).
+    This outer loop handles the case where all inner retries are exhausted but
+    a fresh request to a different random free model might succeed (Option B).
+    """
+    validator = _make_validator(template)
+    format_spec = template.llm_repair_prompt()
+
+    for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
+        repaired = await llm_repair(
+            llm_provider,
+            malformed,
+            format_spec,
+            model=repair_model,
+            temperature=0.0,
+            max_tokens=4096,
+            max_retries=3,
+            extra_params=repair_extra_params,
+            validator=validator,
+        )
+        parsed = template.parse(repaired)
+        errors = template.validate(parsed)
+        if not errors:
+            return repaired
+        if attempt < MAX_REPAIR_ATTEMPTS:
+            await asyncio.sleep(1.0 * attempt)
+
+    pytest.fail(
+        f"Repair failed after {MAX_REPAIR_ATTEMPTS} outer attempts.\n"
+        f"Last errors: {errors}\nRepaired text:\n{repaired}"
+    )
 
 
 @pytest.mark.asyncio
@@ -61,21 +132,15 @@ async def test_llm_repair_fixes_corrupted_xml_closing_tag(
         "<content>\nA decorator wraps a function to extend its behavior.\n<///content>"
     )
 
-    format_spec = template.llm_repair_prompt()
-    repaired = await llm_repair(
+    repaired = await _repair_with_retry(
         llm_provider,
+        template,
         malformed,
-        format_spec,
-        model=repair_model,
-        temperature=0.0,
-        max_tokens=4096,
-        max_retries=3,
-        extra_params=repair_extra_params,
+        repair_model,
+        repair_extra_params,
     )
 
     parsed = template.parse(repaired)
-    errors = template.validate(parsed)
-    assert errors == [], f"Repair failed, errors: {errors}\nRepaired text:\n{repaired}"
     assert "decorator" in parsed.fields["content"].lower()
 
 
@@ -93,21 +158,15 @@ async def test_llm_repair_fixes_missing_closing_tag(
         "<content>\nHere is my complete answer about Python generators."
     )
 
-    format_spec = template.llm_repair_prompt()
-    repaired = await llm_repair(
+    repaired = await _repair_with_retry(
         llm_provider,
+        template,
         malformed,
-        format_spec,
-        model=repair_model,
-        temperature=0.0,
-        max_tokens=4096,
-        max_retries=3,
-        extra_params=repair_extra_params,
+        repair_model,
+        repair_extra_params,
     )
 
     parsed = template.parse(repaired)
-    errors = template.validate(parsed)
-    assert errors == [], f"Repair failed, errors: {errors}\nRepaired text:\n{repaired}"
     assert "generators" in parsed.fields["content"].lower()
 
 
@@ -125,21 +184,15 @@ async def test_llm_repair_fixes_broken_json(
         ' "content": "Python lists are ordered collections",}'
     )
 
-    format_spec = template.llm_repair_prompt()
-    repaired = await llm_repair(
+    repaired = await _repair_with_retry(
         llm_provider,
+        template,
         malformed,
-        format_spec,
-        model=repair_model,
-        temperature=0.0,
-        max_tokens=4096,
-        max_retries=3,
-        extra_params=repair_extra_params,
+        repair_model,
+        repair_extra_params,
     )
 
     parsed = template.parse(repaired)
-    errors = template.validate(parsed)
-    assert errors == [], f"Repair failed, errors: {errors}\nRepaired text:\n{repaired}"
     assert "lists" in parsed.fields["content"].lower()
 
 
@@ -172,21 +225,15 @@ async def test_llm_repair_preserves_content_unchanged(
         f"<content>\n{original_content}\n<///content>"
     )
 
-    format_spec = template.llm_repair_prompt()
-    repaired = await llm_repair(
+    repaired = await _repair_with_retry(
         llm_provider,
+        template,
         malformed,
-        format_spec,
-        model=repair_model,
-        temperature=0.0,
-        max_tokens=4096,
-        max_retries=3,
-        extra_params=repair_extra_params,
+        repair_model,
+        repair_extra_params,
     )
 
     parsed = template.parse(repaired)
-    errors = template.validate(parsed)
-    assert errors == [], f"Repair failed, errors: {errors}\nRepaired text:\n{repaired}"
     assert (
         "\u0434\u0435\u043a\u043e\u0440\u0430\u0442\u043e\u0440" in parsed.fields["content"].lower()
         or "\u0414\u0435\u043a\u043e\u0440\u0430\u0442\u043e\u0440" in parsed.fields["content"]
@@ -209,19 +256,13 @@ async def test_llm_repair_handles_xml_with_emotions(
         "<content>\nPython lists are great.\n<///content>"
     )
 
-    format_spec = template.llm_repair_prompt()
-    repaired = await llm_repair(
+    repaired = await _repair_with_retry(
         llm_provider,
+        template,
         malformed,
-        format_spec,
-        model=repair_model,
-        temperature=0.0,
-        max_tokens=4096,
-        max_retries=3,
-        extra_params=repair_extra_params,
+        repair_model,
+        repair_extra_params,
     )
 
     parsed = template.parse(repaired)
-    errors = template.validate(parsed)
-    assert errors == [], f"Repair failed, errors: {errors}\nRepaired text:\n{repaired}"
     assert "emotions" in parsed.fields

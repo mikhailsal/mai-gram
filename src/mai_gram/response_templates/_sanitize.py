@@ -15,6 +15,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from mai_gram.llm.provider import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -179,12 +181,19 @@ async def llm_repair(
     max_tokens: int = 8192,
     max_retries: int = 2,
     extra_params: dict[str, Any] | None = None,
+    validator: Callable[[str], bool] | None = None,
 ) -> str:
     """Call the auxiliary LLM to repair structural formatting.
 
     Returns the repaired text on success, or the original *raw_text* on
     any failure (network error, empty response, etc.).  Retries transient
     errors up to *max_retries* times.
+
+    When *validator* is provided, a non-empty response is also checked
+    against it.  If the validator returns ``False`` the attempt counts as
+    a failure and is retried (the model may have returned plausible but
+    structurally invalid output -- e.g. an OCR model returning bounding
+    boxes instead of XML tags).
     """
     import asyncio as _asyncio
 
@@ -218,12 +227,22 @@ async def llm_repair(
             return raw_text
 
         repaired = response.content.strip()
-        if repaired:
+
+        if repaired and (validator is None or validator(repaired)):
             return repaired
 
         if attempt <= max_retries:
+            if repaired and validator is not None:
+                logger.info(
+                    "LLM repair attempt %d returned invalid output, retrying",
+                    attempt,
+                )
             await _asyncio.sleep(1.0 * attempt)
             continue
-        logger.warning("LLM format repair returned empty after %d attempts", attempt)
+
+        if not repaired:
+            logger.warning("LLM format repair returned empty after %d attempts", attempt)
+        else:
+            logger.warning("LLM format repair failed validation after %d attempts", attempt)
 
     return raw_text
