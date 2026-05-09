@@ -181,13 +181,23 @@ class StreamDisplayManager:
         show_reasoning: bool,
         reasoning_committed: bool,
     ) -> tuple[str, str, str, str] | None:
-        from mai_gram.core.md_to_telegram import format_reasoning_html, markdown_to_html
+        from mai_gram.core.md_to_telegram import (
+            format_reasoning_html,
+            markdown_to_html,
+            stabilize_markdown_for_streaming,
+        )
 
         remaining_content = current_content[committed_content_offset:]
         header_html = ""
         if show_reasoning and current_reasoning.strip() and not reasoning_committed:
-            header_html = format_reasoning_html(current_reasoning)
-        content_html = markdown_to_html(remaining_content) if remaining_content.strip() else ""
+            header_html = format_reasoning_html(
+                stabilize_markdown_for_streaming(current_reasoning),
+            )
+        content_html = (
+            markdown_to_html(stabilize_markdown_for_streaming(remaining_content))
+            if remaining_content.strip()
+            else ""
+        )
         if header_html and content_html:
             live_text = header_html + "\n\n" + content_html + " ▍"
         elif header_html:
@@ -214,7 +224,7 @@ class StreamDisplayManager:
         Returns the same 4-tuple as ``_render_live_text`` so the caller
         can handle overflow and placeholder logic identically.
         """
-        from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.md_to_telegram import markdown_to_html, stabilize_markdown_for_streaming
 
         prefill = template.assistant_prefill() or ""
         parse_input = prefill + current_content if prefill else current_content
@@ -229,9 +239,10 @@ class StreamDisplayManager:
             else:
                 active_text = ""
                 if result.active_content.strip():
+                    stabilized = stabilize_markdown_for_streaming(result.active_content)
                     active_header = template.render_field_html(
                         result.active_field,
-                        result.active_content,
+                        stabilized,
                         expandable=False,
                     )
                     if header_html:
@@ -244,7 +255,12 @@ class StreamDisplayManager:
             active_text = result.preamble
 
         remaining = active_text[state.committed_content_offset :]
-        content_html = markdown_to_html(remaining) if remaining.strip() else ""
+        if remaining.strip() and result.active_field is not None:
+            content_html = markdown_to_html(stabilize_markdown_for_streaming(remaining))
+        elif remaining.strip():
+            content_html = markdown_to_html(remaining)
+        else:
+            content_html = ""
 
         return self._assemble_live_text(
             header_html,

@@ -9,6 +9,7 @@ same _build_handler pattern as test_llm_error_delivery.py.
 from __future__ import annotations
 
 import io
+import re as _re_mod
 from typing import Any
 
 import pytest
@@ -556,6 +557,157 @@ async def test_xml_prefill_stream_thought_blockquote_not_expandable(tmp_path) ->
                 f"thought unreadable (collapsed). Should use plain <blockquote>. "
                 f"Edit:\n{edit}"
             )
+    finally:
+        await _teardown()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Bug: markdown * / ** in thought causes formatting flicker
+# ──────────────────────────────────────────────────────────────────
+
+
+def _extract_formatting_signature(html: str) -> tuple[bool, bool, bool]:
+    """Return (has_bold, has_italic, has_strike) for an HTML snippet."""
+    return ("<b>" in html, "<i>" in html, "<s>" in html)
+
+
+def _detect_formatting_flicker(edits: list[str]) -> list[str]:
+    """Detect edits where formatting tags that were present suddenly vanish.
+
+    A "flicker" is when formatting (bold, italic, strikethrough) that was
+    visible in an earlier edit disappears in a later one.  One-time forward
+    changes (formatting appearing for the first time and staying) are
+    expected -- e.g. when a field completes and its full markdown is rendered.
+
+    Returns a list of human-readable descriptions for each flicker event.
+    Focuses on the blockquote region only.
+    """
+    signatures: list[tuple[int, bool, bool, bool]] = []
+    for i, edit in enumerate(edits):
+        m = _re_mod.search(r"<blockquote[^>]*>(.*?)</blockquote>", edit, _re_mod.DOTALL)
+        if m:
+            sig = _extract_formatting_signature(m.group(1))
+            signatures.append((i, *sig))
+
+    flickers: list[str] = []
+    for idx in range(1, len(signatures)):
+        prev_i, prev_b, prev_it, prev_s = signatures[idx - 1]
+        cur_i, cur_b, cur_it, cur_s = signatures[idx]
+        vanished = []
+        if prev_b and not cur_b:
+            vanished.append("bold disappeared")
+        if prev_it and not cur_it:
+            vanished.append("italic disappeared")
+        if prev_s and not cur_s:
+            vanished.append("strikethrough disappeared")
+        if vanished:
+            flickers.append(f"edit #{prev_i + 1} -> #{cur_i + 1}: {', '.join(vanished)}")
+    return flickers
+
+
+async def test_xml_stream_thought_no_markdown_flicker(tmp_path) -> None:
+    """Markdown in thought text must not cause formatting to flicker during streaming.
+
+    Bug: when the AI uses ``*italic*`` or ``**bold**`` inside ``<thought>``,
+    the ``markdown_to_html`` conversion produces structurally different HTML
+    depending on how much text has accumulated.  Specifically:
+
+    1. When ``**`` has arrived but not its closing pair, it stays as literal
+       ``**`` text and any ``*...*`` inside it renders as ``<i>...</i>``.
+    2. When the closing ``**`` finally arrives, the bold regex consumes the
+       entire region (including what was previously italic), producing
+       ``<b>...</b>`` instead.  The ``<i>`` tags vanish.
+
+    The user sees formatting appear and disappear on consecutive Telegram
+    message edits -- a jarring visual flicker.  The thought content jumps
+    between e.g. ``...that <i>all options</i> must be weighed...`` and
+    ``...<b>key issue ... all options ... right</b> answer`` within the
+    blockquote.
+
+    The thought text is deliberately long (~240 chars) with ``*italic*``
+    closing early and ``**bold**`` closing late, so the italic-to-bold
+    transition spans multiple 60-char edit windows in the streaming
+    display pipeline.
+    """
+    full_text = (
+        "<thought>\n"
+        "The **key issue here is that *all options* must be weighed "
+        "against one another very carefully and thoroughly, considering "
+        "every single implication and potential consequence in full detail, "
+        "before we can possibly arrive at the right** answer.\n"
+        "</thought>\n"
+        "<content>\nThe answer is 42.\n</content>"
+    )
+    llm = _StreamingLLM(full_text, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+
+        streaming_edits = _intermediate_streaming_edits(output)
+        assert streaming_edits, (
+            f"Expected intermediate streaming edits, got none. Full output:\n{output}"
+        )
+
+        flickers = _detect_formatting_flicker(streaming_edits)
+        assert not flickers, (
+            "Formatting flickered between consecutive streaming edits inside "
+            "the thought blockquote.  The user sees formatting appear and "
+            "vanish on successive Telegram message edits:\n"
+            + "\n".join(f"  - {f}" for f in flickers)
+            + f"\n\nFull output:\n{output}"
+        )
+    finally:
+        await _teardown()
+
+
+async def test_xml_prefill_stream_thought_no_markdown_flicker(tmp_path) -> None:
+    """Same markdown flicker bug, but for the XML prefill variant.
+
+    With prefill the ``<thought>`` tag is in the assistant prefill, so
+    chunks start inside the thought field immediately.  Markdown asterisks
+    in the streamed thought content still cause the same rendering flicker
+    as described in ``test_xml_stream_thought_no_markdown_flicker``.
+
+    The long text ensures the ``*italic*`` and ``**bold**`` closings are
+    far enough apart to fall into separate streaming edit windows.
+    """
+    long_reasoning = (
+        "The **main concern is that *every detail* needs to be examined "
+        "with extreme caution and diligence, taking into account all the "
+        "various subtle nuances and edge cases that could affect the final "
+        "outcome of this particular** analysis."
+    )
+    response_after_prefill = f"\n{long_reasoning}\n</thought>\n<content>\nDone.\n</content>"
+    llm = _StreamingLLM(response_after_prefill, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml_prefill",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+
+        streaming_edits = _intermediate_streaming_edits(output)
+        assert streaming_edits, (
+            f"Expected intermediate streaming edits, got none. Full output:\n{output}"
+        )
+
+        flickers = _detect_formatting_flicker(streaming_edits)
+        assert not flickers, (
+            "Markdown in prefill thought caused formatting flicker:\n"
+            + "\n".join(f"  - {f}" for f in flickers)
+            + f"\n\nFull output:\n{output}"
+        )
     finally:
         await _teardown()
 

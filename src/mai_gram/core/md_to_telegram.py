@@ -30,7 +30,10 @@ from mai_gram.core.md_to_telegram_html import (
     _html_italic,
     _html_links,
     _html_strikethrough,
+    stabilize_markdown_for_streaming,
 )
+
+__all__ = ["stabilize_markdown_for_streaming"]
 
 if TYPE_CHECKING:
     from collections.abc import Callable

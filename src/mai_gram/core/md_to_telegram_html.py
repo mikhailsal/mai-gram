@@ -125,3 +125,67 @@ def _html_strikethrough(text: str, ph: Callable[[str], str]) -> str:
         return ph(f"<s>{m.group(1)}</s>")
 
     return re.sub(r"~~(.+?)~~", _repl, text, flags=re.DOTALL)
+
+
+# ---------------------------------------------------------------------------
+# Streaming-safe markdown
+# ---------------------------------------------------------------------------
+
+_ASTERISK_OPERATOR = "\u2217"
+
+
+def stabilize_markdown_for_streaming(text: str) -> str:
+    """Neutralize incomplete markdown pairs so rendering is stable during streaming.
+
+    When markdown markers arrive incrementally, partially-received pairs
+    cause ``markdown_to_html`` to produce structurally different HTML on
+    each call.  For example, ``**key is *option*`` renders ``*option*`` as
+    italic, but once the closing ``**`` arrives, bold absorbs the italic
+    and ``<i>`` vanishes -- a visible flicker for the user.
+
+    This function replaces ``*`` characters inside unclosed ``**`` regions
+    with a visually similar Unicode character (U+2217 ASTERISK OPERATOR)
+    so that ``markdown_to_html`` won't match them as italic.  It also
+    strips unpaired trailing ``*`` and ``~~`` markers.
+
+    Call this on text that is still being streamed (active field content).
+    Complete text (fully received fields) should NOT be passed through
+    this function -- it would suppress legitimate nested formatting.
+    """
+    if not text:
+        return text
+
+    placeholders: dict[str, str] = {}
+    counter = [0]
+
+    def _save(m: re.Match[str]) -> str:
+        key = f"\x02SC{counter[0]}\x02"
+        counter[0] += 1
+        placeholders[key] = m.group(0)
+        return key
+
+    result = re.sub(r"```\w*\n.*?```", _save, text, flags=re.DOTALL)
+    result = re.sub(r"`[^`]+`", _save, result)
+
+    dbl_star_matches = list(re.finditer(r"\*\*", result))
+    if len(dbl_star_matches) % 2 == 1:
+        last_pos = dbl_star_matches[-1].start()
+        before = result[:last_pos]
+        after = result[last_pos + 2 :]
+        after = after.replace("*", _ASTERISK_OPERATOR)
+        result = before + after
+
+    single_star = list(re.finditer(r"(?<!\*)\*(?!\*)", result))
+    if len(single_star) % 2 == 1:
+        last_pos = single_star[-1].start()
+        result = result[:last_pos] + result[last_pos + 1 :]
+
+    tilde_matches = list(re.finditer(r"~~", result))
+    if len(tilde_matches) % 2 == 1:
+        last_pos = tilde_matches[-1].start()
+        result = result[:last_pos] + result[last_pos + 2 :]
+
+    for key, value in placeholders.items():
+        result = result.replace(key, value)
+
+    return result
