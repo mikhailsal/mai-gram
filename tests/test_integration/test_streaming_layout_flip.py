@@ -1,22 +1,19 @@
 """Integration tests for the streaming layout flip bug.
 
-Reproduces the bug where Telegram rejects complex HTML during streaming,
-causing the fallback path to send raw LLM output (with visible XML tags)
-to the user.  The display alternates between correctly parsed blockquote
-and raw text on consecutive edits.
+Reproduces the bug where Telegram rejects complex HTML during streaming.
+The fix strategy: when an HTML ``edit_message`` call fails, the system
+**skips the update entirely** and keeps the last successfully rendered
+message visible.  The next streaming tick retries with fresh HTML.
 
-The core mechanism:
-1. As thought content grows, the HTML sent to Telegram becomes complex
-   enough that Telegram's strict HTML parser rejects the edit_message call.
-2. The fallback in _edit_existing sends ``current_content`` (raw LLM output
-   including literal <thought>, </thought>, <content> tags) WITHOUT
-   parse_mode="html", so XML tags render as visible text.
-3. The next edit may succeed (the HTML is valid again), producing the
-   alternation.
+This means:
+- No fallback text is ever sent for existing messages (only for initial send).
+- No blank/cursor-only messages appear.
+- No raw XML tags are ever shown to the user.
+- The display never oscillates between blockquote and degraded states.
 
-ConsoleMessenger always succeeds, so the fallback is never triggered in
+ConsoleMessenger always succeeds, so the rejection is never triggered in
 normal tests.  These tests use a FailingHtmlMessenger that simulates
-Telegram rejection to exercise the fallback path.
+Telegram rejection to verify the skip-on-failure behaviour.
 """
 
 from __future__ import annotations
@@ -79,9 +76,12 @@ class FailingHtmlMessenger(ConsoleMessenger):
     When ``parse_mode="html"`` is passed to ``edit_message`` and the
     text exceeds ``fail_above_len`` characters, the edit returns
     ``success=False`` — just like Telegram would when it rejects
-    complex/malformed HTML.  The caller then falls back to sending
-    the fallback text (without parse_mode), which is where the bug
-    manifests.
+    complex/malformed HTML.
+
+    After the fix, the caller should **skip the update** (keep the
+    previous message) rather than sending a fallback.  The
+    ``fallback_edits`` list tracks any non-HTML edits that happen
+    after a rejection — it should remain empty if the fix works.
     """
 
     def __init__(
@@ -215,18 +215,13 @@ def _contains_raw_xml(text: str) -> list[str]:
 # ──────────────────────────────────────────────────────────────────
 
 
-async def test_fallback_never_contains_raw_xml_tags(tmp_path) -> None:
-    """When Telegram rejects an HTML edit, the fallback must not expose raw XML.
+async def test_rejected_html_edit_skips_update(tmp_path) -> None:
+    """When Telegram rejects an HTML edit, no fallback is sent.
 
-    This is the primary reproduction of the streaming layout flip bug.
-    When ``_edit_existing`` gets ``success=False`` from the HTML edit, it
-    falls back to sending ``(remaining or current_content)[:max_len]``
-    without parse_mode.  Since ``remaining`` is empty for non-content
-    active fields (thought), this degrades to ``current_content`` — the
-    raw LLM output with literal XML tags.
-
-    The user sees: ``<thought>The user wants something...</thought>``
-    as plain text in the chat.  This must never happen.
+    The system must keep the last successfully rendered message visible
+    instead of replacing it with a degraded fallback.  This eliminates
+    all flicker — the user either sees the latest successful render or
+    a newer one, never a blank or raw-text message.
     """
     thought_text = (
         "Let me think carefully about this problem step by step. "
@@ -254,15 +249,11 @@ async def test_fallback_never_contains_raw_xml_tags(tmp_path) -> None:
             "but none were. The FailingHtmlMessenger threshold may be too high."
         )
 
-        for i, fallback_text in enumerate(messenger.fallback_edits):
-            raw_tags = _contains_raw_xml(fallback_text)
-            assert not raw_tags, (
-                f"Fallback edit #{i + 1} contains raw XML tags that are visible "
-                f"to the user: {raw_tags}\n"
-                f"Full fallback text:\n{fallback_text}\n\n"
-                "The fallback path must strip or re-render XML structure. "
-                "Currently it sends raw current_content when remaining is empty."
-            )
+        assert not messenger.fallback_edits, (
+            f"Expected zero fallback edits (rejected HTML edits should be skipped), "
+            f"but {len(messenger.fallback_edits)} fallback(s) were sent:\n"
+            + "\n---\n".join(messenger.fallback_edits[:3])
+        )
     finally:
         await _teardown()
 
@@ -272,16 +263,13 @@ async def test_fallback_never_contains_raw_xml_tags(tmp_path) -> None:
 # ──────────────────────────────────────────────────────────────────
 
 
-async def test_no_oscillation_between_parsed_and_raw_display(tmp_path) -> None:
-    """Display must not alternate between blockquote-rendered and raw-text states.
+async def test_no_oscillation_with_alternating_failures(tmp_path) -> None:
+    """Alternating HTML failures must not produce visible display changes.
 
-    The user sees: edit N is a nicely formatted blockquote, edit N+1 is
-    raw ``<thought>...</thought>`` text, edit N+2 is blockquote again.
-    This oscillation is caused by HTML edits alternately succeeding and
-    failing, with the fallback showing raw LLM output.
-
-    Simulates every-other HTML edit failing (fail_every_n=2) to trigger
-    the alternation pattern.
+    Simulates every-other HTML edit failing (fail_every_n=2).  Since
+    rejected edits are now skipped entirely, the user should only see
+    the successful HTML edits — no degraded fallback messages, no
+    oscillation between blockquote and raw text.
     """
     thought_text = (
         "Let me carefully analyze this question in great detail. "
@@ -308,29 +296,13 @@ async def test_no_oscillation_between_parsed_and_raw_display(tmp_path) -> None:
         exc = await _send_and_collect(messenger)
         assert exc is None, f"Unexpected exception: {exc}"
 
-        output = output_buf.getvalue()
-        edits = [
-            section
-            for section in output.split("--- Edited AI Response")
-            if "replaces" in section and "final edit" not in section
-        ]
+        assert messenger.rejected_edits, "Expected at least one rejected HTML edit."
 
-        has_blockquote = []
-        has_raw_xml = []
-        for i, edit in enumerate(edits):
-            if "<blockquote" in edit:
-                has_blockquote.append(i)
-            if _contains_raw_xml(edit):
-                has_raw_xml.append(i)
-
-        if has_blockquote and has_raw_xml:
-            pytest.fail(
-                f"Display oscillates between parsed and raw states. "
-                f"Edits with blockquote: {has_blockquote}; "
-                f"edits with raw XML tags: {has_raw_xml}. "
-                f"The user sees the layout flipping back and forth.\n"
-                f"Full output:\n{output}"
-            )
+        assert not messenger.fallback_edits, (
+            f"Alternating failures produced {len(messenger.fallback_edits)} fallback "
+            f"edit(s), but rejected edits should be silently skipped:\n"
+            + "\n---\n".join(messenger.fallback_edits[:3])
+        )
     finally:
         await _teardown()
 
@@ -340,13 +312,13 @@ async def test_no_oscillation_between_parsed_and_raw_display(tmp_path) -> None:
 # ──────────────────────────────────────────────────────────────────
 
 
-async def test_long_thought_fallback_is_clean(tmp_path) -> None:
+async def test_long_thought_rejection_skips_silently(tmp_path) -> None:
     """A very long thought that approaches the 4096-char Telegram limit.
 
     When the thought is long, the HTML overhead (blockquote tags, label,
     markdown-rendered formatting) can push the total message length over
-    Telegram's 4096-char hard limit, causing rejection.  The fallback
-    must still present clean, readable text — not raw XML.
+    Telegram's 4096-char hard limit, causing rejection.  The system must
+    silently skip the failed edit, preserving the last successful render.
     """
     long_thought = ("I need to carefully analyze this complex mathematical problem. " * 30).strip()
     full_text = f"<thought>\n{long_thought}\n</thought>\n<content>\nThe answer is 42.\n</content>"
@@ -367,12 +339,11 @@ async def test_long_thought_fallback_is_clean(tmp_path) -> None:
             "Expected HTML edits to be rejected for long thought content."
         )
 
-        for i, fallback_text in enumerate(messenger.fallback_edits):
-            raw_tags = _contains_raw_xml(fallback_text)
-            assert not raw_tags, (
-                f"Long-thought fallback #{i + 1} exposes raw XML: {raw_tags}\n"
-                f"Fallback text (first 500 chars):\n{fallback_text[:500]}"
-            )
+        assert not messenger.fallback_edits, (
+            f"Long thought rejection produced {len(messenger.fallback_edits)} "
+            f"fallback edit(s) instead of skipping:\n"
+            + "\n---\n".join(messenger.fallback_edits[:3])
+        )
     finally:
         await _teardown()
 
@@ -437,23 +408,117 @@ async def test_thought_with_markdown_quotes_no_nested_blockquote(tmp_path) -> No
 
 
 # ──────────────────────────────────────────────────────────────────
+# Bug: blank cursor-only message flicker (the "emptiness" bug)
+# ──────────────────────────────────────────────────────────────────
+
+
+async def test_cursor_only_blank_message_never_sent(tmp_path) -> None:
+    """The user must never see a blank message with only the typing cursor.
+
+    When the thought field is active, ``remaining`` is empty and
+    ``fallback_source`` may also be empty (or the same as thought text).
+    Before the skip-on-failure fix, this produced fallback messages like
+    `` ▍`` (just the cursor character) — visible as a blank message flicker.
+    """
+    thought_text = (
+        "Let me think carefully about this problem step by step. "
+        "The user wants a simple factual answer, I should be concise. "
+        "I need to consider multiple angles and perspectives. "
+        "Let me also think about edge cases and potential misunderstandings."
+    )
+    full_text = f"<thought>\n{thought_text}\n</thought>\n<content>\nThe answer is 42.\n</content>"
+    llm = _StreamingLLM(full_text, chunk_size=8)
+    output_buf = io.StringIO()
+    messenger = FailingHtmlMessenger(
+        output=output_buf,
+        stream_debug=True,
+        fail_above_len=80,
+    )
+    _handler, _ = await _build_handler(tmp_path, llm, template="xml", messenger=messenger)
+
+    try:
+        exc = await _send_and_collect(messenger)
+        assert exc is None, f"Unexpected exception: {exc}"
+
+        assert messenger.rejected_edits, "Expected HTML edit rejections."
+
+        for i, fallback_text in enumerate(messenger.fallback_edits):
+            stripped = fallback_text.replace("▍", "").strip()
+            assert stripped, (
+                f"Fallback edit #{i + 1} is blank (cursor-only): {fallback_text!r}\n"
+                "The user sees an empty message flicker."
+            )
+
+        assert not messenger.fallback_edits, (
+            f"Expected zero fallback edits, got {len(messenger.fallback_edits)}."
+        )
+    finally:
+        await _teardown()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Verify: all displayed edits contain valid HTML (no degraded output)
+# ──────────────────────────────────────────────────────────────────
+
+
+async def test_all_displayed_edits_are_valid_html(tmp_path) -> None:
+    """Every edit the user sees must be properly formatted HTML.
+
+    When some HTML edits are rejected, the output stream should only
+    contain successfully rendered edits — never plain-text fallbacks
+    or partial renders.
+    """
+    thought_text = (
+        "Let me carefully analyze this question in great detail. "
+        "I need to consider multiple angles and perspectives before answering. "
+        "The user seems to want a thorough explanation of the topic."
+    )
+    full_text = (
+        f"<thought>\n{thought_text}\n</thought>\n"
+        "<content>\nHere is a detailed answer for you.\n</content>"
+    )
+    llm = _StreamingLLM(full_text, chunk_size=8)
+    output_buf = io.StringIO()
+    messenger = FailingHtmlMessenger(
+        output=output_buf,
+        stream_debug=True,
+        fail_above_len=100,
+        fail_every_n=2,
+    )
+    _handler, _ = await _build_handler(tmp_path, llm, template="xml", messenger=messenger)
+
+    try:
+        exc = await _send_and_collect(messenger)
+        assert exc is None, f"Unexpected exception: {exc}"
+
+        output = output_buf.getvalue()
+        edits = [
+            section
+            for section in output.split("--- Edited AI Response")
+            if "replaces" in section and "final edit" not in section
+        ]
+
+        for i, edit in enumerate(edits):
+            raw_tags = _contains_raw_xml(edit)
+            assert not raw_tags, (
+                f"Displayed edit #{i + 1} contains raw XML tags: {raw_tags}\nFull edit:\n{edit}"
+            )
+    finally:
+        await _teardown()
+
+
+# ──────────────────────────────────────────────────────────────────
 # Bug: prefill variant has the same fallback-exposes-raw-XML issue
 # ──────────────────────────────────────────────────────────────────
 
 
-async def test_prefill_fallback_never_contains_raw_xml_tags(tmp_path) -> None:
-    """Prefill fallback must not expose raw XML tags.
+async def test_prefill_rejection_skips_update(tmp_path) -> None:
+    """Prefill variant: rejected HTML edits must be skipped, not replaced.
 
     With prefill, the ``<thought>`` open tag is in the assistant prefill
-    (not in the streamed content), so the opening tag won't appear.
-    However, ``</thought>`` and ``<content>`` ARE in the streamed text.
-    Before the fix, the fallback degraded to ``current_content`` (the raw
-    stream) which could expose these close/open tags as visible text.
-
-    After the fix, the fallback uses ``fallback_source`` which is the
-    parsed field content (``result.active_content``) — clean reasoning
-    text without XML tags.  This test verifies that none of the fallback
-    edits contain raw XML template tags.
+    (not in the streamed content).  Regardless, when an HTML edit is
+    rejected, the system must skip the update entirely — keeping the
+    last successful render visible.
     """
     long_reasoning = (
         "Let me carefully think through this problem step by step. "
@@ -483,12 +548,10 @@ async def test_prefill_fallback_never_contains_raw_xml_tags(tmp_path) -> None:
             "Expected at least one HTML edit to be rejected for prefill variant."
         )
 
-        for i, fallback_text in enumerate(messenger.fallback_edits):
-            raw_tags = _contains_raw_xml(fallback_text)
-            assert not raw_tags, (
-                f"Prefill fallback #{i + 1} contains raw XML tags: {raw_tags}\n"
-                f"Full fallback text:\n{fallback_text}\n\n"
-                "The fallback must not expose template structure in prefill mode."
-            )
+        assert not messenger.fallback_edits, (
+            f"Prefill rejection produced {len(messenger.fallback_edits)} "
+            f"fallback edit(s) instead of skipping:\n"
+            + "\n---\n".join(messenger.fallback_edits[:3])
+        )
     finally:
         await _teardown()

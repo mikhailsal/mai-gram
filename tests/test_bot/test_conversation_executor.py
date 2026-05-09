@@ -378,10 +378,7 @@ class TestConversationExecutor:
         sd = executor._stream_display
         request = _make_request()
         messenger.edit_message = AsyncMock(
-            side_effect=[
-                SendResult(success=False, error="bad html"),
-                SendResult(success=True, message_id="placeholder-1"),
-            ]
+            return_value=SendResult(success=False, error="bad html"),
         )
 
         placeholder = await sd._send_or_edit_placeholder(
@@ -392,7 +389,7 @@ class TestConversationExecutor:
         )
 
         assert placeholder == "placeholder-1"
-        assert messenger.edit_message.await_count == 2
+        assert messenger.edit_message.await_count == 1
 
     async def test_handle_turn_complete_flushes_placeholder_state(self) -> None:
         executor, messenger, renderer = _make_executor()
@@ -471,7 +468,7 @@ class TestConversationExecutor:
         assert placeholder == "fallback-id"
         assert messenger.send_message.await_count == 2
 
-    async def test_send_or_edit_placeholder_returns_none_when_both_edits_fail(self) -> None:
+    async def test_send_or_edit_placeholder_preserves_id_on_failure(self) -> None:
         executor, messenger, _ = _make_executor()
         sd = executor._stream_display
         request = _make_request()
@@ -486,8 +483,8 @@ class TestConversationExecutor:
             fallback="plain text",
         )
 
-        assert placeholder is None
-        assert messenger.edit_message.await_count == 2
+        assert placeholder == "dead-placeholder"
+        assert messenger.edit_message.await_count == 1
 
     async def test_finalize_response_updates_existing_placeholder(self) -> None:
         executor, _, renderer = _make_executor()

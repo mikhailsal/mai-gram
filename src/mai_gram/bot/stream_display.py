@@ -367,6 +367,7 @@ class StreamDisplayManager:
         live_text: str,
         fallback: str,
     ) -> str | None:
+        del fallback
         edit_result = await self._messenger.edit_message(
             request.telegram_chat_id,
             placeholder_msg_id,
@@ -379,11 +380,4 @@ class StreamDisplayManager:
                 len(live_text),
                 edit_result.error,
             )
-            fb = await self._messenger.edit_message(
-                request.telegram_chat_id,
-                placeholder_msg_id,
-                fallback,
-            )
-            if not fb.success:
-                return None
         return placeholder_msg_id
