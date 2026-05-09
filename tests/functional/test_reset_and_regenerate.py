@@ -43,9 +43,10 @@ def test_reset_creates_backup_and_clears_chat_artifacts(shared_functional_cli) -
 
 
 def test_regenerate_matches_normal_response_contract(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
+    cli = shared_functional_cli
     chat_id = "func-regen"
     payload = json.dumps(
         [
@@ -53,19 +54,19 @@ def test_regenerate_matches_normal_response_contract(
             {"role": "assistant", "content": "Old answer"},
         ]
     )
-    json_path = functional_cli.write_json_fixture("regen-import.json", payload)
+    json_path = cli.write_json_fixture("regen-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    functional_cli.import_json(chat_id, json_path).require_ok()
+    cli.start_chat(chat_id).require_ok()
+    cli.import_json(chat_id, json_path).require_ok()
 
-    resend = functional_cli.run_command(chat_id, "resend_last")
+    resend = cli.run_command(chat_id, "resend_last")
     assert "Regenerate" in resend.stdout
     regen_cb = find_callback(resend.stdout, "regen:")
-    regen_prompt = functional_cli.send_callback(chat_id, regen_cb)
+    regen_prompt = cli.send_callback(chat_id, regen_cb)
     assert "Regenerate this response?" in regen_prompt.stdout
 
     confirm_cb = find_callback(regen_prompt.stdout, "confirm_regen:")
-    regenerated = functional_cli.send_callback_with_live_retry(chat_id, confirm_cb)
+    regenerated = cli.send_callback_with_live_retry(chat_id, confirm_cb)
     assert regenerated.returncode == 0
     assert "--- AI Response" in regenerated.stdout
     assert "PARITY" in extract_last_response_body(regenerated.stdout).upper()
@@ -74,7 +75,7 @@ def test_regenerate_matches_normal_response_contract(
 
 
 def test_regenerate_on_older_message_removes_subsequent_history(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
     """Pressing Regenerate on a non-last assistant message should delete all
@@ -87,6 +88,7 @@ def test_regenerate_on_older_message_removes_subsequent_history(
     targeting that older response.  Afterwards it verifies that turns 2 and 3
     have been removed from the persisted history.
     """
+    cli = shared_functional_cli
     chat_id = "func-regen-older"
     payload = json.dumps(
         [
@@ -98,30 +100,30 @@ def test_regenerate_on_older_message_removes_subsequent_history(
             {"role": "assistant", "content": "Third answer: GAMMA"},
         ]
     )
-    json_path = functional_cli.write_json_fixture("regen-older-import.json", payload)
+    json_path = cli.write_json_fixture("regen-older-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    functional_cli.import_json(chat_id, json_path).require_ok()
+    cli.start_chat(chat_id).require_ok()
+    cli.import_json(chat_id, json_path).require_ok()
 
-    history_before = functional_cli.read_history(chat_id)
+    history_before = cli.read_history(chat_id)
     assert "ALPHA" in history_before.stdout
     assert "BETA" in history_before.stdout
     assert "GAMMA" in history_before.stdout
 
-    resend = functional_cli.run_command(chat_id, "resend_last")
+    resend = cli.run_command(chat_id, "resend_last")
     last_regen_cb = find_callback(resend.stdout, "regen:")
     last_assistant_id = int(last_regen_cb.split(":")[1])
     first_assistant_id = last_assistant_id - 4
 
-    regen_prompt = functional_cli.send_callback(chat_id, f"regen:{first_assistant_id}")
+    regen_prompt = cli.send_callback(chat_id, f"regen:{first_assistant_id}")
     assert "Regenerate this response?" in regen_prompt.stdout
 
     confirm_cb = find_callback(regen_prompt.stdout, "confirm_regen:")
-    regenerated = functional_cli.send_callback_with_live_retry(chat_id, confirm_cb)
+    regenerated = cli.send_callback_with_live_retry(chat_id, confirm_cb)
     assert regenerated.returncode == 0
     assert "--- AI Response" in regenerated.stdout
 
-    history_after = functional_cli.read_history(chat_id)
+    history_after = cli.read_history(chat_id)
 
     assert "ALPHA" in history_after.stdout, (
         "The first user message ('Reply with exactly ALPHA.') should remain — "

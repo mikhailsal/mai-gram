@@ -72,21 +72,22 @@ def test_prompt_config_persists_visibility_defaults(shared_functional_cli) -> No
 
 
 def test_send_datetime_false_removes_timestamp_from_future_prompt_context(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
-    functional_cli.write_prompt(
+    cli = shared_functional_cli
+    cli.write_prompt(
         "no_datetime",
         "You are a no-datetime assistant.",
         toml="send_datetime = false",
     )
-    functional_cli.start_chat("func-no-datetime", prompt="no_datetime").require_ok()
-    functional_cli.send_message_with_live_retry(
+    cli.start_chat("func-no-datetime", prompt="no_datetime").require_ok()
+    cli.send_message_with_live_retry(
         "func-no-datetime",
         "Reply with exactly NO_DATETIME.",
     ).require_ok()
 
-    preview = functional_cli.show_prompt("func-no-datetime")
+    preview = cli.show_prompt("func-no-datetime")
 
     assert preview.returncode == 0
     assert "[user] Reply with exactly NO_DATETIME." in preview.stdout

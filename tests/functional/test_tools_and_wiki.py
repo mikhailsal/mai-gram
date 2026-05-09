@@ -20,9 +20,9 @@ Keep the final answer short.
 _MAX_WIKI_RETRIES = 5
 
 
-def _remember_color(functional_cli, chat_id: str) -> bool:
+def _remember_color(cli, chat_id: str) -> bool:
     """Ask the model to remember a color. Returns True if wiki file was created."""
-    remember = functional_cli.send_message_with_live_retry(
+    remember = cli.send_message_with_live_retry(
         chat_id,
         "My favorite color is orange. Remember this exactly.",
         debug=True,
@@ -32,20 +32,21 @@ def _remember_color(functional_cli, chat_id: str) -> bool:
     if "Tools used:" not in remember.stdout or "wiki_" not in remember.stdout:
         return False
 
-    wiki_files = list(functional_cli.chat_wiki_dir(chat_id).glob("*.md"))
+    wiki_files = list(cli.chat_wiki_dir(chat_id).glob("*.md"))
     return bool(wiki_files)
 
 
 def test_wiki_creation_and_recall_work_through_real_llm(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
-    functional_cli.write_prompt("wiki_helper", _WIKI_PROMPT)
-    functional_cli.start_chat("func-wiki", prompt="wiki_helper").require_ok()
+    cli = shared_functional_cli
+    cli.write_prompt("wiki_helper", _WIKI_PROMPT)
+    cli.start_chat("func-wiki", prompt="wiki_helper").require_ok()
 
     remembered = False
     for attempt in range(1, _MAX_WIKI_RETRIES + 1):
-        if _remember_color(functional_cli, "func-wiki"):
+        if _remember_color(cli, "func-wiki"):
             remembered = True
             break
         if attempt < _MAX_WIKI_RETRIES:
@@ -53,14 +54,14 @@ def test_wiki_creation_and_recall_work_through_real_llm(
 
     assert remembered, f"Model failed to call wiki tool after {_MAX_WIKI_RETRIES} attempts"
 
-    wiki_listing = functional_cli.read_wiki("func-wiki")
+    wiki_listing = cli.read_wiki("func-wiki")
     assert wiki_listing.returncode == 0
     assert "orange" in wiki_listing.stdout.lower()
-    assert fetch_knowledge_entries(functional_cli.db_path, "func-wiki")
+    assert fetch_knowledge_entries(cli.db_path, "func-wiki")
 
     last_body = ""
     for attempt in range(1, _MAX_WIKI_RETRIES + 1):
-        follow_up = functional_cli.send_message_with_live_retry(
+        follow_up = cli.send_message_with_live_retry(
             "func-wiki",
             "What is my favorite color? Reply with the color only.",
         )
@@ -80,28 +81,29 @@ def test_wiki_creation_and_recall_work_through_real_llm(
 
 
 def test_repair_wiki_updates_imports_and_removes_orphans(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
-    functional_cli.write_prompt("wiki_helper", _WIKI_PROMPT)
-    functional_cli.start_chat("func-repair-wiki", prompt="wiki_helper").require_ok()
+    cli = shared_functional_cli
+    cli.write_prompt("wiki_helper", _WIKI_PROMPT)
+    cli.start_chat("func-repair-wiki", prompt="wiki_helper").require_ok()
 
     remembered = False
     for attempt in range(1, _MAX_WIKI_RETRIES + 1):
-        if _remember_color(functional_cli, "func-repair-wiki"):
+        if _remember_color(cli, "func-repair-wiki"):
             remembered = True
             break
         if attempt < _MAX_WIKI_RETRIES:
             time.sleep(2.0 * attempt)
     assert remembered, "Model failed to call wiki tool for repair test"
 
-    wiki_dir = functional_cli.chat_wiki_dir("func-repair-wiki")
+    wiki_dir = cli.chat_wiki_dir("func-repair-wiki")
     original_file = next(wiki_dir.glob("*.md"))
     original_file.write_text("My favorite color is teal.", encoding="utf-8")
     malformed_file = wiki_dir / "notes.md"
     malformed_file.write_text("skip me", encoding="utf-8")
 
-    updated = functional_cli.repair_wiki("func-repair-wiki")
+    updated = cli.repair_wiki("func-repair-wiki")
     assert updated.returncode == 0
     assert "=== Wiki Repair: func-repair-wiki ===" in updated.stdout
     assert "updated" in updated.stdout
@@ -109,13 +111,13 @@ def test_repair_wiki_updates_imports_and_removes_orphans(
 
     created_file = wiki_dir / "4321_travel.md"
     created_file.write_text("Favorite destination: Kyoto.", encoding="utf-8")
-    created = functional_cli.repair_wiki("func-repair-wiki")
+    created = cli.repair_wiki("func-repair-wiki")
     assert "created: travel" in created.stdout
 
     created_file.unlink()
-    removed = functional_cli.repair_wiki("func-repair-wiki")
+    removed = cli.repair_wiki("func-repair-wiki")
     assert "removed orphan DB row: travel" in removed.stdout
 
-    wiki_listing = functional_cli.read_wiki("func-repair-wiki")
+    wiki_listing = cli.read_wiki("func-repair-wiki")
     assert "teal" in wiki_listing.stdout.lower()
     assert "travel" not in wiki_listing.stdout.lower()

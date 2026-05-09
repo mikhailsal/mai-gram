@@ -35,9 +35,10 @@ def test_import_openai_style_json_and_show_history(shared_functional_cli) -> Non
 
 
 def test_import_proxy_json_and_continue_conversation(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
+    cli = shared_functional_cli
     chat_id = "func-import-proxy"
     payload = json.dumps(
         {
@@ -59,17 +60,17 @@ def test_import_proxy_json_and_continue_conversation(
             },
         }
     )
-    json_path = functional_cli.write_json_fixture("proxy-import.json", payload)
+    json_path = cli.write_json_fixture("proxy-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(chat_id, json_path)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path)
 
     assert imported.returncode == 0
     assert "Imported 2 messages into chat 'func-import-proxy'." in imported.stdout
 
     last_output = ""
     for attempt in range(1, _MAX_LLM_RETRIES + 1):
-        follow_up = functional_cli.send_message_with_live_retry(
+        follow_up = cli.send_message_with_live_retry(
             chat_id,
             "Reply with exactly CONTINUED.",
         )

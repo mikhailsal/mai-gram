@@ -72,7 +72,7 @@ def shared_functional_cli(
 ) -> Iterator[CliHarness]:
     """Module-scoped harness shared by tests that use distinct chat IDs.
 
-    Avoids the ~200ms cold-start overhead per test by reusing a single DB
+    Avoids the ~200 ms cold-start overhead per test by reusing a single DB
     and temp directory across every test in the module.
     """
     cli_path = shutil.which("mai-chat")
@@ -85,8 +85,8 @@ def shared_functional_cli(
 
 
 @pytest.fixture
-def requires_openrouter_api_key(functional_cli: CliHarness) -> None:
-    if not functional_cli.env.get("OPENROUTER_API_KEY", "").strip():
+def requires_openrouter_api_key() -> None:
+    if not os.getenv("OPENROUTER_API_KEY", "").strip():
         pytest.skip("OPENROUTER_API_KEY is required for this live functional scenario.")
 
 

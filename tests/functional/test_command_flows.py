@@ -49,29 +49,30 @@ def test_toggles_and_timezone_persist_to_chat_record(shared_functional_cli) -> N
 
 
 def test_datetime_and_timezone_affect_future_prompt_assembly(
-    functional_cli,
+    shared_functional_cli,
     requires_openrouter_api_key,
 ) -> None:
+    cli = shared_functional_cli
     chat_id = "func-timezone"
-    functional_cli.start_chat(chat_id).require_ok()
-    functional_cli.run_command(chat_id, "datetime").require_ok()
-    functional_cli.run_command(chat_id, "timezone", args="Europe/Moscow").require_ok()
-    functional_cli.send_message_with_live_retry(
+    cli.start_chat(chat_id).require_ok()
+    cli.run_command(chat_id, "datetime").require_ok()
+    cli.run_command(chat_id, "timezone", args="Europe/Moscow").require_ok()
+    cli.send_message_with_live_retry(
         chat_id,
         "Reply with exactly FIRST_PASS.",
     ).require_ok()
 
-    hidden_preview = functional_cli.show_prompt(chat_id)
+    hidden_preview = cli.show_prompt(chat_id)
     assert "[user] Reply with exactly FIRST_PASS." in hidden_preview.stdout
     assert "Europe/Moscow] Reply with exactly FIRST_PASS." not in hidden_preview.stdout
 
-    functional_cli.run_command(chat_id, "datetime").require_ok()
-    functional_cli.send_message_with_live_retry(
+    cli.run_command(chat_id, "datetime").require_ok()
+    cli.send_message_with_live_retry(
         chat_id,
         "Reply with exactly SECOND_PASS.",
     ).require_ok()
 
-    visible_preview = functional_cli.show_prompt(chat_id)
+    visible_preview = cli.show_prompt(chat_id)
     assert "SECOND_PASS" in visible_preview.stdout
     assert "Europe/Moscow" in visible_preview.stdout
 
