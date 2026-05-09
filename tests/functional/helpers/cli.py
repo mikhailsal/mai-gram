@@ -68,6 +68,25 @@ class CompletedCliRun:
         return self
 
 
+def _run_in_fresh_loop(coro: object) -> None:
+    """Run *coro* in a throwaway event loop without poisoning the default one.
+
+    ``asyncio.run()`` calls ``set_event_loop(None)`` after closing its loop,
+    which destroys the running loop for any subsequent ``pytest-asyncio`` async
+    tests in the same process.  We avoid this by creating a private loop,
+    running the coroutine, and closing it manually -- leaving the policy's
+    current loop untouched.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(coro)  # type: ignore[arg-type]
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
+
+
 def _run_inprocess(
     argv: tuple[str, ...], *, env: dict[str, str], cwd: Path
 ) -> tuple[int, str, str]:
@@ -94,7 +113,7 @@ def _run_inprocess(
             parser = build_parser()
             parsed = parser.parse_args(list(argv))
             logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
-            asyncio.run(_run(parsed))
+            _run_in_fresh_loop(_run(parsed))
     except SystemExit as exc:
         returncode = _extract_exit_code(exc, stderr_buf)
     except Exception as exc:
@@ -102,7 +121,7 @@ def _run_inprocess(
         stderr_buf.write(f"{exc}\n")
     finally:
         with contextlib.suppress(Exception):
-            asyncio.run(close_db())
+            _run_in_fresh_loop(close_db())
         reset_db_state()
         reset_settings()
 
