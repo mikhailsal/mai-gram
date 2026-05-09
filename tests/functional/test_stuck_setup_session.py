@@ -134,7 +134,7 @@ async def test_reset_clears_abandoned_setup_and_unblocks_import(tmp_path) -> Non
         _flush_and_read(output_buf)
         await messenger.dispatch_message(_command_message("reset"))
         reset_output = _read(output_buf)
-        assert "New chat setup has been reset" in reset_output
+        assert "New chat setup has been reset. Start over with /start." in reset_output
         assert "/start" in reset_output
         assert handler.is_in_setup(USER_ID) is False
 

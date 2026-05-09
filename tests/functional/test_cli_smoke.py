@@ -11,9 +11,9 @@ def test_help_prints_expected_options(shared_functional_cli) -> None:
     result = shared_functional_cli.run_cli("--help", allow_retry=False)
 
     assert result.returncode == 0
-    assert "--start" in result.stdout
-    assert "--command COMMAND" in result.stdout
-    assert "--cb DATA" in result.stdout
+    assert "  --start " in result.stdout
+    assert "  --command COMMAND" in result.stdout
+    assert "  --cb DATA" in result.stdout
 
 
 def test_list_on_fresh_database_shows_no_chats(shared_functional_cli) -> None:
@@ -57,8 +57,7 @@ def test_callback_without_setup_prints_ignore_hint(shared_functional_cli) -> Non
     result = shared_functional_cli.send_callback("func-callback", "model:openrouter/free")
 
     assert result.returncode == 0
-    assert "ignored" in result.stdout
-    assert "no setup session active" in result.stdout
+    assert "ignored — no setup session active.\n" in result.stdout
 
 
 def test_missing_chat_history_and_prompt_preview_fail_cleanly(shared_functional_cli) -> None:

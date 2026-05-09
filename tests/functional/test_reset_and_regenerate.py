@@ -163,7 +163,7 @@ def test_cut_above_hides_old_messages_from_prompt_but_keeps_history(shared_funct
     confirm_cut_callback = find_callback(confirm.stdout, "confirm_cut:")
     confirm_cut = cli.send_callback(chat_id, confirm_cut_callback)
     assert confirm_cut.returncode == 0
-    assert "History cut applied" in confirm_cut.stdout
+    assert "✂️ History cut applied\n" in confirm_cut.stdout
     assert "hidden from AI" in confirm_cut.stdout
 
     preview = cli.show_prompt(chat_id)

@@ -47,6 +47,7 @@ def test_callback_setup_matches_one_shot_setup(shared_functional_cli) -> None:
     assert callback_row is not None
     assert direct_row["llm_model"] == callback_row["llm_model"]
     assert direct_row["prompt_name"] == callback_row["prompt_name"]
+    assert direct_row["prompt_name"] == "default"
     assert direct_row["system_prompt"] == callback_row["system_prompt"]
     assert bool(direct_row["show_reasoning"]) == bool(callback_row["show_reasoning"])
     assert bool(direct_row["show_tool_calls"]) == bool(callback_row["show_tool_calls"])
@@ -59,7 +60,7 @@ def test_rerunning_start_reports_existing_chat(shared_functional_cli) -> None:
     result = shared_functional_cli.start_chat("func-existing")
 
     assert result.returncode == 0
-    assert "Chat already configured" in result.stdout
+    assert "Chat already configured (" in result.stdout
     assert "Use /reset to start over." in result.stdout
 
 
@@ -94,4 +95,5 @@ def test_created_chat_appears_in_list(shared_functional_cli) -> None:
 
     assert result.returncode == 0
     assert "func-listing" in result.stdout
-    assert FREE_MODEL in result.stdout
+    assert "openrouter/free" in result.stdout
+    assert "  (no messages)\n" in result.stdout

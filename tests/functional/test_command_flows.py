@@ -38,7 +38,8 @@ def test_toggles_and_timezone_persist_to_chat_record(shared_functional_cli) -> N
     cli.run_command(chat_id, "reasoning").require_ok()
     cli.run_command(chat_id, "toolcalls").require_ok()
     cli.run_command(chat_id, "datetime").require_ok()
-    cli.run_command(chat_id, "timezone", args="Europe/Moscow").require_ok()
+    result_tz = cli.run_command(chat_id, "timezone", args="Europe/Moscow")
+    result_tz.require_ok()
 
     chat = fetch_chat(cli.db_path, chat_id)
     assert chat is not None
@@ -46,6 +47,7 @@ def test_toggles_and_timezone_persist_to_chat_record(shared_functional_cli) -> N
     assert bool(chat["show_tool_calls"]) is False
     assert bool(chat["send_datetime"]) is False
     assert chat["timezone"] == "Europe/Moscow"
+    assert "Timezone set to: Europe/Moscow\n" in result_tz.stdout
 
 
 def test_datetime_and_timezone_affect_future_prompt_assembly(
@@ -113,7 +115,7 @@ def test_access_control_and_isolated_state(functional_cli, functional_cli_factor
         env_overrides=env_overrides,
     )
 
-    assert "Access denied" in denied.stdout
+    assert "Access denied." in denied.stdout
     assert "Chat created!" in allowed.stdout
 
     first_env = functional_cli_factory("functional-a")

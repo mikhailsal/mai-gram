@@ -21,7 +21,7 @@ def test_simple_message_produces_non_empty_ai_response(
     )
 
     assert result.returncode == 0
-    assert "--- AI Response" in result.stdout
+    assert "--- AI Response ---" in result.stdout
     assert "READY" in extract_last_response_body(result.stdout).upper()
 
     history = cli.read_history("func-conversation")
