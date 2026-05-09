@@ -18,7 +18,7 @@ from mai_gram.bot.executor_types import (
     replace_response_text,
 )
 from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
-from mai_gram.llm.provider import LLMProviderError
+from mai_gram.llm.provider import LLMError, LLMProviderError
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
 from mai_gram.messenger.base import OutgoingMessage
 from mai_gram.response_templates._sanitize import llm_repair
@@ -99,7 +99,7 @@ class ConversationExecutor:
                 timezone_name=request.timezone_name,
                 show_datetime=request.show_datetime,
             )
-        except (LLMProviderError, RuntimeError, OSError, asyncio.TimeoutError) as exc:
+        except (LLMError, RuntimeError, OSError, asyncio.TimeoutError) as exc:
             logger.exception(request.failure_log_message)
             error_text = self._renderer._user_friendly_error(exc)
             await self._deliver_error(request, sent_msg_ids, error_text)
