@@ -58,7 +58,7 @@ class _StreamingLLM(LLMProvider):
         pass
 
 
-async def _build_handler(tmp_path, llm, *, template: str = "empty"):
+async def _build_handler(tmp_path, llm, *, template: str = "empty", stream_debug: bool = False):
     """Build a BotHandler with a live DB and specific template."""
     import mai_gram.config as _cfg
     from mai_gram.bot.handler import BotHandler
@@ -105,7 +105,7 @@ async def _build_handler(tmp_path, llm, *, template: str = "empty"):
         await session.commit()
 
     output_buf = io.StringIO()
-    messenger = ConsoleMessenger(output=output_buf)
+    messenger = ConsoleMessenger(output=output_buf, stream_debug=stream_debug)
 
     handler = BotHandler(
         messenger,
@@ -240,6 +240,62 @@ async def test_xml_prefill_stream_works(tmp_path) -> None:
         output, escaped = await _send_and_collect(messenger, output_buf)
         assert escaped is None, f"Unexpected exception: {escaped}"
         assert "answer" in output.lower(), f"Expected 'answer' in output, got:\n{output}"
+    finally:
+        await _teardown()
+
+
+async def test_xml_prefill_stream_thought_in_blockquote(tmp_path) -> None:
+    """With XML prefill, the thought field must be rendered in a blockquote during streaming.
+
+    The prefill primes the LLM with ``<thought>``, so the streamed chunks
+    start *inside* the thought tag (no opening ``<thought>`` in the stream).
+    The streaming parser must still recognise the thought field and render
+    it inside an HTML ``<blockquote>`` — just like the non-prefill XML
+    template does.
+
+    Uses ``stream_debug=True`` so every intermediate streaming edit is
+    captured.  The thought section is deliberately long (>60 chars) to
+    ensure at least one streaming edit fires while the response still
+    contains the ``</thought>`` close tag.  We verify that the live edits
+    do NOT expose raw ``</thought>`` tag text to the user.
+    """
+    long_reasoning = (
+        "Let me carefully think through this problem step by step. "
+        "The user wants a simple greeting, so I should respond politely."
+    )
+    response_after_prefill = (
+        f"\n{long_reasoning}\n</thought>\n<content>\nHello there, nice to meet you!\n</content>"
+    )
+    llm = _StreamingLLM(response_after_prefill, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml_prefill",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+        assert "Hello" in output, f"Expected 'Hello' in output, got:\n{output}"
+
+        streaming_edits = [
+            section
+            for section in output.split("--- Edited AI Response")
+            if "replaces" in section and "final edit" not in section
+        ]
+        assert streaming_edits, (
+            f"Expected at least one intermediate streaming edit, got none. Full output:\n{output}"
+        )
+        for edit in streaming_edits:
+            assert "&lt;/thought&gt;" not in edit, (
+                "Raw </thought> close tag leaked into a streaming edit "
+                f"(should be inside a blockquote). Edit:\n{edit}"
+            )
+            assert "&lt;content&gt;" not in edit, (
+                "Raw <content> open tag leaked into a streaming edit "
+                f"(should not be visible). Edit:\n{edit}"
+            )
     finally:
         await _teardown()
 

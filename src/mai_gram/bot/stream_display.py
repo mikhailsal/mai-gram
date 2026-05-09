@@ -216,7 +216,9 @@ class StreamDisplayManager:
         """
         from mai_gram.core.md_to_telegram import markdown_to_html
 
-        result = template.parse_streaming(current_content)
+        prefill = template.assistant_prefill() or ""
+        parse_input = prefill + current_content if prefill else current_content
+        result = template.parse_streaming(parse_input)
         content_field = template.content_field_name()
         header_html = self._build_template_header(template, result, content_field, state)
 
