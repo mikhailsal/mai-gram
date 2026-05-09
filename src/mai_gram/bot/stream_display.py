@@ -224,7 +224,20 @@ class StreamDisplayManager:
 
         active_text = ""
         if result.active_field is not None:
-            active_text = result.active_content
+            if result.active_field == content_field:
+                active_text = result.active_content
+            else:
+                active_text = ""
+                if result.active_content.strip():
+                    active_header = template.render_field_html(
+                        result.active_field,
+                        result.active_content,
+                        expandable=False,
+                    )
+                    if header_html:
+                        header_html = header_html + "\n\n" + active_header
+                    else:
+                        header_html = active_header
         elif content_field in result.completed_fields:
             active_text = result.completed_fields[content_field]
         elif result.preamble:
@@ -256,7 +269,7 @@ class StreamDisplayManager:
             value = result.completed_fields.get(name, "")
             if not value.strip() or name in state.template_fields_committed:
                 continue
-            parts.append(template.render_field_html(name, value, expandable=descriptor.expandable))
+            parts.append(template.render_field_html(name, value, expandable=False))
         return "\n\n".join(parts) if parts else ""
 
     def _assemble_live_text(

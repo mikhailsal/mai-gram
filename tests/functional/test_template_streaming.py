@@ -301,6 +301,266 @@ async def test_xml_prefill_stream_thought_in_blockquote(tmp_path) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Bug: streaming display alternates between parsed and raw thought
+# ──────────────────────────────────────────────────────────────────
+
+
+async def test_xml_stream_thought_always_in_blockquote(tmp_path) -> None:
+    """The thought field must ALWAYS be rendered inside a blockquote during streaming.
+
+    Bug: while the thought field is actively streaming (before ``</thought>``
+    arrives), ``_render_template_live_text`` shows the thought content as
+    plain body text (no blockquote wrapper).  Once ``</thought>`` arrives in
+    a later chunk, the thought suddenly appears inside a ``<blockquote>``.
+    The user sees the display *alternating* between two layouts:
+
+    Edit N:   raw thought text as body (no blockquote)
+    Edit N+1: thought in blockquote + content as body
+
+    This test captures every intermediate edit via ``stream_debug=True``.
+    Any edit that contains recognisable thought text (fragments like
+    "think carefully", "factual answer") MUST have that text inside a
+    ``<blockquote>`` -- never as bare body text.
+    """
+    full_text = (
+        "<thought>\n"
+        "Let me think carefully about this problem step by step. "
+        "The user wants a simple factual answer, I should be concise.\n"
+        "</thought>\n"
+        "<content>\nThe answer is 42.\n</content>"
+    )
+    llm = _StreamingLLM(full_text, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+
+        streaming_edits = [
+            section
+            for section in output.split("--- Edited AI Response")
+            if "replaces" in section and "final edit" not in section
+        ]
+        assert streaming_edits, (
+            f"Expected at least one intermediate streaming edit, got none. Full output:\n{output}"
+        )
+
+        thought_fragments = ["think carefully", "factual answer", "step by step"]
+        for i, edit in enumerate(streaming_edits):
+            contains_thought = any(frag in edit.lower() for frag in thought_fragments)
+            if not contains_thought:
+                continue
+            assert "<blockquote" in edit, (
+                f"Streaming edit #{i + 1} shows thought content as bare body text "
+                f"(no blockquote). The thought field must always be wrapped in a "
+                f"<blockquote> during streaming, even while it is still actively "
+                f"being generated. Edit:\n{edit}"
+            )
+    finally:
+        await _teardown()
+
+
+async def test_xml_stream_display_no_layout_flip(tmp_path) -> None:
+    """The layout must not flip between 'thought as body' and 'thought as blockquote'.
+
+    Bug: early streaming edits show the thought content as the main body text
+    (because ``active_field=thought`` makes it the ``active_text``).  Once
+    the ``</thought>`` close tag arrives, the thought moves into a blockquote
+    header and the content field becomes the body.  The user sees a jarring
+    layout change: the text they were reading suddenly jumps into a collapsed
+    blockquote and different text replaces it in the body area.
+
+    This test verifies that the rendering approach is consistent: if thought
+    content appears as body text in one edit, it must NOT later appear inside
+    a blockquote (or vice versa).
+    """
+    full_text = (
+        "<thought>\n"
+        "Analyzing the user's question about mathematics. "
+        "This requires careful step-by-step reasoning to arrive at the correct answer.\n"
+        "</thought>\n"
+        "<content>\n2 + 2 = 4.\n</content>"
+    )
+    llm = _StreamingLLM(full_text, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+
+        streaming_edits = [
+            section
+            for section in output.split("--- Edited AI Response")
+            if "replaces" in section and "final edit" not in section
+        ]
+        assert streaming_edits, (
+            f"Expected intermediate streaming edits, got none. Full output:\n{output}"
+        )
+
+        thought_fragments = ["analyzing", "mathematics", "step-by-step reasoning"]
+        thought_in_body: list[int] = []
+        thought_in_blockquote: list[int] = []
+
+        for i, edit in enumerate(streaming_edits):
+            contains_thought = any(frag in edit.lower() for frag in thought_fragments)
+            if not contains_thought:
+                continue
+            if "<blockquote" in edit:
+                thought_in_blockquote.append(i + 1)
+            else:
+                thought_in_body.append(i + 1)
+
+        if thought_in_body and thought_in_blockquote:
+            pytest.fail(
+                f"Streaming display alternates between two layouts for the thought. "
+                f"Edits {thought_in_body} show thought as body text; "
+                f"edits {thought_in_blockquote} show it in a blockquote. "
+                f"The user sees a jarring layout flip. Full output:\n{output}"
+            )
+    finally:
+        await _teardown()
+
+
+# ──────────────────────────────────────────────────────────────────
+# Bug: thought blockquote is expandable (collapsed) during streaming
+# ──────────────────────────────────────────────────────────────────
+
+
+def _intermediate_streaming_edits(output: str) -> list[str]:
+    """Extract only intermediate streaming edits, excluding the final turn-completion edit.
+
+    The final edit contains usage footer (e.g. "10/20 tokens") and action
+    buttons ("Regenerate"), so we exclude any section that has those markers.
+    """
+    return [
+        section
+        for section in output.split("--- Edited AI Response")
+        if "replaces" in section
+        and "final edit" not in section
+        and "tokens" not in section
+        and "Regenerate" not in section
+    ]
+
+
+async def test_xml_stream_thought_blockquote_not_expandable(tmp_path) -> None:
+    """During streaming, the thought blockquote must NOT be expandable (collapsed).
+
+    Bug: ``_build_template_header`` renders the thought field with
+    ``expandable=descriptor.expandable``.  The XML template sets
+    ``expandable=True`` on the thought field descriptor, so the streaming
+    display wraps it in ``<blockquote expandable>``.  Telegram renders this
+    as a collapsed block requiring a tap to expand, making the thought
+    completely unreadable during live streaming (and it re-collapses on
+    every edit).
+
+    During streaming, the blockquote should use plain ``<blockquote>``
+    (``expandable=False``) so the user can read the reasoning as it arrives.
+    The ``expandable=True`` style is appropriate only for the final message.
+    """
+    full_text = (
+        "<thought>\n"
+        "Let me carefully analyze this question in great detail. "
+        "I need to consider multiple angles and perspectives before answering. "
+        "The user seems to want a thorough explanation.\n"
+        "</thought>\n"
+        "<content>\nHere is a detailed answer for you.\n</content>"
+    )
+    llm = _StreamingLLM(full_text, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+
+        streaming_edits = _intermediate_streaming_edits(output)
+        assert streaming_edits, (
+            f"Expected intermediate streaming edits, got none. Full output:\n{output}"
+        )
+
+        edits_with_blockquote = [
+            (i, edit) for i, edit in enumerate(streaming_edits) if "<blockquote" in edit
+        ]
+        assert edits_with_blockquote, (
+            f"Expected at least one streaming edit with a blockquote, got none. "
+            f"Full output:\n{output}"
+        )
+
+        for i, edit in edits_with_blockquote:
+            assert "<blockquote expandable>" not in edit, (
+                f"Streaming edit #{i + 1} uses <blockquote expandable> for the "
+                f"thought block. During streaming this makes the thought "
+                f"unreadable (collapsed in Telegram, re-collapses on every edit). "
+                f"Should use plain <blockquote> during streaming. Edit:\n{edit}"
+            )
+    finally:
+        await _teardown()
+
+
+async def test_xml_prefill_stream_thought_blockquote_not_expandable(tmp_path) -> None:
+    """Same expandable bug as above, but for the prefill variant.
+
+    With prefill, the thought field completes faster (the ``<thought>`` open
+    tag is in the prefill), so the blockquote appears earlier in streaming.
+    Verify it uses plain ``<blockquote>`` rather than ``<blockquote expandable>``.
+    """
+    long_reasoning = (
+        "Let me carefully think through this problem step by step. "
+        "The user wants a simple greeting, so I should respond politely. "
+        "I need to consider the context and provide a warm welcome."
+    )
+    response_after_prefill = f"\n{long_reasoning}\n</thought>\n<content>\nHello there!\n</content>"
+    llm = _StreamingLLM(response_after_prefill, chunk_size=8)
+    _handler, messenger, output_buf = await _build_handler(
+        tmp_path,
+        llm,
+        template="xml_prefill",
+        stream_debug=True,
+    )
+
+    try:
+        output, escaped = await _send_and_collect(messenger, output_buf)
+        assert escaped is None, f"Unexpected exception: {escaped}"
+
+        streaming_edits = _intermediate_streaming_edits(output)
+        assert streaming_edits, (
+            f"Expected intermediate streaming edits, got none. Full output:\n{output}"
+        )
+
+        edits_with_blockquote = [
+            (i, edit) for i, edit in enumerate(streaming_edits) if "<blockquote" in edit
+        ]
+        assert edits_with_blockquote, (
+            f"Expected at least one streaming edit with a blockquote, got none. "
+            f"Full output:\n{output}"
+        )
+
+        for i, edit in edits_with_blockquote:
+            assert "<blockquote expandable>" not in edit, (
+                f"Streaming edit #{i + 1} uses <blockquote expandable> for the "
+                f"thought block in prefill mode. During streaming this makes the "
+                f"thought unreadable (collapsed). Should use plain <blockquote>. "
+                f"Edit:\n{edit}"
+            )
+    finally:
+        await _teardown()
+
+
+# ──────────────────────────────────────────────────────────────────
 # Edge case: incomplete XML tags gracefully handled
 # ──────────────────────────────────────────────────────────────────
 
