@@ -30,6 +30,7 @@ class StreamDisplayManager:
     def __init__(self, messenger: Messenger, renderer: ConversationRenderer) -> None:
         self._messenger = messenger
         self._renderer = renderer
+        self._last_sent_text: str | None = None
 
     async def handle_turn_complete(
         self,
@@ -58,6 +59,7 @@ class StreamDisplayManager:
         state.committed_content_offset = 0
         state.reasoning_committed = False
         state.template_fields_committed.clear()
+        self._last_sent_text = None
 
     async def maybe_update_live_display(
         self,
@@ -354,7 +356,9 @@ class StreamDisplayManager:
         result = await self._messenger.send_message(
             OutgoingMessage(text=live_text, chat_id=request.telegram_chat_id, parse_mode="html")
         )
-        if not result.success:
+        if result.success:
+            self._last_sent_text = live_text
+        else:
             result = await self._messenger.send_message(
                 OutgoingMessage(text=fallback, chat_id=request.telegram_chat_id)
             )
@@ -368,6 +372,8 @@ class StreamDisplayManager:
         fallback: str,
     ) -> str | None:
         del fallback
+        if live_text == self._last_sent_text:
+            return placeholder_msg_id
         edit_result = await self._messenger.edit_message(
             request.telegram_chat_id,
             placeholder_msg_id,
@@ -380,4 +386,6 @@ class StreamDisplayManager:
                 len(live_text),
                 edit_result.error,
             )
+        else:
+            self._last_sent_text = live_text
         return placeholder_msg_id
