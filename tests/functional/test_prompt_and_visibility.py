@@ -7,8 +7,9 @@ from tests.functional.helpers.artifacts import fetch_chat
 pytestmark = pytest.mark.functional
 
 
-def test_show_prompt_includes_sections_and_honors_tool_filter(functional_cli) -> None:
-    functional_cli.write_prompt(
+def test_show_prompt_includes_sections_and_honors_tool_filter(shared_functional_cli) -> None:
+    cli = shared_functional_cli
+    cli.write_prompt(
         "filtered_tools",
         "You are a prompt-preview test assistant.",
         toml="""
@@ -16,9 +17,9 @@ def test_show_prompt_includes_sections_and_honors_tool_filter(functional_cli) ->
         disabled = ["wiki_create", "wiki_edit"]
         """,
     )
-    functional_cli.start_chat("func-filtered-tools", prompt="filtered_tools").require_ok()
+    cli.start_chat("func-filtered-tools", prompt="filtered_tools").require_ok()
 
-    preview = functional_cli.show_prompt("func-filtered-tools")
+    preview = cli.show_prompt("func-filtered-tools")
 
     assert preview.returncode == 0
     assert "--- Prompt Preview ---" in preview.stdout
@@ -29,8 +30,9 @@ def test_show_prompt_includes_sections_and_honors_tool_filter(functional_cli) ->
     assert "wiki_list" in preview.stdout
 
 
-def test_prompt_can_disable_entire_mcp_server_groups(functional_cli) -> None:
-    functional_cli.write_prompt(
+def test_prompt_can_disable_entire_mcp_server_groups(shared_functional_cli) -> None:
+    cli = shared_functional_cli
+    cli.write_prompt(
         "no_messages_tools",
         "You are a prompt-preview test assistant.",
         toml="""
@@ -38,9 +40,9 @@ def test_prompt_can_disable_entire_mcp_server_groups(functional_cli) -> None:
         disabled = ["messages"]
         """,
     )
-    functional_cli.start_chat("func-no-messages", prompt="no_messages_tools").require_ok()
+    cli.start_chat("func-no-messages", prompt="no_messages_tools").require_ok()
 
-    preview = functional_cli.show_prompt("func-no-messages")
+    preview = cli.show_prompt("func-no-messages")
 
     assert preview.returncode == 0
     assert "search_messages" not in preview.stdout
@@ -48,8 +50,9 @@ def test_prompt_can_disable_entire_mcp_server_groups(functional_cli) -> None:
     assert "wiki_list" in preview.stdout
 
 
-def test_prompt_config_persists_visibility_defaults(functional_cli) -> None:
-    functional_cli.write_prompt(
+def test_prompt_config_persists_visibility_defaults(shared_functional_cli) -> None:
+    cli = shared_functional_cli
+    cli.write_prompt(
         "hidden_defaults",
         "You are a hidden-defaults assistant.",
         toml="""
@@ -59,8 +62,8 @@ def test_prompt_config_persists_visibility_defaults(functional_cli) -> None:
         """,
     )
 
-    functional_cli.start_chat("func-hidden-defaults", prompt="hidden_defaults").require_ok()
-    chat = fetch_chat(functional_cli.db_path, "func-hidden-defaults")
+    cli.start_chat("func-hidden-defaults", prompt="hidden_defaults").require_ok()
+    chat = fetch_chat(cli.db_path, "func-hidden-defaults")
 
     assert chat is not None
     assert bool(chat["show_reasoning"]) is False

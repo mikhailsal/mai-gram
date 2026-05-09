@@ -75,6 +75,7 @@ def test_send_message_with_live_retry_uses_extended_timeout(monkeypatch, tmp_pat
 def test_send_message_with_live_retry_retries_transient_timeout(monkeypatch, tmp_path) -> None:
     harness = _build_harness(tmp_path)
     attempts = 0
+    monkeypatch.setattr(cli_helpers.time, "sleep", lambda _: None)
 
     def fake_send_message(
         self,
@@ -118,6 +119,7 @@ def test_send_message_with_live_retry_retries_malformed_toolcall_output(
 ) -> None:
     harness = _build_harness(tmp_path)
     attempts = 0
+    monkeypatch.setattr(cli_helpers.time, "sleep", lambda _: None)
 
     def fake_send_message(
         self,
@@ -159,6 +161,7 @@ def test_send_message_with_live_retry_retries_malformed_toolcall_output(
 def test_send_message_with_live_retry_retries_truncated_call_marker(monkeypatch, tmp_path) -> None:
     harness = _build_harness(tmp_path)
     attempts = 0
+    monkeypatch.setattr(cli_helpers.time, "sleep", lambda _: None)
 
     def fake_send_message(
         self,

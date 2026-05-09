@@ -9,11 +9,12 @@ from tests.functional.helpers.artifacts import fetch_chat, fetch_knowledge_entri
 pytestmark = pytest.mark.functional
 
 
-def test_help_and_model_commands_cover_existing_and_missing_chats(functional_cli) -> None:
-    help_result = functional_cli.run_command("func-help", "help")
-    missing_model = functional_cli.run_command("func-missing-model", "model")
-    functional_cli.start_chat("func-model").require_ok()
-    existing_model = functional_cli.run_command("func-model", "model")
+def test_help_and_model_commands_cover_existing_and_missing_chats(shared_functional_cli) -> None:
+    cli = shared_functional_cli
+    help_result = cli.run_command("func-help", "help")
+    missing_model = cli.run_command("func-missing-model", "model")
+    cli.start_chat("func-model").require_ok()
+    existing_model = cli.run_command("func-model", "model")
 
     assert help_result.returncode == 0
     assert "/start" in help_result.stdout
@@ -29,16 +30,17 @@ def test_help_and_model_commands_cover_existing_and_missing_chats(functional_cli
     assert "Current model: openrouter/free" in existing_model.stdout
 
 
-def test_toggles_and_timezone_persist_to_chat_record(functional_cli) -> None:
+def test_toggles_and_timezone_persist_to_chat_record(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-flags"
-    functional_cli.start_chat(chat_id).require_ok()
+    cli.start_chat(chat_id).require_ok()
 
-    functional_cli.run_command(chat_id, "reasoning").require_ok()
-    functional_cli.run_command(chat_id, "toolcalls").require_ok()
-    functional_cli.run_command(chat_id, "datetime").require_ok()
-    functional_cli.run_command(chat_id, "timezone", args="Europe/Moscow").require_ok()
+    cli.run_command(chat_id, "reasoning").require_ok()
+    cli.run_command(chat_id, "toolcalls").require_ok()
+    cli.run_command(chat_id, "datetime").require_ok()
+    cli.run_command(chat_id, "timezone", args="Europe/Moscow").require_ok()
 
-    chat = fetch_chat(functional_cli.db_path, chat_id)
+    chat = fetch_chat(cli.db_path, chat_id)
     assert chat is not None
     assert bool(chat["show_reasoning"]) is False
     assert bool(chat["show_tool_calls"]) is False
@@ -74,7 +76,8 @@ def test_datetime_and_timezone_affect_future_prompt_assembly(
     assert "Europe/Moscow" in visible_preview.stdout
 
 
-def test_resend_last_replays_last_assistant_message(functional_cli) -> None:
+def test_resend_last_replays_last_assistant_message(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-resend"
     payload = json.dumps(
         [
@@ -82,11 +85,11 @@ def test_resend_last_replays_last_assistant_message(functional_cli) -> None:
             {"role": "assistant", "content": "Imported assistant reply"},
         ]
     )
-    json_path = functional_cli.write_json_fixture("resend-import.json", payload)
+    json_path = cli.write_json_fixture("resend-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    functional_cli.import_json(chat_id, json_path).require_ok()
-    result = functional_cli.run_command(chat_id, "resend_last")
+    cli.start_chat(chat_id).require_ok()
+    cli.import_json(chat_id, json_path).require_ok()
+    result = cli.run_command(chat_id, "resend_last")
 
     assert result.returncode == 0
     assert "Imported assistant reply" in result.stdout
@@ -121,7 +124,8 @@ def test_access_control_and_isolated_state(functional_cli, functional_cli_factor
     assert "Error: no chat ID available." in result.output
 
 
-def test_different_chat_ids_keep_history_and_wiki_state_separate(functional_cli) -> None:
+def test_different_chat_ids_keep_history_and_wiki_state_separate(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     first_chat_id = "func-separate-a"
     second_chat_id = "func-separate-b"
 
@@ -138,30 +142,30 @@ def test_different_chat_ids_keep_history_and_wiki_state_separate(functional_cli)
         ]
     )
 
-    functional_cli.start_chat(first_chat_id).require_ok()
-    functional_cli.start_chat(second_chat_id).require_ok()
-    functional_cli.import_json(
+    cli.start_chat(first_chat_id).require_ok()
+    cli.start_chat(second_chat_id).require_ok()
+    cli.import_json(
         first_chat_id,
-        functional_cli.write_json_fixture("separate-a.json", first_payload),
+        cli.write_json_fixture("separate-a.json", first_payload),
     ).require_ok()
-    functional_cli.import_json(
+    cli.import_json(
         second_chat_id,
-        functional_cli.write_json_fixture("separate-b.json", second_payload),
+        cli.write_json_fixture("separate-b.json", second_payload),
     ).require_ok()
 
-    first_wiki_dir = functional_cli.chat_wiki_dir(first_chat_id)
-    second_wiki_dir = functional_cli.chat_wiki_dir(second_chat_id)
+    first_wiki_dir = cli.chat_wiki_dir(first_chat_id)
+    second_wiki_dir = cli.chat_wiki_dir(second_chat_id)
     first_wiki_dir.mkdir(parents=True, exist_ok=True)
     second_wiki_dir.mkdir(parents=True, exist_ok=True)
     (first_wiki_dir / "1001_profile.md").write_text("Favorite tea: oolong.", encoding="utf-8")
     (second_wiki_dir / "1002_profile.md").write_text("Favorite tea: sencha.", encoding="utf-8")
-    functional_cli.repair_wiki(first_chat_id).require_ok()
-    functional_cli.repair_wiki(second_chat_id).require_ok()
+    cli.repair_wiki(first_chat_id).require_ok()
+    cli.repair_wiki(second_chat_id).require_ok()
 
-    first_history = functional_cli.read_history(first_chat_id)
-    second_history = functional_cli.read_history(second_chat_id)
-    first_wiki = functional_cli.read_wiki(first_chat_id)
-    second_wiki = functional_cli.read_wiki(second_chat_id)
+    first_history = cli.read_history(first_chat_id)
+    second_history = cli.read_history(second_chat_id)
+    first_wiki = cli.read_wiki(first_chat_id)
+    second_wiki = cli.read_wiki(second_chat_id)
 
     assert "History only for alpha" in first_history.stdout
     assert "History only for beta" not in first_history.stdout
@@ -171,11 +175,11 @@ def test_different_chat_ids_keep_history_and_wiki_state_separate(functional_cli)
     assert "sencha" not in first_wiki.stdout.lower()
     assert "sencha" in second_wiki.stdout.lower()
     assert "oolong" not in second_wiki.stdout.lower()
-    assert len(fetch_messages(functional_cli.db_path, first_chat_id)) == 2
-    assert len(fetch_messages(functional_cli.db_path, second_chat_id)) == 2
-    assert {
-        entry["value"] for entry in fetch_knowledge_entries(functional_cli.db_path, first_chat_id)
-    } == {"Favorite tea: oolong."}
-    assert {
-        entry["value"] for entry in fetch_knowledge_entries(functional_cli.db_path, second_chat_id)
-    } == {"Favorite tea: sencha."}
+    assert len(fetch_messages(cli.db_path, first_chat_id)) == 2
+    assert len(fetch_messages(cli.db_path, second_chat_id)) == 2
+    assert {entry["value"] for entry in fetch_knowledge_entries(cli.db_path, first_chat_id)} == {
+        "Favorite tea: oolong."
+    }
+    assert {entry["value"] for entry in fetch_knowledge_entries(cli.db_path, second_chat_id)} == {
+        "Favorite tea: sencha."
+    }

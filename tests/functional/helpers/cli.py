@@ -87,12 +87,23 @@ def _run_in_fresh_loop(coro: object) -> None:
             loop.close()
 
 
+_cached_parser: object | None = None
+
+
+def _get_cached_parser() -> object:
+    global _cached_parser
+    if _cached_parser is None:
+        from mai_gram.console_cli import build_parser
+
+        _cached_parser = build_parser()
+    return _cached_parser
+
+
 def _run_inprocess(
     argv: tuple[str, ...], *, env: dict[str, str], cwd: Path
 ) -> tuple[int, str, str]:
     """Run the CLI entry-point in the current process, returning (rc, stdout, stderr)."""
     from mai_gram.config import reset_settings
-    from mai_gram.console_cli import build_parser
     from mai_gram.console_runner import _run
     from mai_gram.db import close_db, reset_db_state
 
@@ -110,8 +121,8 @@ def _run_inprocess(
     returncode = 0
     try:
         with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
-            parser = build_parser()
-            parsed = parser.parse_args(list(argv))
+            parser = _get_cached_parser()
+            parsed = parser.parse_args(list(argv))  # type: ignore[union-attr]
             logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
             _run_in_fresh_loop(_run(parsed))
     except SystemExit as exc:

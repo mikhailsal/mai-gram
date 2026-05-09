@@ -66,6 +66,24 @@ def functional_cli(functional_cli_factory: Callable[[str], CliHarness]) -> CliHa
     return functional_cli_factory("functional")
 
 
+@pytest.fixture(scope="module")
+def shared_functional_cli(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[CliHarness]:
+    """Module-scoped harness shared by tests that use distinct chat IDs.
+
+    Avoids the ~200ms cold-start overhead per test by reusing a single DB
+    and temp directory across every test in the module.
+    """
+    cli_path = shutil.which("mai-chat")
+    if cli_path is None:
+        pytest.skip("mai-chat is not installed on PATH. Run make install-dev first.")
+    root = tmp_path_factory.mktemp("shared")
+    harness = _build_cli_harness(root, cli_path)
+    yield harness
+    shutil.rmtree(root, ignore_errors=True)
+
+
 @pytest.fixture
 def requires_openrouter_api_key(functional_cli: CliHarness) -> None:
     if not functional_cli.env.get("OPENROUTER_API_KEY", "").strip():

@@ -12,7 +12,8 @@ pytestmark = pytest.mark.functional
 _MAX_LLM_RETRIES = 5
 
 
-def test_import_openai_style_json_and_show_history(functional_cli) -> None:
+def test_import_openai_style_json_and_show_history(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-import-openai"
     payload = json.dumps(
         [
@@ -21,11 +22,11 @@ def test_import_openai_style_json_and_show_history(functional_cli) -> None:
             {"role": "assistant", "content": "Imported reply"},
         ]
     )
-    json_path = functional_cli.write_json_fixture("openai-import.json", payload)
+    json_path = cli.write_json_fixture("openai-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(chat_id, json_path)
-    history = functional_cli.read_history(chat_id)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path)
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
     assert "Imported 2 messages into chat 'func-import-openai'." in imported.stdout
@@ -87,7 +88,8 @@ def test_import_proxy_json_and_continue_conversation(
     )
 
 
-def test_import_with_reasoning_template_transforms_reasoning(functional_cli) -> None:
+def test_import_with_reasoning_template_transforms_reasoning(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-import-reasoning-tmpl"
     payload = json.dumps(
         [
@@ -99,13 +101,11 @@ def test_import_with_reasoning_template_transforms_reasoning(functional_cli) -> 
             },
         ]
     )
-    json_path = functional_cli.write_json_fixture("reasoning-tmpl-import.json", payload)
+    json_path = cli.write_json_fixture("reasoning-tmpl-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(
-        chat_id, json_path, reasoning_template="gemma_reasoning_prefill"
-    )
-    history = functional_cli.read_history(chat_id)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path, reasoning_template="gemma_reasoning_prefill")
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
     assert "reasoning template: gemma_reasoning_prefill" in imported.stdout
@@ -115,7 +115,8 @@ def test_import_with_reasoning_template_transforms_reasoning(functional_cli) -> 
     assert "The answer is 4." in history.stdout
 
 
-def test_import_with_reasoning_template_custom_params(functional_cli) -> None:
+def test_import_with_reasoning_template_custom_params(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-import-custom-params"
     payload = json.dumps(
         [
@@ -127,16 +128,16 @@ def test_import_with_reasoning_template_custom_params(functional_cli) -> None:
             },
         ]
     )
-    json_path = functional_cli.write_json_fixture("custom-params-import.json", payload)
+    json_path = cli.write_json_fixture("custom-params-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(
         chat_id,
         json_path,
         reasoning_template="gemma_reasoning",
         reasoning_template_params={"reasoning_field": "analysis"},
     )
-    history = functional_cli.read_history(chat_id)
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
     assert "<analysis>" in history.stdout
@@ -145,13 +146,14 @@ def test_import_with_reasoning_template_custom_params(functional_cli) -> None:
     assert "Here is my analysis." in history.stdout
 
 
-def test_import_with_markdown_headers_template_uses_markdown_not_xml(functional_cli) -> None:
+def test_import_with_markdown_headers_template_uses_markdown_not_xml(shared_functional_cli) -> None:
     """Importing with markdown_headers template must wrap reasoning in ## headers, not XML tags.
 
     Regression: _wrap_reasoning_in_template used hardcoded XML wrapping regardless of template
     type, producing <Thought>...</Thought> instead of ## Thought / ## Content for markdown
     templates.
     """
+    cli = shared_functional_cli
     chat_id = "func-import-md-headers"
     payload = json.dumps(
         [
@@ -163,11 +165,11 @@ def test_import_with_markdown_headers_template_uses_markdown_not_xml(functional_
             },
         ]
     )
-    json_path = functional_cli.write_json_fixture("md-headers-import.json", payload)
+    json_path = cli.write_json_fixture("md-headers-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(chat_id, json_path, reasoning_template="markdown_headers")
-    history = functional_cli.read_history(chat_id)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path, reasoning_template="markdown_headers")
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
     assert "reasoning template: markdown_headers" in imported.stdout
@@ -190,9 +192,10 @@ def test_import_with_markdown_headers_template_uses_markdown_not_xml(functional_
 
 
 def test_import_with_markdown_headers_prefill_uses_markdown_not_xml(
-    functional_cli,
+    shared_functional_cli,
 ) -> None:
     """Same regression as markdown_headers but for the prefill variant."""
+    cli = shared_functional_cli
     chat_id = "func-import-md-prefill"
     payload = json.dumps(
         [
@@ -204,13 +207,11 @@ def test_import_with_markdown_headers_prefill_uses_markdown_not_xml(
             },
         ]
     )
-    json_path = functional_cli.write_json_fixture("md-prefill-import.json", payload)
+    json_path = cli.write_json_fixture("md-prefill-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(
-        chat_id, json_path, reasoning_template="markdown_headers_prefill"
-    )
-    history = functional_cli.read_history(chat_id)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path, reasoning_template="markdown_headers_prefill")
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
 
@@ -227,12 +228,13 @@ def test_import_with_markdown_headers_prefill_uses_markdown_not_xml(
     assert "Recursion is when a function calls itself." in hist_text
 
 
-def test_import_with_json_template_uses_json_not_xml(functional_cli) -> None:
+def test_import_with_json_template_uses_json_not_xml(shared_functional_cli) -> None:
     """Importing with json template must wrap reasoning as a JSON object, not XML tags.
 
     Regression: _wrap_reasoning_in_template used hardcoded XML wrapping for all templates,
     producing <thought>...</thought> instead of {"thought": "...", "content": "..."}.
     """
+    cli = shared_functional_cli
     chat_id = "func-import-json-tmpl"
     payload = json.dumps(
         [
@@ -244,11 +246,11 @@ def test_import_with_json_template_uses_json_not_xml(functional_cli) -> None:
             },
         ]
     )
-    json_path = functional_cli.write_json_fixture("json-tmpl-import.json", payload)
+    json_path = cli.write_json_fixture("json-tmpl-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(chat_id, json_path, reasoning_template="json")
-    history = functional_cli.read_history(chat_id)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path, reasoning_template="json")
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
     assert "reasoning template: json" in imported.stdout
@@ -267,8 +269,9 @@ def test_import_with_json_template_uses_json_not_xml(functional_cli) -> None:
     assert "The answer is 6." in hist_text
 
 
-def test_import_with_json_prefill_template_uses_json_not_xml(functional_cli) -> None:
+def test_import_with_json_prefill_template_uses_json_not_xml(shared_functional_cli) -> None:
     """Same regression as json but for the prefill variant."""
+    cli = shared_functional_cli
     chat_id = "func-import-json-prefill"
     payload = json.dumps(
         [
@@ -280,11 +283,11 @@ def test_import_with_json_prefill_template_uses_json_not_xml(functional_cli) -> 
             },
         ]
     )
-    json_path = functional_cli.write_json_fixture("json-prefill-import.json", payload)
+    json_path = cli.write_json_fixture("json-prefill-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    imported = functional_cli.import_json(chat_id, json_path, reasoning_template="json_prefill")
-    history = functional_cli.read_history(chat_id)
+    cli.start_chat(chat_id).require_ok()
+    imported = cli.import_json(chat_id, json_path, reasoning_template="json_prefill")
+    history = cli.read_history(chat_id)
 
     assert imported.returncode == 0
 
@@ -302,7 +305,8 @@ def test_import_with_json_prefill_template_uses_json_not_xml(functional_cli) -> 
     assert "The answer is 10." in hist_text
 
 
-def test_import_with_invalid_reasoning_template_fails(functional_cli) -> None:
+def test_import_with_invalid_reasoning_template_fails(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-import-bad-tmpl"
     payload = json.dumps(
         [
@@ -310,26 +314,25 @@ def test_import_with_invalid_reasoning_template_fails(functional_cli) -> None:
             {"role": "assistant", "content": "Hi!"},
         ]
     )
-    json_path = functional_cli.write_json_fixture("bad-tmpl-import.json", payload)
+    json_path = cli.write_json_fixture("bad-tmpl-import.json", payload)
 
-    functional_cli.start_chat(chat_id).require_ok()
-    result = functional_cli.import_json(
-        chat_id, json_path, reasoning_template="nonexistent_template"
-    )
+    cli.start_chat(chat_id).require_ok()
+    result = cli.import_json(chat_id, json_path, reasoning_template="nonexistent_template")
 
     assert result.returncode != 0
     assert "unknown reasoning template" in result.output
 
 
-def test_invalid_and_empty_import_inputs_fail(functional_cli) -> None:
+def test_invalid_and_empty_import_inputs_fail(shared_functional_cli) -> None:
+    cli = shared_functional_cli
     chat_id = "func-import-errors"
-    invalid_json = functional_cli.write_json_fixture("invalid-import.json", "{not valid json")
-    empty_json = functional_cli.write_json_fixture("empty-import.json", "[]")
+    invalid_json = cli.write_json_fixture("invalid-import.json", "{not valid json")
+    empty_json = cli.write_json_fixture("empty-import.json", "[]")
 
-    functional_cli.start_chat(chat_id).require_ok()
+    cli.start_chat(chat_id).require_ok()
 
-    invalid = functional_cli.import_json(chat_id, invalid_json)
-    empty = functional_cli.import_json(chat_id, empty_json)
+    invalid = cli.import_json(chat_id, invalid_json)
+    empty = cli.import_json(chat_id, empty_json)
 
     assert invalid.returncode != 0
     assert "Error: Invalid JSON:" in invalid.output
