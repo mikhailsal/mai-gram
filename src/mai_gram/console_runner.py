@@ -542,7 +542,7 @@ async def _dispatch_console_runtime(
         await messenger.dispatch_callback(
             chat_id=chat_id,
             user_id=user_id,
-            callback_data=f"template:{template}",
+            callback_data=f"tpl_group:__single__:{template}",
         )
         raw_tpl_params = getattr(args, "template_params", None)
         if raw_tpl_params:

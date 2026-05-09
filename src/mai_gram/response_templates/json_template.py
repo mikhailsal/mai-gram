@@ -71,6 +71,10 @@ class JsonTemplate(ResponseTemplate):
     def description(self) -> str:
         return f'JSON object: {{"{self._reasoning_field}", "content"}}'
 
+    @property
+    def group(self) -> str:
+        return "json"
+
     def get_params(self) -> list[TemplateParam]:
         return [
             TemplateParam(

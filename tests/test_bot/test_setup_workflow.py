@@ -431,3 +431,166 @@ class TestFinishSetup:
         assert stored_chat.system_prompt == "You are a careful assistant."
         assert stored_chat.send_datetime is True
         assert not workflow.is_in_setup("test-user")
+
+
+class TestTemplateGroupSelection:
+    async def test_prompt_selection_shows_group_chooser(self) -> None:
+        """After prompt selection, template groups should be shown (not flat list)."""
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["openrouter/free"]
+        settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = [
+            "empty",
+            "xml",
+            "xml_prefill",
+            "json",
+            "json_prefill",
+        ]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.CHOOSING_PROMPT,
+            selected_model="openrouter/free",
+        )
+
+        await workflow.handle_setup_callback(
+            _make_message(
+                chat_id="tg-chat",
+                bot_id="test-bot",
+                callback_data="prompt:default",
+                message_type=MessageType.CALLBACK,
+            )
+        )
+
+        session = workflow.get_setup_session("test-user")
+        assert session is not None
+        assert session.state == SetupState.CHOOSING_TEMPLATE_GROUP
+
+        sent_msg = _last_sent_message(workflow)
+        assert "category" in sent_msg.text.lower()
+
+    async def test_group_selection_shows_variants(self) -> None:
+        """Selecting a group with multiple templates shows the variant list."""
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["openrouter/free"]
+        settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = [
+            "empty",
+            "xml",
+            "xml_prefill",
+            "json",
+            "json_prefill",
+        ]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.CHOOSING_TEMPLATE_GROUP,
+            selected_model="openrouter/free",
+            selected_prompt_text="Default prompt",
+        )
+
+        await workflow.handle_setup_callback(
+            _make_message(
+                chat_id="tg-chat",
+                bot_id="test-bot",
+                callback_data="tpl_group:xml",
+                message_type=MessageType.CALLBACK,
+            )
+        )
+
+        session = workflow.get_setup_session("test-user")
+        assert session is not None
+        assert session.state == SetupState.CHOOSING_TEMPLATE
+
+        sent_msg = _last_sent_message(workflow)
+        assert "variant" in sent_msg.text.lower()
+
+    async def test_single_template_in_group_skips_variant_step(self) -> None:
+        """If a group has only one available template, skip variant selection and go to params."""
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["openrouter/free"]
+        settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty", "json"]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.CHOOSING_TEMPLATE_GROUP,
+            selected_model="openrouter/free",
+            selected_prompt_text="Default prompt",
+        )
+
+        await workflow.handle_setup_callback(
+            _make_message(
+                chat_id="tg-chat",
+                bot_id="test-bot",
+                callback_data="tpl_group:json",
+                message_type=MessageType.CALLBACK,
+            )
+        )
+
+        session = workflow.get_setup_session("test-user")
+        assert session is not None
+        assert session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS
+        assert session.selected_template == "json"
+
+        sent_msg = _last_sent_message(workflow)
+        assert "configurable parameters" in sent_msg.text.lower()
+
+    async def test_ungrouped_template_selection_finishes_setup(self, session: AsyncSession) -> None:
+        """Selecting an ungrouped template (empty) should finish setup directly."""
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["openrouter/free"]
+        settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty", "xml", "json"]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.CHOOSING_TEMPLATE_GROUP,
+            selected_model="openrouter/free",
+            selected_prompt_text="Default prompt",
+        )
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await workflow.handle_setup_callback(
+                _make_message(
+                    chat_id="tg-chat",
+                    bot_id="test-bot",
+                    callback_data="tpl_group:__single__:empty",
+                    message_type=MessageType.CALLBACK,
+                )
+            )
+
+        assert not workflow.is_in_setup("test-user")
+        sent_msg = _last_sent_message(workflow)
+        assert "Chat created!" in sent_msg.text

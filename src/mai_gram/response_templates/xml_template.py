@@ -69,6 +69,10 @@ class XmlTemplate(ResponseTemplate):
     def description(self) -> str:
         return f"XML tags: <{self._reasoning_field}> + <content>"
 
+    @property
+    def group(self) -> str:
+        return "xml"
+
     def get_params(self) -> list[TemplateParam]:
         return [
             TemplateParam(

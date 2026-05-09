@@ -129,6 +129,10 @@ class GemmaReasoningTemplate(ResponseTemplate):
     def description(self) -> str:
         return f"Gemma-4-style analytical blocks in <{self._reasoning_field}> + <content>"
 
+    @property
+    def group(self) -> str:
+        return "xml"
+
     def get_params(self) -> list[TemplateParam]:
         return [
             TemplateParam(

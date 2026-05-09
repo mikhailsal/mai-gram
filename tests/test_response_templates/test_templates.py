@@ -86,6 +86,81 @@ class TestRegistry:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Template groups
+# ──────────────────────────────────────────────────────────────────
+
+
+class TestTemplateGroups:
+    def test_list_groups_returns_all_builtin(self) -> None:
+        from mai_gram.response_templates.registry import list_groups
+
+        groups = list_groups()
+        group_ids = [g.id for g in groups]
+        assert "xml" in group_ids
+        assert "json" in group_ids
+        assert "markdown" in group_ids
+
+    def test_groups_are_ordered(self) -> None:
+        from mai_gram.response_templates.registry import list_groups
+
+        groups = list_groups()
+        orders = [g.order for g in groups]
+        assert orders == sorted(orders)
+
+    def test_xml_group_templates(self) -> None:
+        from mai_gram.response_templates.registry import get_templates_in_group
+
+        templates = get_templates_in_group("xml")
+        names = {t.name for t in templates}
+        assert names == {
+            "xml",
+            "xml_prefill",
+            "xml_emotions",
+            "xml_emotions_prefill",
+            "gemma_reasoning",
+            "gemma_reasoning_prefill",
+        }
+
+    def test_json_group_templates(self) -> None:
+        from mai_gram.response_templates.registry import get_templates_in_group
+
+        templates = get_templates_in_group("json")
+        names = {t.name for t in templates}
+        assert names == {"json", "json_prefill"}
+
+    def test_markdown_group_templates(self) -> None:
+        from mai_gram.response_templates.registry import get_templates_in_group
+
+        templates = get_templates_in_group("markdown")
+        names = {t.name for t in templates}
+        assert names == {"markdown_headers", "markdown_headers_prefill"}
+
+    def test_empty_template_has_no_group(self) -> None:
+        t = get_template("empty")
+        assert t.group == ""
+
+    def test_nonexistent_group_returns_empty(self) -> None:
+        from mai_gram.response_templates.registry import get_templates_in_group
+
+        templates = get_templates_in_group("nonexistent")
+        assert templates == []
+
+    def test_all_grouped_templates_have_matching_group_id(self) -> None:
+        from mai_gram.response_templates.registry import get_templates_in_group, list_groups
+
+        for grp in list_groups():
+            for tpl in get_templates_in_group(grp.id):
+                assert tpl.group == grp.id
+
+    def test_group_has_label_and_description(self) -> None:
+        from mai_gram.response_templates.registry import list_groups
+
+        for grp in list_groups():
+            assert grp.label, f"Group {grp.id} has no label"
+            assert grp.description, f"Group {grp.id} has no description"
+
+
+# ──────────────────────────────────────────────────────────────────
 # Empty template (no params, backward compat)
 # ──────────────────────────────────────────────────────────────────
 

@@ -52,6 +52,16 @@ class TemplateExample:
 
 
 @dataclass(frozen=True, slots=True)
+class TemplateGroup:
+    """Metadata for a logical group of related templates."""
+
+    id: str
+    label: str
+    description: str = ""
+    order: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class TemplateParam:
     """Declares a single user-configurable template parameter."""
 
@@ -81,6 +91,15 @@ class ResponseTemplate(ABC):
     @abstractmethod
     def description(self) -> str:
         """Human-readable description shown during template selection."""
+
+    @property
+    def group(self) -> str:
+        """Group identifier for categorizing related templates in the selection UI.
+
+        Templates sharing the same group ID are presented together under
+        a single heading.  Return an empty string for ungrouped templates.
+        """
+        return ""
 
     @abstractmethod
     def get_fields(self) -> list[FieldDescriptor]:

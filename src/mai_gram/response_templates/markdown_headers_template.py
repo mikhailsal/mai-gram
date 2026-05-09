@@ -64,6 +64,10 @@ class MarkdownHeadersTemplate(ResponseTemplate):
     def description(self) -> str:
         return f"Markdown: ## {self._reasoning_field} + ## Content"
 
+    @property
+    def group(self) -> str:
+        return "markdown"
+
     def get_params(self) -> list[TemplateParam]:
         return [
             TemplateParam(

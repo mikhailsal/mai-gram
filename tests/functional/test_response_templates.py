@@ -105,3 +105,43 @@ def test_toggle_with_empty_template_has_no_fields(
     result = functional_cli.run_command("func-tpl-toggle-empty", "toggle")
     assert result.returncode == 0
     assert "no toggleable fields" in result.stdout.lower()
+
+
+# --- Template group selection tests (live API) ---
+
+
+def test_template_group_selection_via_xml_group(
+    functional_cli,
+    requires_openrouter_api_key,
+) -> None:
+    """Selecting a template through the XML group should create a working chat."""
+    functional_cli.start_chat("func-tpl-grp-xml", template="xml_prefill").require_ok()
+
+    result = functional_cli.send_message_with_live_retry(
+        "func-tpl-grp-xml",
+        "What is 3+3? Answer briefly.",
+    )
+    assert result.returncode == 0
+
+    history = functional_cli.read_history("func-tpl-grp-xml")
+    assert history.returncode == 0
+    full_output = history.stdout.lower()
+    assert "<thought>" in full_output and "<content>" in full_output
+
+
+def test_template_group_selection_via_json_group(
+    functional_cli,
+    requires_openrouter_api_key,
+) -> None:
+    """Selecting a template from the JSON group should produce valid JSON output."""
+    functional_cli.start_chat("func-tpl-grp-json", template="json").require_ok()
+
+    result = functional_cli.send_message_with_live_retry(
+        "func-tpl-grp-json",
+        "What is 5+5? Answer briefly.",
+    )
+    assert result.returncode == 0
+
+    history = functional_cli.read_history("func-tpl-grp-json")
+    assert history.returncode == 0
+    assert '"thought"' in history.stdout or '"content"' in history.stdout

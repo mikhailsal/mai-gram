@@ -30,6 +30,7 @@ class SetupState(str, enum.Enum):
     CHOOSING_MODEL = "choosing_model"
     CHOOSING_PROMPT = "choosing_prompt"
     AWAITING_CUSTOM_PROMPT = "awaiting_custom_prompt"
+    CHOOSING_TEMPLATE_GROUP = "choosing_template_group"
     CHOOSING_TEMPLATE = "choosing_template"
     CONFIGURING_TEMPLATE_PARAMS = "configuring_template_params"
 
@@ -112,6 +113,9 @@ class SetupWorkflow:
             return
         if category == "prompt" and session.state == SetupState.CHOOSING_PROMPT:
             await self._handle_prompt_selection(message, session, value)
+            return
+        if category == "tpl_group" and session.state == SetupState.CHOOSING_TEMPLATE_GROUP:
+            await self._handle_template_group_selection(message, session, value)
             return
         if category == "template" and session.state == SetupState.CHOOSING_TEMPLATE:
             await self._handle_template_selection(message, session, value)
@@ -265,7 +269,7 @@ class SetupWorkflow:
         return all_templates
 
     async def _show_template_selection(self, session: SetupSession) -> None:
-        session.state = SetupState.CHOOSING_TEMPLATE
+        """Show the template group selection or flat list if grouping is trivial."""
         templates = self._get_available_templates_for_bot()
 
         if len(templates) <= 1:
@@ -273,13 +277,38 @@ class SetupWorkflow:
             await self._finish_setup_from_session(session)
             return
 
-        from mai_gram.response_templates.registry import get_template
+        from mai_gram.response_templates.registry import (
+            get_template,
+            get_templates_in_group,
+            list_groups,
+        )
 
+        available_set = set(templates)
+        groups_with_templates = []
+        for grp in list_groups():
+            grp_templates = [t for t in get_templates_in_group(grp.id) if t.name in available_set]
+            if grp_templates:
+                groups_with_templates.append((grp, grp_templates))
+
+        ungrouped = [get_template(name) for name in templates if get_template(name).group == ""]
+
+        total_choices = len(groups_with_templates) + len(ungrouped)
+        if total_choices <= 1 and not groups_with_templates:
+            session.selected_template = None
+            await self._finish_setup_from_session(session)
+            return
+
+        session.state = SetupState.CHOOSING_TEMPLATE_GROUP
         keyboard_rows = []
-        for tpl_name in templates:
-            tpl = get_template(tpl_name)
-            label = f"{tpl.description}" if tpl_name != "empty" else f"{tpl.description} [default]"
-            keyboard_rows.append([(label, f"template:{tpl_name}")])
+
+        for tpl in ungrouped:
+            label = f"{tpl.description} [default]" if tpl.name == "empty" else tpl.description
+            keyboard_rows.append([(label, f"tpl_group:__single__:{tpl.name}")])
+
+        for grp, grp_templates in groups_with_templates:
+            count = len(grp_templates)
+            label = f"{grp.label} ({count} variant{'s' if count != 1 else ''})"
+            keyboard_rows.append([(label, f"tpl_group:{grp.id}")])
 
         prompt_preview = session.selected_prompt_text[:80]
         if len(session.selected_prompt_text) > 80:
@@ -290,8 +319,57 @@ class SetupWorkflow:
                 text=(
                     f"Model: {session.selected_model}\n"
                     f"Prompt: {prompt_preview}\n\n"
-                    "Choose a response format template:"
+                    "Choose a response format category:"
                 ),
+                chat_id=session.chat_id,
+                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
+            )
+        )
+
+    async def _handle_template_group_selection(
+        self,
+        message: IncomingMessage,
+        session: SetupSession,
+        value: str,
+    ) -> None:
+        """Handle group selection: show templates within the chosen group."""
+        if value.startswith("__single__:"):
+            template_name = value[len("__single__:") :]
+            session.selected_template = template_name if template_name != "empty" else None
+            session.bot_id = message.bot_id or session.bot_id
+
+            from mai_gram.response_templates.registry import get_template as _get_tpl
+
+            tpl = _get_tpl(session.selected_template)
+            if tpl.get_params():
+                await self._show_template_params_summary(session, tpl)
+            else:
+                await self._finish_setup_from_session(session, message=message)
+            return
+
+        from mai_gram.response_templates.registry import get_templates_in_group
+
+        available_set = set(self._get_available_templates_for_bot())
+        grp_templates = [t for t in get_templates_in_group(value) if t.name in available_set]
+
+        if len(grp_templates) == 1:
+            tpl = grp_templates[0]
+            session.selected_template = tpl.name
+            session.bot_id = message.bot_id or session.bot_id
+            if tpl.get_params():
+                await self._show_template_params_summary(session, tpl)
+            else:
+                await self._finish_setup_from_session(session, message=message)
+            return
+
+        session.state = SetupState.CHOOSING_TEMPLATE
+        keyboard_rows = []
+        for tpl in grp_templates:
+            keyboard_rows.append([(tpl.description, f"template:{tpl.name}")])
+
+        await self._messenger.send_message(
+            OutgoingMessage(
+                text="Choose a specific template variant:",
                 chat_id=session.chat_id,
                 keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
             )
