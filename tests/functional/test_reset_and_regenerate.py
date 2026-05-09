@@ -7,7 +7,7 @@ import pytest
 from tests.functional.helpers.artifacts import list_backups
 from tests.functional.helpers.parsing import extract_last_response_body, find_callback
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_local
 
 
 def test_reset_creates_backup_and_clears_chat_artifacts(shared_functional_cli) -> None:
@@ -42,6 +42,7 @@ def test_reset_creates_backup_and_clears_chat_artifacts(shared_functional_cli) -
     assert "(no messages)" in cli.read_history(chat_id).stdout
 
 
+@pytest.mark.functional_live
 def test_regenerate_matches_normal_response_contract(
     shared_functional_cli,
     requires_openrouter_api_key,
@@ -74,6 +75,7 @@ def test_regenerate_matches_normal_response_contract(
     assert "Cut this & above" in regenerated.stdout
 
 
+@pytest.mark.functional_live
 def test_regenerate_on_older_message_removes_subsequent_history(
     shared_functional_cli,
     requires_openrouter_api_key,

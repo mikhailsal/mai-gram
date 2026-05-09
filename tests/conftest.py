@@ -37,7 +37,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--run-functional",
         action="store_true",
         default=False,
-        help="Run tests marked as 'functional' (real LLM/OpenRouter integration).",
+        help="Run tests marked as 'functional_live' (real LLM/OpenRouter integration).",
     )
 
 
@@ -45,7 +45,20 @@ def pytest_configure(config: pytest.Config) -> None:
     """Register custom markers."""
     config.addinivalue_line(
         "markers",
-        "functional: integration tests that may call real LLM/provider services",
+        "functional_local: CLI subprocess tests that do NOT require an API key",
+    )
+    config.addinivalue_line(
+        "markers",
+        "functional_live: integration tests that call real LLM/provider services "
+        "(require OPENROUTER_API_KEY)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "functional: alias — treated as functional_live for backward compat",
+    )
+    config.addinivalue_line(
+        "markers",
+        "integration: in-process integration tests using mock/stub providers (no API key needed)",
     )
 
 
@@ -66,21 +79,38 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int | None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip functional tests unless explicitly enabled or API key is present."""
+    """Skip live functional tests unless explicitly enabled or API key is present.
+
+    Test ordering: local tests run before live tests so fast failures are caught early.
+    """
     run_functional = config.getoption("--run-functional")
     has_api_key = bool(os.getenv("OPENROUTER_API_KEY", "").strip())
-    if run_functional or has_api_key:
-        return
 
     skip_marker = pytest.mark.skip(
         reason=(
-            "functional tests are skipped; pass --run-functional or set OPENROUTER_API_KEY "
-            "to enable them."
+            "live functional tests are skipped; pass --run-functional or set "
+            "OPENROUTER_API_KEY to enable them."
         )
     )
+
+    local_tests: list[pytest.Item] = []
+    live_tests: list[pytest.Item] = []
+    other_tests: list[pytest.Item] = []
+
     for item in items:
-        if "functional" in item.keywords:
-            item.add_marker(skip_marker)
+        is_live = "functional_live" in item.keywords or "functional" in item.keywords
+        is_local_functional = "functional_local" in item.keywords
+
+        if is_live and not is_local_functional:
+            if not (run_functional or has_api_key):
+                item.add_marker(skip_marker)
+            live_tests.append(item)
+        elif is_local_functional:
+            local_tests.append(item)
+        else:
+            other_tests.append(item)
+
+    items[:] = other_tests + local_tests + live_tests
 
 
 @pytest.fixture

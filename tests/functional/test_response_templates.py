@@ -9,7 +9,7 @@ import pytest
 
 from tests.functional.helpers.parsing import extract_last_response_body
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_live
 
 
 def test_empty_template_preserves_current_behavior(

@@ -1,4 +1,4 @@
-"""Functional tests for template-aware streaming display.
+"""Integration tests for template-aware streaming display.
 
 Verifies that during streaming, the live display renders structured fields
 cleanly (no raw XML/JSON/markdown tags visible to the user) when a template
@@ -15,7 +15,7 @@ import pytest
 
 from mai_gram.llm.provider import LLMProvider, LLMResponse, StreamChunk, TokenUsage
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.integration
 
 CHAT_ID = "test-tpl-stream"
 USER_ID = "test-user-tpl-stream"

@@ -5,7 +5,7 @@ import pytest
 from tests.functional.helpers.artifacts import fetch_chat
 from tests.functional.helpers.cli import FREE_MODEL
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_local
 
 
 def test_start_with_model_and_prompt_creates_chat(shared_functional_cli) -> None:

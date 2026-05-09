@@ -17,7 +17,7 @@ import pytest
 
 from mai_gram.messenger.base import IncomingMessage, MessageType
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.integration
 
 CHAT_ID = "test-stuck-setup"
 USER_ID = "test-user-stuck"

@@ -7,7 +7,7 @@ import pytest
 from tests.functional.helpers.artifacts import fetch_knowledge_entries
 from tests.functional.helpers.parsing import extract_last_response_body
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_live
 
 _WIKI_PROMPT = """
 You are an assistant with wiki memory tools.

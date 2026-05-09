@@ -55,18 +55,29 @@ else
     fail "Code size violations found — reduce file/function sizes before committing"
 fi
 
-# ── 5. Tests + coverage ─────────────────────────────────────────
+# ── 5. Local tests + coverage ──────────────────────────────────
+# Runs unit tests + functional_local tests with full parallelism (worksteal).
+# Integration tests run separately (-n0) because they mutate global DB state.
+# Live functional tests (functional_live) are skipped here — they run
+# in step 6 with the API key explicitly loaded.
 # Coverage threshold is defined by fail_under in [tool.coverage.report]
 # section of pyproject.toml. Do NOT hardcode --cov-fail-under here.
-step "Running tests with coverage"
-if pytest --cov=mai_gram --cov-config=pyproject.toml -q 2>&1; then
-    pass "All tests passed with required coverage (threshold from pyproject.toml)"
+step "Running local tests with coverage (unit + functional_local)"
+if pytest --ignore=tests/test_integration --cov=mai_gram --cov-config=pyproject.toml -q 2>&1; then
+    pass "Unit + functional_local tests passed"
 else
     fail "Tests failed or coverage below minimum (see fail_under in pyproject.toml)"
 fi
 
-# ── 6. Live functional tests ────────────────────────────────────
-step "Running live functional tests"
+step "Running integration tests (in-process, serial)"
+if pytest tests/test_integration -n0 --cov=mai_gram --cov-config=pyproject.toml --cov-append -q 2>&1; then
+    pass "Integration tests passed"
+else
+    fail "Integration tests failed"
+fi
+
+# ── 6. Live functional tests (require OPENROUTER_API_KEY) ──────
+step "Running live functional tests (real LLM API calls)"
 if make test-functional-live; then
     pass "Live functional tests passed"
 else

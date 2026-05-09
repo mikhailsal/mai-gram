@@ -4,7 +4,7 @@ import pytest
 
 from tests.functional.helpers.artifacts import fetch_chat
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_local
 
 
 def test_show_prompt_includes_sections_and_honors_tool_filter(shared_functional_cli) -> None:
@@ -71,6 +71,7 @@ def test_prompt_config_persists_visibility_defaults(shared_functional_cli) -> No
     assert bool(chat["send_datetime"]) is False
 
 
+@pytest.mark.functional_live
 def test_send_datetime_false_removes_timestamp_from_future_prompt_context(
     shared_functional_cli,
     requires_openrouter_api_key,

@@ -53,11 +53,17 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM", "TCH", "C4", "PTH", "D
 "tests/**/*.py" = ["S101"]
 
 [tool.pytest.ini_options]
-addopts = "--dist worksteal -n auto"
+addopts = "--dist worksteal -n auto --ignore=tests/test_integration"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
+markers = [
+    "integration: in-process integration tests using mock/stub providers (no API key needed)",
+    "functional_local: CLI subprocess tests that do NOT require an API key",
+    "functional_live: integration tests calling real LLM/provider services (require OPENROUTER_API_KEY)",
+    "functional: alias for functional_live (backward compat)",
+]
 
 [tool.coverage.run]
 source = ["mai_gram"]

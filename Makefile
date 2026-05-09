@@ -7,8 +7,8 @@
 
 .PHONY: help install install-dev run run-dev run-reload \
         chat chat-start chat-list chat-history chat-prompt chat-import \
-	test test-v test-cov test-cov-html test-unit test-fast \
-	test-functional test-functional-serial test-functional-live \
+	test test-v test-cov test-cov-html test-unit test-integration test-fast \
+	test-functional-local test-functional-live test-functional-live-serial test-local \
 	lint lint-fix format format-check typecheck size-check check fix \
         precommit install-hooks \
         docker-build docker-up docker-down docker-logs docker-restart docker-shell \
@@ -94,30 +94,31 @@ chat-debug: ## Send a message with debug logging (CHAT=test-mychat MSG="Hello!")
 
 ##@ Testing
 
-test: ## Run all tests
+test: ## Run all tests (unit + integration + local functional; live skipped without API key)
 	pytest
+	pytest tests/test_integration -n0
 
 test-v: ## Run all tests with verbose output
 	pytest -v
+	pytest tests/test_integration -n0 -v
 
 test-cov: ## Run tests with coverage report (enforces minimum from pyproject.toml)
 	pytest --cov=mai_gram --cov-report=term-missing --cov-config=pyproject.toml
+	pytest tests/test_integration -n0 --cov=mai_gram --cov-config=pyproject.toml --cov-append --cov-report=term-missing
 
 test-cov-html: ## Run tests with HTML coverage report
 	pytest --cov=mai_gram --cov-report=html --cov-config=pyproject.toml
+	pytest tests/test_integration -n0 --cov=mai_gram --cov-config=pyproject.toml --cov-append --cov-report=html
 	@echo "Coverage report generated in htmlcov/index.html"
 
-test-unit: ## Run unit tests only
-	pytest tests/
+test-unit: ## Run unit tests only (no functional, no integration)
+	pytest -m "not functional_local and not functional_live and not functional and not integration"
 
-test-fast: ## Run tests excluding slow markers
-	pytest -m "not slow"
+test-integration: ## Run in-process integration tests (mock providers, no API key, serial)
+	pytest tests/test_integration -n0
 
-test-functional: ## Run live functional tests (parallel by default)
-	pytest tests/functional --run-functional
-
-test-functional-serial: ## Run live functional tests serially
-	pytest -n 0 tests/functional --run-functional
+test-functional-local: ## Run local functional tests (CLI subprocess, no API key)
+	pytest -m functional_local
 
 test-functional-live: ## Run live functional tests with OPENROUTER_API_KEY loaded from env or .env
 	@set -e; \
@@ -128,7 +129,25 @@ test-functional-live: ## Run live functional tests with OPENROUTER_API_KEY loade
 		echo "OPENROUTER_API_KEY is required for live functional tests"; \
 		exit 1; \
 	fi; \
-	pytest tests/functional --run-functional
+	pytest -m "functional_live or functional" --run-functional
+
+test-functional-live-serial: ## Run live functional tests serially (no parallelism)
+	@set -e; \
+	set -a; \
+	if [ -f .env ]; then . ./.env; fi; \
+	set +a; \
+	if [ -z "$$OPENROUTER_API_KEY" ]; then \
+		echo "OPENROUTER_API_KEY is required for live functional tests"; \
+		exit 1; \
+	fi; \
+	pytest -n 0 -m "functional_live or functional" --run-functional
+
+test-local: ## Run all local tests (unit + integration + local functional)
+	pytest -m "not functional_live and not functional"
+	pytest tests/test_integration -n0
+
+test-fast: ## Run tests excluding slow markers
+	pytest -m "not slow"
 
 ##@ Code Quality
 
@@ -156,7 +175,7 @@ fix: lint-fix format ## Auto-fix linting issues and format code
 
 ##@ Pre-commit
 
-precommit: check test-cov test-functional-live ## Run all pre-commit checks, including live functional tests
+precommit: check test-cov test-functional-live ## Run all pre-commit checks (local tests first via coverage, then live)
 
 install-hooks: ## Install git pre-commit hook (enforces quality on every commit)
 	@cp scripts/pre-commit .git/hooks/pre-commit

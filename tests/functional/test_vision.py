@@ -16,7 +16,7 @@ from mai_gram.llm.openrouter import OpenRouterProvider
 from mai_gram.llm.provider import ChatMessage, LLMError, LLMRateLimitError, MessageRole
 from tests.functional.conftest import SLOW_PROVIDERS
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_live
 
 _MAX_VISION_ATTEMPTS = 5
 

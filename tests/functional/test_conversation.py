@@ -5,7 +5,7 @@ import pytest
 from tests.functional.helpers.artifacts import read_debug_log_entries
 from tests.functional.helpers.parsing import extract_last_response_body
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_live
 
 
 def test_simple_message_produces_non_empty_ai_response(

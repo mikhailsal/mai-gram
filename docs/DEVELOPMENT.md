@@ -188,12 +188,88 @@ the read timeout (45s) and the upstream provider status.
 
 ## Testing
 
+The test suite is organized into **four tiers**, listed from fastest to slowest:
+
+### Test Tiers
+
+| Tier | Marker | Directory | Needs API Key? | What it tests |
+|------|--------|-----------|----------------|---------------|
+| **Unit** | *(none)* | `tests/test_*` | No | Pure logic, isolated modules with mocks |
+| **Integration** | `@pytest.mark.integration` | `tests/test_integration/` | No | Multi-module workflows with stub LLM providers (in-process DB, real BotHandler) |
+| **Functional Local** | `@pytest.mark.functional_local` | `tests/functional/` | No | CLI subprocess tests (spawn `mai-chat`, test commands, flags, flows without calling LLM APIs) |
+| **Functional Live** | `@pytest.mark.functional_live` | `tests/functional/` | **Yes** | End-to-end tests hitting real OpenRouter API (needs `OPENROUTER_API_KEY`) |
+
+### How skipping works
+
+- **Unit + Integration + Functional Local** — always run; never skipped.
+- **Functional Live** — skipped unless `OPENROUTER_API_KEY` is set in the environment **OR** `--run-functional` is passed.
+- Individual live tests also use the `requires_openrouter_api_key` fixture for explicit skip messages.
+
+### Running tests
+
 ```bash
-pytest                     # Run all tests
-pytest -x                  # Stop on first failure
-pytest --cov=mai_gram      # With coverage
-make test-cov              # Coverage with 90% enforcement
+# All local tests (unit + integration + functional_local)
+make test-local
+
+# All tests including live (if API key is present, live tests run; otherwise they're skipped)
+make test
+
+# Individual tiers
+make test-unit                    # Unit tests only
+make test-integration             # Integration tests (stub providers, serial, no API)
+make test-functional-local        # Local CLI subprocess tests (no API)
+make test-functional-live         # Live tests (requires OPENROUTER_API_KEY in env or .env)
+make test-functional-live-serial  # Live tests without parallelism (useful for debugging)
+
+# With coverage enforcement
+make test-cov
+
+# Stop on first failure
+pytest -x
+
+# Verbose output
+make test-v
 ```
+
+**Note:** Integration tests run serially (`-n0`) because they manipulate global DB
+singletons. They are excluded from the default `pytest` xdist run and executed as
+a separate step. The `make test` and `make test-cov` targets handle this automatically.
+
+### Where to put new tests
+
+| Your test... | Put it in | Marker | Parallelism |
+|---|---|---|---|
+| Tests a single function/class with mocks | `tests/test_<module>/` | *(none)* | xdist parallel |
+| Exercises BotHandler/DB with stub LLM (no real API) | `tests/test_integration/` | `@pytest.mark.integration` | **serial** (`-n0`) |
+| Spawns `mai-chat` subprocess, tests CLI behavior (no API) | `tests/functional/` | `pytestmark = pytest.mark.functional_local` | xdist parallel |
+| Calls real OpenRouter API or requires `OPENROUTER_API_KEY` | `tests/functional/` | `pytestmark = pytest.mark.functional_live` (+ `requires_openrouter_api_key` fixture) | xdist parallel |
+
+**Why integration tests run serially:** They instantiate real `BotHandler` instances with
+in-process databases and manipulate global singletons (`init_db`, `_settings_instance`).
+This is incompatible with xdist's parallel workers. If your test calls `init_db()` or
+touches `mai_gram.config._settings_instance`, it belongs in `tests/test_integration/`.
+
+### Mixed files (both local and live tests)
+
+Some files in `tests/functional/` contain both local and live tests. Convention:
+
+```python
+pytestmark = pytest.mark.functional_local  # module default: local
+
+@pytest.mark.functional_live  # override for this specific test
+def test_something_that_needs_real_api(shared_functional_cli, requires_openrouter_api_key):
+    ...
+```
+
+### Execution order in pre-commit
+
+The pre-commit hook and `make precommit` guarantee this order:
+
+1. Lint / format / type check / size audit (fast static checks)
+2. **Local tests + coverage** (unit + integration + functional_local)
+3. **Live functional tests** (real API calls, slowest)
+
+This ensures fast failures are caught before spending time/money on live API calls.
 
 ## Linting & Formatting
 
@@ -214,8 +290,10 @@ A git pre-commit hook enforces quality gates before every commit:
 2. **Format** — `ruff format --check` confirms consistent formatting
 3. **Type check** — `mypy` passes with zero errors (strict mode)
 4. **Code size audit** — oversized Python files and functions are reported to keep refactoring pressure visible while the current hotspots are being decomposed
-5. **Tests + coverage** — all tests pass with ≥ 90% code coverage
+5. **Local tests + coverage** — unit, integration, and local functional tests pass with ≥ 92% code coverage
 6. **Live functional tests** — the real `mai-chat` integration suite passes with a valid `OPENROUTER_API_KEY`
+
+Local tests run **first** (step 5) so that fast failures are caught before expensive live API calls (step 6).
 
 If `OPENROUTER_API_KEY` is not already exported, the hook and `make precommit` will try to load it from `.env`. If no key is available, the live functional step fails instead of silently skipping the real-provider coverage.
 

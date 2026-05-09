@@ -6,7 +6,7 @@ import pytest
 
 from tests.functional.helpers.artifacts import fetch_chat, fetch_knowledge_entries, fetch_messages
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_local
 
 
 def test_help_and_model_commands_cover_existing_and_missing_chats(shared_functional_cli) -> None:
@@ -50,6 +50,7 @@ def test_toggles_and_timezone_persist_to_chat_record(shared_functional_cli) -> N
     assert "Timezone set to: Europe/Moscow\n" in result_tz.stdout
 
 
+@pytest.mark.functional_live
 def test_datetime_and_timezone_affect_future_prompt_assembly(
     shared_functional_cli,
     requires_openrouter_api_key,

@@ -4,7 +4,7 @@ import pytest
 
 from tests.functional.helpers.artifacts import read_console_state
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_local
 
 
 def test_help_prints_expected_options(shared_functional_cli) -> None:

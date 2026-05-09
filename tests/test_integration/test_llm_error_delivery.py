@@ -16,7 +16,7 @@ import io
 
 import pytest
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.integration
 
 CHAT_ID = "test-error-delivery"
 USER_ID = "test-user-errors"

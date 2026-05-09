@@ -22,7 +22,7 @@ from tests.functional.conftest import SLOW_PROVIDERS
 if TYPE_CHECKING:
     from mai_gram.response_templates.base import ResponseTemplate
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_live
 
 MAX_REPAIR_ATTEMPTS = 3
 

@@ -7,7 +7,7 @@ import pytest
 
 from tests.functional.helpers.parsing import extract_last_response_body
 
-pytestmark = pytest.mark.functional
+pytestmark = pytest.mark.functional_local
 
 _MAX_LLM_RETRIES = 5
 
@@ -34,6 +34,7 @@ def test_import_openai_style_json_and_show_history(shared_functional_cli) -> Non
     assert "ASSISTANT: Imported reply" in history.stdout
 
 
+@pytest.mark.functional_live
 def test_import_proxy_json_and_continue_conversation(
     shared_functional_cli,
     requires_openrouter_api_key,
