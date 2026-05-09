@@ -19,6 +19,8 @@ You are a concise assistant for CLI integration tests.
 Follow direct formatting instructions exactly when the user requests a fixed token.
 """
 
+SLOW_PROVIDERS = ["OpenInference", "Baidu", "Nvidia", "Novita"]
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[object]) -> Iterator[None]:
@@ -100,8 +102,18 @@ def _build_cli_harness(root: Path, cli_path: str) -> CliHarness:
     data_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.joinpath("default.txt").write_text(_DEFAULT_PROMPT.strip() + "\n", encoding="utf-8")
+    ignore_toml = ", ".join(f'"{p}"' for p in SLOW_PROVIDERS)
     models_config_path.write_text(
-        '[models]\ndefault = "openrouter/free"\n\n[models."openrouter/free"]\n',
+        "[models]\n"
+        'default = "openrouter/free"\n\n'
+        '[models."openrouter/free"]\n'
+        f"provider.ignore = [{ignore_toml}]\n\n"
+        "[format_repair]\n"
+        'model = "openrouter/free"\n'
+        "temperature = 0.0\n"
+        "max_tokens = 8192\n"
+        "enabled = true\n"
+        f"provider.ignore = [{ignore_toml}]\n",
         encoding="utf-8",
     )
 

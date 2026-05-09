@@ -17,16 +17,12 @@ import pytest
 
 from mai_gram.response_templates._sanitize import llm_repair
 from mai_gram.response_templates.registry import get_template
+from tests.functional.conftest import SLOW_PROVIDERS
 
 if TYPE_CHECKING:
     from mai_gram.response_templates.base import ResponseTemplate
 
 pytestmark = pytest.mark.functional
-
-# Provider slugs known to route to models unsuitable for text repair tasks
-# (e.g. OCR-only models, omni-modal models that ignore system prompts).
-# Discovered via proxy log analysis -- see commit message for details.
-_IGNORED_PROVIDERS = ["Baidu"]
 
 MAX_REPAIR_ATTEMPTS = 3
 
@@ -47,12 +43,11 @@ def repair_extra_params() -> dict:
     """Extra API params for repair calls.
 
     - reasoning disabled for speed
-    - provider.ignore excludes providers whose free models are fundamentally
-      incapable of structured text repair (e.g. Baidu's OCR model)
+    - provider.ignore excludes slow/incapable providers (shared list)
     """
     return {
         "reasoning": {"effort": "none"},
-        "provider": {"ignore": _IGNORED_PROVIDERS},
+        "provider": {"ignore": SLOW_PROVIDERS},
     }
 
 

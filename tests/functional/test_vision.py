@@ -14,12 +14,11 @@ import pytest
 
 from mai_gram.llm.openrouter import OpenRouterProvider
 from mai_gram.llm.provider import ChatMessage, LLMError, MessageRole
+from tests.functional.conftest import SLOW_PROVIDERS
 
 pytestmark = pytest.mark.functional
 
 _MAX_VISION_ATTEMPTS = 5
-
-_IGNORED_PROVIDERS = ["Nvidia"]
 
 
 def _make_solid_colour_png(r: int, g: int, b: int, size: int = 64) -> bytes:
@@ -80,7 +79,7 @@ async def test_vision_model_describes_solid_red_image() -> None:
                     model="openrouter/free",
                     temperature=0.0,
                     max_tokens=32,
-                    extra_params={"provider": {"ignore": _IGNORED_PROVIDERS}},
+                    extra_params={"provider": {"ignore": SLOW_PROVIDERS}},
                 ):
                     if chunk.content:
                         parts.append(chunk.content)
