@@ -6,6 +6,7 @@ management during LLM response streaming.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,9 @@ if TYPE_CHECKING:
         StreamState,
     )
     from mai_gram.messenger.base import Messenger
+    from mai_gram.response_templates.base import ResponseTemplate, StreamingParseResult
+
+logger = logging.getLogger(__name__)
 
 
 class StreamDisplayManager:
@@ -53,12 +57,15 @@ class StreamDisplayManager:
         state.last_display_len = 0
         state.committed_content_offset = 0
         state.reasoning_committed = False
+        state.template_fields_committed.clear()
 
     async def maybe_update_live_display(
         self,
         request: AssistantTurnRequest,
         state: StreamState,
         sent_msg_ids: list[str],
+        *,
+        template: ResponseTemplate | None = None,
     ) -> None:
         current_reasoning = "".join(state.reasoning_parts)
         current_content = "".join(state.content_parts)
@@ -75,20 +82,55 @@ class StreamDisplayManager:
         if not should_edit:
             return
 
-        rendered = self._render_live_text(
+        rendered = self._choose_renderer(
+            request,
+            state,
+            template,
+            current_reasoning,
+            current_content,
+        )
+        if rendered is None:
+            return
+
+        await self._apply_rendered(request, state, sent_msg_ids, rendered, current_content)
+        state.last_edit_time = now_mono
+        state.last_display_len = display_len
+
+    def _choose_renderer(
+        self,
+        request: AssistantTurnRequest,
+        state: StreamState,
+        template: ResponseTemplate | None,
+        current_reasoning: str,
+        current_content: str,
+    ) -> tuple[str, str, str, str] | None:
+        use_template = (
+            template is not None and template.name != "empty" and not current_reasoning.strip()
+        )
+        if use_template:
+            return self._render_template_live_text(
+                template=template,  # type: ignore[arg-type]
+                current_content=current_content,
+                state=state,
+            )
+        return self._render_live_text(
             current_reasoning=current_reasoning,
             current_content=current_content,
             committed_content_offset=state.committed_content_offset,
             show_reasoning=request.show_reasoning,
             reasoning_committed=state.reasoning_committed,
         )
-        if rendered is None:
-            return
 
+    async def _apply_rendered(
+        self,
+        request: AssistantTurnRequest,
+        state: StreamState,
+        sent_msg_ids: list[str],
+        rendered: tuple[str, str, str, str],
+        current_content: str,
+    ) -> None:
         live_text, fallback, header_html, remaining_content = rendered
-        max_len = self._messenger.max_message_length
-
-        if len(live_text) > max_len:
+        if len(live_text) > self._messenger.max_message_length:
             await self._handle_overflow(
                 request,
                 state,
@@ -104,9 +146,6 @@ class StreamDisplayManager:
                 live_text=live_text,
                 fallback=fallback,
             )
-
-        state.last_edit_time = now_mono
-        state.last_display_len = display_len
 
     async def _handle_overflow(
         self,
@@ -162,6 +201,86 @@ class StreamDisplayManager:
         raw_fallback = remaining_content or current_reasoning
         fallback = raw_fallback[:max_len] + " ▍"
         return live_text, fallback, header_html, remaining_content
+
+    def _render_template_live_text(
+        self,
+        *,
+        template: ResponseTemplate,
+        current_content: str,
+        state: StreamState,
+    ) -> tuple[str, str, str, str] | None:
+        """Render live text using template-aware incremental parsing.
+
+        Returns the same 4-tuple as ``_render_live_text`` so the caller
+        can handle overflow and placeholder logic identically.
+        """
+        from mai_gram.core.md_to_telegram import markdown_to_html
+
+        result = template.parse_streaming(current_content)
+        content_field = template.content_field_name()
+        header_html = self._build_template_header(template, result, content_field, state)
+
+        active_text = ""
+        if result.active_field is not None:
+            active_text = result.active_content
+        elif content_field in result.completed_fields:
+            active_text = result.completed_fields[content_field]
+        elif result.preamble:
+            active_text = result.preamble
+
+        remaining = active_text[state.committed_content_offset :]
+        content_html = markdown_to_html(remaining) if remaining.strip() else ""
+
+        return self._assemble_live_text(
+            header_html,
+            content_html,
+            remaining,
+            current_content,
+            result.preamble,
+        )
+
+    @staticmethod
+    def _build_template_header(
+        template: ResponseTemplate,
+        result: StreamingParseResult,
+        content_field: str,
+        state: StreamState,
+    ) -> str:
+        parts: list[str] = []
+        for descriptor in sorted(template.get_fields(), key=lambda f: f.order):
+            name = descriptor.name
+            if name == content_field:
+                continue
+            value = result.completed_fields.get(name, "")
+            if not value.strip() or name in state.template_fields_committed:
+                continue
+            parts.append(template.render_field_html(name, value, expandable=descriptor.expandable))
+        return "\n\n".join(parts) if parts else ""
+
+    def _assemble_live_text(
+        self,
+        header_html: str,
+        content_html: str,
+        remaining: str,
+        current_content: str,
+        preamble: str,
+    ) -> tuple[str, str, str, str] | None:
+        from mai_gram.core.md_to_telegram import markdown_to_html
+
+        max_len = self._messenger.max_message_length
+        if header_html and content_html:
+            live_text = header_html + "\n\n" + content_html + " ▍"
+        elif header_html:
+            live_text = header_html + " ▍"
+        elif content_html:
+            live_text = content_html + " ▍"
+        elif preamble.strip():
+            live_text = markdown_to_html(preamble) + " ▍"
+            return live_text, preamble[:max_len] + " ▍", "", preamble
+        else:
+            return None
+        fallback = (remaining or current_content)[:max_len] + " ▍"
+        return live_text, fallback, header_html, remaining
 
     async def _send_or_edit_placeholder(
         self,

@@ -33,10 +33,12 @@ from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
     ResponseTemplate,
+    StreamingParseResult,
     TemplateExample,
     TemplateParam,
 )
 from mai_gram.response_templates.registry import register_template
+from mai_gram.response_templates.xml_template import parse_xml_streaming
 
 _EXAMPLE_BLOCKS: list[list[str]] = [
     # Block 0 -- parse user input
@@ -244,6 +246,10 @@ class GemmaReasoningTemplate(ResponseTemplate):
                 is_positive=False,
             ),
         ]
+
+    def parse_streaming(self, accumulated_text: str) -> StreamingParseResult:
+        fields = [f.name for f in sorted(self.get_fields(), key=lambda f: f.order)]
+        return parse_xml_streaming(fields, accumulated_text)
 
     def sanitize(self, raw_text: str) -> str:
         field_names = [f.name for f in self.get_fields()]

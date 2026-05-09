@@ -65,6 +65,7 @@ class StreamState:
     last_display_len: int = 0
     committed_content_offset: int = 0
     reasoning_committed: bool = False
+    template_fields_committed: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True, slots=True)

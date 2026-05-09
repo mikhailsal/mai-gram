@@ -133,6 +133,7 @@ class ConversationExecutor:
             outcome = await self._stream_response(
                 request,
                 sent_msg_ids,
+                template=template,
                 on_tool_call_display=on_tool_call_display,
                 on_tool_result_display=on_tool_result_display,
             )
@@ -254,6 +255,7 @@ class ConversationExecutor:
         request: AssistantTurnRequest,
         sent_msg_ids: list[str],
         *,
+        template: ResponseTemplate | None = None,
         on_tool_call_display: Callable[..., Awaitable[None]],
         on_tool_result_display: Callable[..., Awaitable[None]],
     ) -> StreamOutcome:
@@ -286,7 +288,12 @@ class ConversationExecutor:
                 state.reasoning_parts.append(chunk.reasoning)
             if chunk.content:
                 state.content_parts.append(chunk.content)
-            await self._stream_display.maybe_update_live_display(request, state, sent_msg_ids)
+            await self._stream_display.maybe_update_live_display(
+                request,
+                state,
+                sent_msg_ids,
+                template=template,
+            )
 
         response_text = "".join(state.content_parts)
         if not response_text or not response_text.strip():

@@ -14,6 +14,7 @@ from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
     ResponseTemplate,
+    StreamingParseResult,
     TemplateExample,
     TemplateParam,
 )
@@ -43,6 +44,60 @@ def _generate_reasoning_example(num_paragraphs: int) -> str:
     while len(paras) < num_paragraphs:
         paras.append(f"(Additional reasoning paragraph {len(paras) + 1}.)")
     return "\n\n".join(paras)
+
+
+def parse_xml_streaming(
+    field_names: list[str],
+    accumulated_text: str,
+) -> StreamingParseResult:
+    """Incrementally parse XML-tagged text for streaming display.
+
+    Shared logic used by XmlTemplate and GemmaReasoningTemplate.
+    """
+    completed: dict[str, str] = {}
+    active_field: str | None = None
+    active_content = ""
+    preamble = ""
+
+    remaining = accumulated_text
+    for i, name in enumerate(field_names):
+        open_tag = f"<{name}>"
+        close_tag = f"</{name}>"
+        open_pos = remaining.find(open_tag)
+        if open_pos == -1:
+            if i == 0:
+                preamble = remaining
+            break
+
+        if i == 0 and open_pos > 0:
+            preamble = remaining[:open_pos].strip()
+
+        after_open = remaining[open_pos + len(open_tag) :]
+        close_pos = after_open.find(close_tag)
+
+        if close_pos == -1:
+            active_field = name
+            active_content = after_open
+            break
+
+        completed[name] = after_open[:close_pos].strip()
+        remaining = after_open[close_pos + len(close_tag) :]
+
+        if i == len(field_names) - 1:
+            break
+    else:
+        if not active_field and remaining.strip():
+            last = field_names[-1]
+            if last not in completed:
+                active_field = last
+                active_content = remaining
+
+    return StreamingParseResult(
+        completed_fields=completed,
+        active_field=active_field,
+        active_content=active_content,
+        preamble=preamble,
+    )
 
 
 class XmlTemplate(ResponseTemplate):
@@ -159,6 +214,10 @@ class XmlTemplate(ResponseTemplate):
                 is_positive=False,
             ),
         ]
+
+    def parse_streaming(self, accumulated_text: str) -> StreamingParseResult:
+        fields = [f.name for f in sorted(self.get_fields(), key=lambda f: f.order)]
+        return parse_xml_streaming(fields, accumulated_text)
 
     def sanitize(self, raw_text: str) -> str:
         field_names = [f.name for f in self.get_fields()]

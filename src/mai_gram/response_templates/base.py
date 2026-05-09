@@ -75,6 +75,20 @@ class TemplateParam:
     suggestions: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class StreamingParseResult:
+    """Result of incremental parsing on partially-received LLM output.
+
+    Used during streaming to progressively render structured fields
+    instead of showing raw template markup (XML tags, JSON, etc.).
+    """
+
+    completed_fields: dict[str, str]
+    active_field: str | None
+    active_content: str
+    preamble: str = ""
+
+
 class ResponseTemplate(ABC):
     """Abstract base for response format templates.
 
@@ -218,6 +232,23 @@ class ResponseTemplate(ABC):
         tag = "blockquote expandable" if expandable else "blockquote"
         close_tag = tag.split()[0]
         return f"<{tag}>{descriptor.label}\n{inner_html}</{close_tag}>"
+
+    def parse_streaming(self, accumulated_text: str) -> StreamingParseResult:
+        """Incrementally parse partially-received LLM output for live display.
+
+        Called repeatedly during streaming with the growing accumulated text.
+        Returns which fields are fully received, which field is currently
+        being generated, and any preamble text before the first field.
+
+        The default implementation performs no structural parsing -- suitable
+        for the empty template and any template that hasn't opted into
+        streaming-aware rendering.  Override in subclasses.
+        """
+        return StreamingParseResult(
+            completed_fields={},
+            active_field=None,
+            active_content=accumulated_text,
+        )
 
     def sanitize(self, raw_text: str) -> str:
         """Tier 1: regex-based normalization of raw LLM output.

@@ -14,6 +14,7 @@ from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
     ResponseTemplate,
+    StreamingParseResult,
     TemplateExample,
     TemplateParam,
 )
@@ -162,6 +163,46 @@ class MarkdownHeadersTemplate(ResponseTemplate):
                 is_positive=False,
             ),
         ]
+
+    def parse_streaming(self, accumulated_text: str) -> StreamingParseResult:
+        fields = [f.name for f in sorted(self.get_fields(), key=lambda f: f.order)]
+        completed: dict[str, str] = {}
+        active_field: str | None = None
+        active_content = ""
+        preamble = ""
+
+        field_lower_map = {n.lower(): n for n in fields}
+        header_positions: list[tuple[str, int, int]] = []
+        for m in _HEADER_RE.finditer(accumulated_text):
+            header_raw = m.group(1).strip().lower()
+            original = field_lower_map.get(header_raw)
+            if original is not None:
+                header_positions.append((original, m.start(), m.end()))
+
+        if not header_positions:
+            return StreamingParseResult(
+                completed_fields={},
+                active_field=None,
+                active_content=accumulated_text,
+                preamble=accumulated_text,
+            )
+
+        preamble = accumulated_text[: header_positions[0][1]].strip()
+
+        for i, (name, _start, end) in enumerate(header_positions):
+            if i + 1 < len(header_positions):
+                next_start = header_positions[i + 1][1]
+                completed[name] = accumulated_text[end:next_start].strip()
+            else:
+                active_field = name
+                active_content = accumulated_text[end:].strip()
+
+        return StreamingParseResult(
+            completed_fields=completed,
+            active_field=active_field,
+            active_content=active_content,
+            preamble=preamble,
+        )
 
     def parse(self, raw_text: str) -> ParsedResponse:
         field_names = [f.name for f in self.get_fields()]

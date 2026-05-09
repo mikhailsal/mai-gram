@@ -16,6 +16,7 @@ from mai_gram.response_templates.base import (
     FieldDescriptor,
     ParsedResponse,
     ResponseTemplate,
+    StreamingParseResult,
     TemplateExample,
     TemplateParam,
 )
@@ -24,6 +25,61 @@ from mai_gram.response_templates.xml_template import _generate_reasoning_example
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _BARE_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_KEY_VALUE_RE_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _key_re(field_name: str) -> re.Pattern[str]:
+    r"""Compile and cache a regex that finds ``"field_name"\s*:\s*"``."""
+    if field_name not in _KEY_VALUE_RE_CACHE:
+        escaped = re.escape(field_name)
+        _KEY_VALUE_RE_CACHE[field_name] = re.compile(rf'"{escaped}"\s*:\s*"', re.DOTALL)
+    return _KEY_VALUE_RE_CACHE[field_name]
+
+
+def _extract_json_field_streaming(
+    json_text: str,
+    field_name: str,
+) -> tuple[str | None, int, bool]:
+    """Extract a JSON string field value from partially-received JSON text.
+
+    Returns ``(value, end_position, is_complete)``.  When the closing
+    quote hasn't arrived yet, *value* contains everything received so
+    far and *is_complete* is ``False``.  Returns ``(None, 0, False)``
+    when the key hasn't appeared yet.
+    """
+    m = _key_re(field_name).search(json_text)
+    if m is None:
+        return None, 0, False
+
+    value_start = m.end()
+    i = value_start
+    n = len(json_text)
+    parts: list[str] = []
+
+    while i < n:
+        ch = json_text[i]
+        if ch == "\\" and i + 1 < n:
+            esc = json_text[i + 1]
+            if esc == "n":
+                parts.append("\n")
+            elif esc == "t":
+                parts.append("\t")
+            elif esc == "r":
+                parts.append("\r")
+            elif esc == '"':
+                parts.append('"')
+            elif esc == "\\":
+                parts.append("\\")
+            else:
+                parts.append(ch + esc)
+            i += 2
+            continue
+        if ch == '"':
+            return "".join(parts), i + 1, True
+        parts.append(ch)
+        i += 1
+
+    return "".join(parts), n, False
 
 
 def _extract_json(raw_text: str) -> dict[str, str] | None:
@@ -164,6 +220,50 @@ class JsonTemplate(ResponseTemplate):
                 is_positive=False,
             ),
         ]
+
+    def parse_streaming(self, accumulated_text: str) -> StreamingParseResult:
+        field_names = [f.name for f in sorted(self.get_fields(), key=lambda f: f.order)]
+        completed: dict[str, str] = {}
+        active_field: str | None = None
+        active_content = ""
+
+        brace_pos = accumulated_text.find("{")
+        if brace_pos == -1:
+            return StreamingParseResult(
+                completed_fields={},
+                active_field=None,
+                active_content=accumulated_text,
+                preamble=accumulated_text,
+            )
+
+        preamble = accumulated_text[:brace_pos].strip()
+        json_part = accumulated_text[brace_pos:]
+
+        for name in field_names:
+            value, _end_pos, is_complete = _extract_json_field_streaming(json_part, name)
+            if value is None:
+                continue
+            if is_complete:
+                completed[name] = value
+            else:
+                active_field = name
+                active_content = value
+                break
+
+        if not active_field and not completed:
+            return StreamingParseResult(
+                completed_fields={},
+                active_field=None,
+                active_content=accumulated_text,
+                preamble=preamble,
+            )
+
+        return StreamingParseResult(
+            completed_fields=completed,
+            active_field=active_field,
+            active_content=active_content,
+            preamble=preamble,
+        )
 
     def sanitize(self, raw_text: str) -> str:
         return sanitize_json_structure(raw_text)
