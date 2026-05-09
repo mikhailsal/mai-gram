@@ -308,17 +308,13 @@ class BotHandler:
 
     async def _handle_toggle(self, message: IncomingMessage) -> None:
         """Handle /toggle command -- show/hide a template field."""
-        import json as _json
-
-        from mai_gram.response_templates.registry import get_template
+        from mai_gram.bot.toggle_handler import handle_toggle
 
         self._message_logger.log_incoming(message)
         if not await self._access_control.check_access(message):
             return
 
-        field_arg = (message.command_args or "").strip().lower()
         chat_id = self._chat_id_for(message)
-
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
             if not chat:
@@ -329,124 +325,17 @@ class BotHandler:
                     )
                 )
                 return
-
-            import json as _json
-
-            _raw_tpl_params = getattr(chat, "template_params", None)
-            _tpl_params: dict[str, object] | None = None
-            if _raw_tpl_params:
-                try:
-                    _tpl_params = _json.loads(_raw_tpl_params)
-                except (ValueError, TypeError):
-                    _tpl_params = None
-            template = get_template(chat.response_template, _tpl_params)
-            hideable = [f for f in template.get_fields() if f.user_can_hide]
-
-            if not hideable:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="This template has no toggleable fields.",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            if not field_arg:
-                names = ", ".join(f.name for f in hideable)
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text=f"Usage: /toggle <field_name>\nToggleable fields: {names}",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            hideable_names = {f.name.lower(): f.name for f in hideable}
-            if field_arg not in hideable_names:
-                names = ", ".join(f.name for f in hideable)
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text=f"Unknown or non-toggleable field: {field_arg}\nToggleable: {names}",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            canonical_name = hideable_names[field_arg]
-            try:
-                hidden = set(_json.loads(chat.hidden_template_fields or "[]"))
-            except (_json.JSONDecodeError, TypeError):
-                hidden = set()
-
-            if canonical_name in hidden:
-                hidden.discard(canonical_name)
-                status = "VISIBLE"
-            else:
-                hidden.add(canonical_name)
-                status = "HIDDEN"
-
-            chat.hidden_template_fields = _json.dumps(sorted(hidden)) if hidden else None
-            await session.commit()
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=f"Field '{canonical_name}': {status}",
-                chat_id=message.chat_id,
-            )
-        )
+            await handle_toggle(message, chat, session, self._messenger)
 
     async def _handle_timezone(self, message: IncomingMessage) -> None:
         """Handle /timezone command -- show or set the chat's timezone."""
+        from mai_gram.bot.chat_settings_handlers import handle_timezone
+
         self._message_logger.log_incoming(message)
         if not await self._access_control.check_access(message):
             return
-
         chat_id = self._chat_id_for(message)
-        tz_arg = (message.command_args or "").strip()
-
-        async with get_session() as session:
-            chat = await self._get_chat(session, chat_id)
-            if not chat:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="No chat exists yet. Use /start to create one.",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            if not tz_arg:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text=f"Current timezone: {chat.timezone}\n\nUsage: /timezone Europe/Moscow",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            from zoneinfo import available_timezones
-
-            if tz_arg not in available_timezones():
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text=(
-                            f"Unknown timezone: {tz_arg}\n\n"
-                            "Examples: Europe/Moscow, US/Eastern, Asia/Tokyo, UTC"
-                        ),
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
-            chat.timezone = tz_arg
-            await session.commit()
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=f"Timezone set to: {tz_arg}",
-                chat_id=message.chat_id,
-            )
-        )
+        await handle_timezone(message, self._messenger, self._get_chat, chat_id)
 
     # -- Resend last --
 

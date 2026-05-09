@@ -270,11 +270,20 @@ async def test_handle_datetime_toggle_updates_chat_flag(monkeypatch) -> None:
 
 
 async def test_handle_timezone_reports_current_invalid_and_valid_values(monkeypatch) -> None:
+    from mai_gram.bot import chat_settings_handlers as tz_module
+
     handler, messenger, _, _, _, _ = _make_handler(monkeypatch)
-    session = MagicMock(commit=AsyncMock())
     chat = SimpleNamespace(timezone="UTC")
-    _patch_session(monkeypatch, session)
-    handler._get_chat = AsyncMock(return_value=chat)
+    session = MagicMock(
+        commit=AsyncMock(),
+        execute=AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=chat))),
+    )
+
+    @asynccontextmanager
+    async def _tz_session():
+        yield session
+
+    monkeypatch.setattr(tz_module, "get_session", _tz_session)
     monkeypatch.setattr(zoneinfo, "available_timezones", lambda: {"UTC", "Europe/Moscow"})
 
     await handler._handle_timezone(

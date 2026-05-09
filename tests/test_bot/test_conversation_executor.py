@@ -8,11 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mai_gram.bot.conversation_executor import (
+from mai_gram.bot.conversation_executor import ConversationExecutor
+from mai_gram.bot.executor_types import (
     AssistantTurnRequest,
-    ConversationExecutor,
-    _StreamOutcome,
-    _StreamState,
+)
+from mai_gram.bot.executor_types import (
+    StreamOutcome as _StreamOutcome,
+)
+from mai_gram.bot.executor_types import (
+    StreamState as _StreamState,
 )
 from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.db.models import Chat
@@ -272,8 +276,8 @@ class TestConversationExecutor:
 
         with (
             patch("mai_gram.bot.conversation_executor.run_with_tools_stream", _stream),
-            patch.object(executor, "_handle_turn_complete", AsyncMock()),
-            patch.object(executor, "_maybe_update_live_display", AsyncMock()),
+            patch.object(executor._stream_display, "handle_turn_complete", AsyncMock()),
+            patch.object(executor._stream_display, "maybe_update_live_display", AsyncMock()),
         ):
             outcome = await executor._stream_response(
                 request,
@@ -310,7 +314,7 @@ class TestConversationExecutor:
 
         with (
             patch("mai_gram.bot.conversation_executor.run_with_tools_stream", _stream),
-            patch.object(executor, "_maybe_update_live_display", AsyncMock()),
+            patch.object(executor._stream_display, "maybe_update_live_display", AsyncMock()),
         ):
             outcome = await executor._stream_response(
                 request,
@@ -329,6 +333,7 @@ class TestConversationExecutor:
 
     async def test_maybe_update_live_display_covers_non_edit_and_placeholder_path(self) -> None:
         executor, _, _ = _make_executor()
+        sd = executor._stream_display
         request = _make_request(show_reasoning=True)
         quiet_state = _StreamState(
             content_parts=["content"],
@@ -337,39 +342,40 @@ class TestConversationExecutor:
             last_display_len=len("contentreasoning"),
         )
 
-        with patch("mai_gram.bot.conversation_executor.time.monotonic", return_value=5.1):
-            await executor._maybe_update_live_display(request, quiet_state, [])
+        with patch("mai_gram.bot.stream_display.time.monotonic", return_value=5.1):
+            await sd.maybe_update_live_display(request, quiet_state, [])
 
         active_state = _StreamState(
             content_parts=["content"],
             reasoning_parts=["reasoning"],
         )
         with (
-            patch("mai_gram.bot.conversation_executor.time.monotonic", return_value=8.0),
-            patch.object(executor, "_render_live_text", return_value=None),
+            patch("mai_gram.bot.stream_display.time.monotonic", return_value=8.0),
+            patch.object(sd, "_render_live_text", return_value=None),
         ):
-            await executor._maybe_update_live_display(request, active_state, [])
+            await sd.maybe_update_live_display(request, active_state, [])
 
         with (
-            patch("mai_gram.bot.conversation_executor.time.monotonic", return_value=10.0),
+            patch("mai_gram.bot.stream_display.time.monotonic", return_value=10.0),
             patch.object(
-                executor,
+                sd,
                 "_render_live_text",
                 return_value=("short", "fallback", "", "content"),
             ),
             patch.object(
-                executor,
+                sd,
                 "_send_or_edit_placeholder",
                 AsyncMock(return_value="placeholder-3"),
             ) as send_or_edit,
         ):
-            await executor._maybe_update_live_display(request, active_state, [])
+            await sd.maybe_update_live_display(request, active_state, [])
 
         send_or_edit.assert_awaited_once()
         assert active_state.placeholder_msg_id == "placeholder-3"
 
     async def test_send_or_edit_placeholder_edits_existing_message(self) -> None:
         executor, messenger, _ = _make_executor()
+        sd = executor._stream_display
         request = _make_request()
         messenger.edit_message = AsyncMock(
             side_effect=[
@@ -378,7 +384,7 @@ class TestConversationExecutor:
             ]
         )
 
-        placeholder = await executor._send_or_edit_placeholder(
+        placeholder = await sd._send_or_edit_placeholder(
             request,
             placeholder_msg_id="placeholder-1",
             live_text="<b>html</b>",
@@ -390,6 +396,7 @@ class TestConversationExecutor:
 
     async def test_handle_turn_complete_flushes_placeholder_state(self) -> None:
         executor, messenger, renderer = _make_executor()
+        sd = executor._stream_display
         request = _make_request()
         state = _StreamState(
             content_parts=["Partial answer"],
@@ -402,7 +409,7 @@ class TestConversationExecutor:
         )
         sent_msg_ids: list[str] = []
 
-        await executor._handle_turn_complete(request, state, sent_msg_ids)
+        await sd.handle_turn_complete(request, state, sent_msg_ids)
 
         messenger.edit_message.assert_awaited_once_with(
             request.telegram_chat_id,
@@ -419,6 +426,7 @@ class TestConversationExecutor:
 
     async def test_maybe_update_live_display_commits_overflow(self) -> None:
         executor, _, renderer = _make_executor()
+        sd = executor._stream_display
         request = _make_request(show_reasoning=True)
         state = _StreamState(
             content_parts=["content"],
@@ -428,14 +436,14 @@ class TestConversationExecutor:
 
         with (
             patch.object(
-                executor,
+                sd,
                 "_render_live_text",
                 return_value=("x" * 5000, "fallback", "<b>reasoning</b>", "content"),
             ),
-            patch("mai_gram.bot.conversation_executor.time.monotonic", return_value=5.0),
+            patch("mai_gram.bot.stream_display.time.monotonic", return_value=5.0),
             patch("mai_gram.core.telegram_limits.SAFE_MAX_LENGTH", 100),
         ):
-            await executor._maybe_update_live_display(request, state, [])
+            await sd.maybe_update_live_display(request, state, [])
 
         renderer._commit_overflow.assert_awaited_once()
         assert state.committed_content_offset == 5
@@ -444,6 +452,7 @@ class TestConversationExecutor:
 
     async def test_send_or_edit_placeholder_falls_back_to_plain_text(self) -> None:
         executor, messenger, _ = _make_executor()
+        sd = executor._stream_display
         request = _make_request()
         messenger.send_message = AsyncMock(
             side_effect=[
@@ -452,7 +461,7 @@ class TestConversationExecutor:
             ]
         )
 
-        placeholder = await executor._send_or_edit_placeholder(
+        placeholder = await sd._send_or_edit_placeholder(
             request,
             placeholder_msg_id=None,
             live_text="<b>html</b>",
@@ -464,12 +473,13 @@ class TestConversationExecutor:
 
     async def test_send_or_edit_placeholder_returns_none_when_both_edits_fail(self) -> None:
         executor, messenger, _ = _make_executor()
+        sd = executor._stream_display
         request = _make_request()
         messenger.edit_message = AsyncMock(
             return_value=SendResult(success=False, error="permanently broken")
         )
 
-        placeholder = await executor._send_or_edit_placeholder(
+        placeholder = await sd._send_or_edit_placeholder(
             request,
             placeholder_msg_id="dead-placeholder",
             live_text="<b>html</b>",
@@ -531,7 +541,8 @@ class TestConversationExecutor:
 
     def test_helper_formatters_cover_tool_and_render_paths(self) -> None:
         executor, _, _ = _make_executor()
-        live_text, fallback, header_html, remaining = executor._render_live_text(
+        sd = executor._stream_display
+        live_text, fallback, header_html, remaining = sd._render_live_text(
             current_reasoning="Reasoning",
             current_content="Answer",
             committed_content_offset=0,
@@ -544,7 +555,7 @@ class TestConversationExecutor:
         assert fallback.endswith(" ▍")
         assert live_text.endswith(" ▍")
         assert (
-            executor._render_live_text(
+            sd._render_live_text(
                 current_reasoning="Only reasoning",
                 current_content="",
                 committed_content_offset=0,
@@ -554,7 +565,7 @@ class TestConversationExecutor:
             or ("", "", "", "")
         )[0].endswith(" ▍")
         assert (
-            executor._render_live_text(
+            sd._render_live_text(
                 current_reasoning="",
                 current_content="Only content",
                 committed_content_offset=0,
@@ -564,7 +575,7 @@ class TestConversationExecutor:
             or ("", "", "", "")
         )[0].endswith(" ▍")
         assert (
-            executor._render_live_text(
+            sd._render_live_text(
                 current_reasoning="",
                 current_content="   ",
                 committed_content_offset=0,

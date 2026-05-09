@@ -188,61 +188,78 @@ async def llm_repair(
     Returns the repaired text on success, or the original *raw_text* on
     any failure (network error, empty response, etc.).  Retries transient
     errors up to *max_retries* times.
-
-    When *validator* is provided, a non-empty response is also checked
-    against it.  If the validator returns ``False`` the attempt counts as
-    a failure and is retried (the model may have returned plausible but
-    structurally invalid output -- e.g. an OCR model returning bounding
-    boxes instead of XML tags).
     """
-    import asyncio as _asyncio
-
     from mai_gram.llm.provider import ChatMessage, MessageRole
 
     system_prompt = FORMAT_REPAIR_SYSTEM_PROMPT.format(format_spec=format_spec)
-
     messages = [
         ChatMessage(role=MessageRole.SYSTEM, content=system_prompt),
         ChatMessage(role=MessageRole.USER, content=raw_text),
     ]
 
     for attempt in range(1, max_retries + 2):
-        try:
-            response = await llm.generate(
-                messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                extra_params=extra_params,
-            )
-        except Exception:
-            if attempt <= max_retries:
-                await _asyncio.sleep(1.0 * attempt)
-                continue
-            logger.warning(
-                "LLM format repair failed after %d attempts",
-                attempt,
-                exc_info=True,
-            )
-            return raw_text
+        result = await _try_repair_attempt(
+            llm,
+            messages,
+            raw_text,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_params=extra_params,
+            validator=validator,
+            attempt=attempt,
+            max_retries=max_retries,
+        )
+        if result is not None:
+            return result
 
-        repaired = response.content.strip()
+    return raw_text
 
-        if repaired and (validator is None or validator(repaired)):
-            return repaired
 
+async def _try_repair_attempt(
+    llm: LLMProvider,
+    messages: list[Any],
+    raw_text: str,
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    extra_params: dict[str, Any] | None,
+    validator: Callable[[str], bool] | None,
+    attempt: int,
+    max_retries: int,
+) -> str | None:
+    """Execute one repair attempt; return repaired text or None to continue."""
+    import asyncio as _asyncio
+
+    try:
+        response = await llm.generate(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_params=extra_params,
+        )
+    except Exception:
         if attempt <= max_retries:
-            if repaired and validator is not None:
-                logger.info(
-                    "LLM repair attempt %d returned invalid output, retrying",
-                    attempt,
-                )
             await _asyncio.sleep(1.0 * attempt)
-            continue
+            return None
+        logger.warning("LLM format repair failed after %d attempts", attempt, exc_info=True)
+        return raw_text
 
-        if not repaired:
-            logger.warning("LLM format repair returned empty after %d attempts", attempt)
-        else:
-            logger.warning("LLM format repair failed validation after %d attempts", attempt)
+    repaired = response.content.strip()
 
+    if repaired and (validator is None or validator(repaired)):
+        return repaired
+
+    if attempt <= max_retries:
+        if repaired and validator is not None:
+            logger.info("LLM repair attempt %d returned invalid output, retrying", attempt)
+        await _asyncio.sleep(1.0 * attempt)
+        return None
+
+    if not repaired:
+        logger.warning("LLM format repair returned empty after %d attempts", attempt)
+    else:
+        logger.warning("LLM format repair failed validation after %d attempts", attempt)
     return raw_text

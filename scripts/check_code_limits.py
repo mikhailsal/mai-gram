@@ -141,10 +141,7 @@ def analyze_paths(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Audit Python file and function sizes. Violations are reported without failing "
-            "unless --enforce is set."
-        )
+        description="Audit Python file and function sizes against configurable limits."
     )
     parser.add_argument("paths", nargs="*", default=list(DEFAULT_PATHS))
     parser.add_argument("--max-file-lines", type=int, default=DEFAULT_MAX_FILE_LINES)

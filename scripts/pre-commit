@@ -5,7 +5,7 @@
 #   1. ruff lint               — no lint errors
 #   2. ruff format             — all files formatted
 #   3. mypy                    — no type errors
-#   4. code size audit         — report oversized files/functions for refactoring
+#   4. code size audit         — no oversized files/functions
 #   5. pytest + coverage       — all tests pass, coverage >= fail_under (pyproject.toml)
 #   6. live functional pytest  — real OpenRouter-backed integration suite passes
 #
@@ -49,10 +49,10 @@ fi
 
 # ── 4. Code size audit ──────────────────────────────────────────
 step "Auditing code size limits"
-if python3 scripts/check_code_limits.py; then
-    pass "Code size audit completed (report-only)"
+if python3 scripts/check_code_limits.py --enforce; then
+    pass "Code size audit passed"
 else
-    fail "Code size audit failed"
+    fail "Code size violations found — reduce file/function sizes before committing"
 fi
 
 # ── 5. Tests + coverage ─────────────────────────────────────────

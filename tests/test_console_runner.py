@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from mai_gram import console_runner
+from mai_gram import console_inspection, console_runner
 from mai_gram.console_runner import _incoming_command, _parse_command_text
 from mai_gram.core.importer import ImportDataError
 from mai_gram.llm.provider import ChatMessage, LLMAuthenticationError, MessageRole, ToolCall
@@ -22,6 +22,7 @@ async def _session_context(session):
 
 
 def _patch_session(monkeypatch: pytest.MonkeyPatch, session: object) -> None:
+    monkeypatch.setattr(console_inspection, "get_session", lambda: _session_context(session))
     monkeypatch.setattr(console_runner, "get_session", lambda: _session_context(session))
 
 
@@ -60,9 +61,9 @@ def test_format_timestamp_handles_none_naive_and_aware_datetimes() -> None:
     naive = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc).replace(tzinfo=None)
     aware = datetime(2024, 1, 2, 6, 4, 5, tzinfo=timezone(timedelta(hours=3)))
 
-    assert console_runner._format_timestamp(None) == "---- -- --:--:--"
-    assert console_runner._format_timestamp(naive) == "2024-01-02 03:04:05"
-    assert console_runner._format_timestamp(aware) == "2024-01-02 03:04:05"
+    assert console_inspection._format_timestamp(None) == "---- -- --:--:--"
+    assert console_inspection._format_timestamp(naive) == "2024-01-02 03:04:05"
+    assert console_inspection._format_timestamp(aware) == "2024-01-02 03:04:05"
 
 
 @pytest.mark.asyncio
@@ -119,8 +120,8 @@ async def test_print_chat_list_formats_empty_and_non_empty_results(
     )
     _patch_session(monkeypatch, session)
 
-    await console_runner._print_chat_list()
-    await console_runner._print_chat_list()
+    await console_inspection.print_chat_list()
+    await console_inspection.print_chat_list()
 
     output = capsys.readouterr().out
     assert "(no chats found)" in output
@@ -157,14 +158,16 @@ async def test_print_history_formats_empty_and_non_empty_history(
             ]
         )
     )
+    import mai_gram.core.chat_inspection_service as cis_mod
+
     monkeypatch.setattr(
-        console_runner,
+        cis_mod,
         "ChatInspectionService",
         lambda *args, **kwargs: inspection_service,
     )
 
-    await console_runner._print_history("chat-1")
-    await console_runner._print_history("chat-1")
+    await console_inspection.print_history("chat-1")
+    await console_inspection.print_history("chat-1")
 
     output = capsys.readouterr().out
     assert "=== History: chat-1 ===" in output
@@ -193,14 +196,16 @@ async def test_print_wiki_handles_sync_and_empty_entries(
             ]
         )
     )
+    import mai_gram.core.chat_inspection_service as cis_mod
+
     monkeypatch.setattr(
-        console_runner,
+        cis_mod,
         "ChatInspectionService",
         lambda *args, **kwargs: inspection_service,
     )
 
-    await console_runner._print_wiki("chat-1", "./data")
-    await console_runner._print_wiki("chat-1", "./data")
+    await console_inspection.print_wiki("chat-1", "./data")
+    await console_inspection.print_wiki("chat-1", "./data")
 
     output = capsys.readouterr().out
     assert "[sync] updated 1" in output
@@ -238,14 +243,16 @@ async def test_repair_wiki_reports_no_changes_and_applied_changes(
             ]
         )
     )
+    import mai_gram.core.chat_inspection_service as cis_mod
+
     monkeypatch.setattr(
-        console_runner,
+        cis_mod,
         "ChatInspectionService",
         lambda *args, **kwargs: inspection_service,
     )
 
-    await console_runner._repair_wiki("chat-1", "./data")
-    await console_runner._repair_wiki("chat-1", "./data")
+    await console_inspection.repair_wiki("chat-1", "./data")
+    await console_inspection.repair_wiki("chat-1", "./data")
 
     output = capsys.readouterr().out
     assert "Database is already in sync with disk files." in output
@@ -291,10 +298,12 @@ async def test_print_prompt_handles_missing_chat_and_formats_preview(
         service_calls.append(kwargs)
         return next(services)
 
-    monkeypatch.setattr(console_runner, "PromptPreviewService", fake_prompt_preview_service)
+    import mai_gram.core.prompt_preview_service as pps_mod
+
+    monkeypatch.setattr(pps_mod, "PromptPreviewService", fake_prompt_preview_service)
 
     with pytest.raises(SystemExit, match="no chat found"):
-        await console_runner._print_prompt(
+        await console_inspection.print_prompt(
             "chat-1",
             "./data",
             MagicMock(),
@@ -302,7 +311,7 @@ async def test_print_prompt_handles_missing_chat_and_formats_preview(
             external_mcp_pool="pool",
         )
 
-    await console_runner._print_prompt(
+    await console_inspection.print_prompt(
         "chat-1",
         "./data",
         MagicMock(),
@@ -325,6 +334,8 @@ async def test_import_json_dialogue_covers_error_and_success_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    import mai_gram.core.import_chat_service as import_svc
+
     missing_path = tmp_path / "missing.json"
     with pytest.raises(SystemExit, match="file not found"):
         await console_runner._import_json_dialogue("chat-1", str(missing_path))
@@ -344,7 +355,7 @@ async def test_import_json_dialogue_covers_error_and_success_paths(
     parse_error_path = tmp_path / "parse.json"
     parse_error_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
-        console_runner,
+        import_svc,
         "parse_import_payload",
         lambda text: _raise(ImportDataError("bad payload")),
     )
@@ -355,9 +366,9 @@ async def test_import_json_dialogue_covers_error_and_success_paths(
     _patch_session(monkeypatch, session)
     success_path = tmp_path / "ok.json"
     success_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(console_runner, "parse_import_payload", lambda text: {"messages": []})
+    monkeypatch.setattr(import_svc, "parse_import_payload", lambda text: {"messages": []})
     monkeypatch.setattr(
-        console_runner,
+        import_svc,
         "import_into_existing_chat",
         AsyncMock(side_effect=LookupError("missing-chat")),
     )
@@ -365,7 +376,7 @@ async def test_import_json_dialogue_covers_error_and_success_paths(
         await console_runner._import_json_dialogue("chat-1", str(success_path))
 
     monkeypatch.setattr(
-        console_runner,
+        import_svc,
         "import_into_existing_chat",
         AsyncMock(return_value=SimpleNamespace(imported_count=0)),
     )
@@ -373,7 +384,7 @@ async def test_import_json_dialogue_covers_error_and_success_paths(
         await console_runner._import_json_dialogue("chat-1", str(success_path))
 
     monkeypatch.setattr(
-        console_runner,
+        import_svc,
         "import_into_existing_chat",
         AsyncMock(return_value=SimpleNamespace(imported_count=3)),
     )
@@ -389,9 +400,9 @@ async def test_handle_console_inspection_dispatches_requested_mode(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     settings = MagicMock(memory_data_dir="./data")
-    monkeypatch.setattr(console_runner, "_print_history", AsyncMock())
-    monkeypatch.setattr(console_runner, "_repair_wiki", AsyncMock())
-    monkeypatch.setattr(console_runner, "_print_wiki", AsyncMock())
+    monkeypatch.setattr(console_inspection, "print_history", AsyncMock())
+    monkeypatch.setattr(console_inspection, "repair_wiki", AsyncMock())
+    monkeypatch.setattr(console_inspection, "print_wiki", AsyncMock())
     monkeypatch.setattr(console_runner, "_import_json_dialogue", AsyncMock(return_value=5))
 
     assert await console_runner._handle_console_inspection(
@@ -570,13 +581,13 @@ async def test_run_builds_and_stops_external_mcp_pool_for_prompt_preview(
         "_build_cli_llm",
         lambda current_args, chat_id, current_settings: (llm, None),
     )
-    print_prompt = AsyncMock()
-    monkeypatch.setattr(console_runner, "_print_prompt", print_prompt)
+    mock_print_prompt = AsyncMock()
+    monkeypatch.setattr(console_runner, "print_prompt", mock_print_prompt)
 
     await console_runner._run(args)
 
-    print_prompt.assert_awaited_once()
-    assert print_prompt.await_args.kwargs["external_mcp_pool"] is pool
+    mock_print_prompt.assert_awaited_once()
+    assert mock_print_prompt.await_args.kwargs["external_mcp_pool"] is pool
     pool.stop_all.assert_awaited_once_with()
     llm.close.assert_awaited_once_with()
     console_runner.close_db.assert_awaited_once_with()
@@ -594,12 +605,12 @@ async def test_run_handles_list_and_inspection_modes(
     monkeypatch.setattr(console_runner, "init_db", AsyncMock(return_value=object()))
     monkeypatch.setattr(console_runner, "run_migrations", AsyncMock())
     monkeypatch.setattr(console_runner, "close_db", AsyncMock())
-    print_chat_list = AsyncMock()
-    monkeypatch.setattr(console_runner, "_print_chat_list", print_chat_list)
+    mock_print_chat_list = AsyncMock()
+    monkeypatch.setattr(console_runner, "print_chat_list", mock_print_chat_list)
 
     await console_runner._run(args_list)
 
-    print_chat_list.assert_awaited_once_with()
+    mock_print_chat_list.assert_awaited_once_with()
     assert console_runner.close_db.await_count == 1
 
     monkeypatch.setattr(console_runner, "resolve_user_id", lambda args, current_settings: "user-1")

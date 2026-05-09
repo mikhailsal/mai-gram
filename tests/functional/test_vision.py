@@ -13,7 +13,7 @@ import os
 import pytest
 
 from mai_gram.llm.openrouter import OpenRouterProvider
-from mai_gram.llm.provider import ChatMessage, LLMError, MessageRole
+from mai_gram.llm.provider import ChatMessage, LLMError, LLMRateLimitError, MessageRole
 from tests.functional.conftest import SLOW_PROVIDERS
 
 pytestmark = pytest.mark.functional
@@ -70,6 +70,7 @@ async def test_vision_model_describes_solid_red_image() -> None:
     ]
 
     last_answer = ""
+    rate_limited_count = 0
     try:
         for attempt in range(1, _MAX_VISION_ATTEMPTS + 1):
             try:
@@ -87,6 +88,9 @@ async def test_vision_model_describes_solid_red_image() -> None:
                 last_answer = "".join(parts).strip().lower()
                 if "red" in last_answer:
                     break
+            except LLMRateLimitError:
+                rate_limited_count += 1
+                last_answer = ""
             except LLMError:
                 last_answer = ""
 
@@ -94,6 +98,9 @@ async def test_vision_model_describes_solid_red_image() -> None:
                 await asyncio.sleep(2.0 * attempt)
     finally:
         await provider.close()
+
+    if not last_answer and rate_limited_count == _MAX_VISION_ATTEMPTS:
+        pytest.skip(f"Skipped: all {_MAX_VISION_ATTEMPTS} attempts hit rate limits (HTTP 429)")
 
     assert "red" in last_answer, (
         f"Expected 'red' in model response after {_MAX_VISION_ATTEMPTS} attempts, "

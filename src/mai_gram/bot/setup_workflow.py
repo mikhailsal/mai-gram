@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import enum
+import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from mai_gram.bot.setup_templates import (
+    get_available_templates_for_bot,
+    show_template_group_selection,
+    show_template_params_summary,
+)
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat
 from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
@@ -19,6 +25,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from mai_gram.config import BotConfig, Settings
+    from mai_gram.config_loaders import PromptConfig
     from mai_gram.messenger.base import Messenger
 
 logger = logging.getLogger(__name__)
@@ -79,10 +86,8 @@ class SetupWorkflow:
     async def handle_start(self, message: IncomingMessage) -> None:
         """Start the chat setup flow unless the chat already exists."""
         chat_id = self._resolve_chat_id(message)
-
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
-
         if chat:
             await self._messenger.send_message(
                 OutgoingMessage(
@@ -94,7 +99,6 @@ class SetupWorkflow:
                 )
             )
             return
-
         await self._start_setup(message.user_id, message.chat_id)
 
     async def handle_setup_callback(self, message: IncomingMessage) -> None:
@@ -102,25 +106,28 @@ class SetupWorkflow:
         session = self._sessions.get(message.user_id)
         if not session or not message.callback_data:
             return
-
         parts = message.callback_data.split(":", 1)
         if len(parts) != 2:
             return
-
         category, value = parts
+        await self._route_callback(message, session, category, value)
+
+    async def _route_callback(
+        self,
+        message: IncomingMessage,
+        session: SetupSession,
+        category: str,
+        value: str,
+    ) -> None:
         if category == "model" and session.state == SetupState.CHOOSING_MODEL:
             await self._handle_model_selection(session, value)
-            return
-        if category == "prompt" and session.state == SetupState.CHOOSING_PROMPT:
+        elif category == "prompt" and session.state == SetupState.CHOOSING_PROMPT:
             await self._handle_prompt_selection(message, session, value)
-            return
-        if category == "tpl_group" and session.state == SetupState.CHOOSING_TEMPLATE_GROUP:
+        elif category == "tpl_group" and session.state == SetupState.CHOOSING_TEMPLATE_GROUP:
             await self._handle_template_group_selection(message, session, value)
-            return
-        if category == "template" and session.state == SetupState.CHOOSING_TEMPLATE:
+        elif category == "template" and session.state == SetupState.CHOOSING_TEMPLATE:
             await self._handle_template_selection(message, session, value)
-            return
-        if category == "tpl_params" and session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS:
+        elif category == "tpl_params" and session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS:
             if value == "__defaults__":
                 session.template_params = None
             session.bot_id = message.bot_id or session.bot_id
@@ -131,14 +138,12 @@ class SetupWorkflow:
         session = self._sessions.get(message.user_id)
         if not session:
             return
-
         if session.state == SetupState.AWAITING_CUSTOM_PROMPT:
             session.selected_prompt_text = message.text.strip()
             session.selected_prompt_name = None
             session.bot_id = message.bot_id or session.bot_id
             await self._show_template_selection(session)
             return
-
         if session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS:
             parsed = self._parse_kv_params(message.text)
             if parsed:
@@ -166,7 +171,6 @@ class SetupWorkflow:
         return all_prompts
 
     def _model_display_label(self, model_key: str) -> str:
-        """Return the UI label for a model: title if set, else last path segment."""
         title = self._settings.get_model_title(model_key)
         if title:
             return title
@@ -182,7 +186,6 @@ class SetupWorkflow:
             if model == default_model:
                 label = f"{label} [default]"
             keyboard_rows.append([(label, f"model:{model}")])
-
         await self._messenger.send_message(
             OutgoingMessage(
                 text="Choose an LLM model:",
@@ -198,7 +201,6 @@ class SetupWorkflow:
             keyboard_rows.append([(name.replace("_", " ").title(), f"prompt:{name}")])
         if not (self._bot_config and self._bot_config.allowed_prompts):
             keyboard_rows.append([("Custom (type your own)", "prompt:__custom__")])
-
         await self._messenger.send_message(
             OutgoingMessage(
                 text=f"Model: {session.selected_model}\n\nNow choose a system prompt:",
@@ -217,7 +219,6 @@ class SetupWorkflow:
                 )
             )
             return
-
         session.selected_model = model
         await self._show_prompt_selection(session)
 
@@ -236,13 +237,9 @@ class SetupWorkflow:
                     )
                 )
                 return
-
             session.state = SetupState.AWAITING_CUSTOM_PROMPT
             await self._messenger.send_message(
-                OutgoingMessage(
-                    text="Type your custom system prompt:",
-                    chat_id=session.chat_id,
-                )
+                OutgoingMessage(text="Type your custom system prompt:", chat_id=session.chat_id)
             )
             return
 
@@ -261,70 +258,15 @@ class SetupWorkflow:
             )
         )
 
-    def _get_available_templates_for_bot(self) -> list[str]:
-        all_templates = self._settings.get_available_templates()
-        if self._bot_config and self._bot_config.allowed_templates:
-            bot_set = set(self._bot_config.allowed_templates)
-            return [t for t in all_templates if t in bot_set]
-        return all_templates
-
     async def _show_template_selection(self, session: SetupSession) -> None:
-        """Show the template group selection or flat list if grouping is trivial."""
-        templates = self._get_available_templates_for_bot()
-
-        if len(templates) <= 1:
-            session.selected_template = None
-            await self._finish_setup_from_session(session)
-            return
-
-        from mai_gram.response_templates.registry import (
-            get_template,
-            get_templates_in_group,
-            list_groups,
+        showed = await show_template_group_selection(
+            session,
+            self._messenger,
+            self._settings,
+            self._bot_config,
         )
-
-        available_set = set(templates)
-        groups_with_templates = []
-        for grp in list_groups():
-            grp_templates = [t for t in get_templates_in_group(grp.id) if t.name in available_set]
-            if grp_templates:
-                groups_with_templates.append((grp, grp_templates))
-
-        ungrouped = [get_template(name) for name in templates if get_template(name).group == ""]
-
-        total_choices = len(groups_with_templates) + len(ungrouped)
-        if total_choices <= 1 and not groups_with_templates:
-            session.selected_template = None
+        if not showed:
             await self._finish_setup_from_session(session)
-            return
-
-        session.state = SetupState.CHOOSING_TEMPLATE_GROUP
-        keyboard_rows = []
-
-        for tpl in ungrouped:
-            label = f"{tpl.description} [default]" if tpl.name == "empty" else tpl.description
-            keyboard_rows.append([(label, f"tpl_group:__single__:{tpl.name}")])
-
-        for grp, grp_templates in groups_with_templates:
-            count = len(grp_templates)
-            label = f"{grp.label} ({count} variant{'s' if count != 1 else ''})"
-            keyboard_rows.append([(label, f"tpl_group:{grp.id}")])
-
-        prompt_preview = session.selected_prompt_text[:80]
-        if len(session.selected_prompt_text) > 80:
-            prompt_preview += "..."
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=(
-                    f"Model: {session.selected_model}\n"
-                    f"Prompt: {prompt_preview}\n\n"
-                    "Choose a response format category:"
-                ),
-                chat_id=session.chat_id,
-                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
-            )
-        )
 
     async def _handle_template_group_selection(
         self,
@@ -332,41 +274,29 @@ class SetupWorkflow:
         session: SetupSession,
         value: str,
     ) -> None:
-        """Handle group selection: show templates within the chosen group."""
         if value.startswith("__single__:"):
             template_name = value[len("__single__:") :]
             session.selected_template = template_name if template_name != "empty" else None
             session.bot_id = message.bot_id or session.bot_id
-
-            from mai_gram.response_templates.registry import get_template as _get_tpl
-
-            tpl = _get_tpl(session.selected_template)
-            if tpl.get_params():
-                await self._show_template_params_summary(session, tpl)
-            else:
-                await self._finish_setup_from_session(session, message=message)
+            await self._maybe_show_params_or_finish(session, message)
             return
 
         from mai_gram.response_templates.registry import get_templates_in_group
 
-        available_set = set(self._get_available_templates_for_bot())
+        available_set = set(get_available_templates_for_bot(self._settings, self._bot_config))
         grp_templates = [t for t in get_templates_in_group(value) if t.name in available_set]
 
         if len(grp_templates) == 1:
             tpl = grp_templates[0]
             session.selected_template = tpl.name
             session.bot_id = message.bot_id or session.bot_id
-            if tpl.get_params():
-                await self._show_template_params_summary(session, tpl)
-            else:
-                await self._finish_setup_from_session(session, message=message)
+            await self._maybe_show_params_or_finish(session, message)
             return
 
         session.state = SetupState.CHOOSING_TEMPLATE
         keyboard_rows = []
         for tpl in grp_templates:
             keyboard_rows.append([(tpl.description, f"template:{tpl.name}")])
-
         await self._messenger.send_message(
             OutgoingMessage(
                 text="Choose a specific template variant:",
@@ -381,7 +311,7 @@ class SetupWorkflow:
         session: SetupSession,
         template_name: str,
     ) -> None:
-        available = self._get_available_templates_for_bot()
+        available = get_available_templates_for_bot(self._settings, self._bot_config)
         if template_name not in available:
             await self._messenger.send_message(
                 OutgoingMessage(
@@ -390,54 +320,22 @@ class SetupWorkflow:
                 )
             )
             return
-
         session.selected_template = template_name if template_name != "empty" else None
         session.bot_id = message.bot_id or session.bot_id
+        await self._maybe_show_params_or_finish(session, message)
 
+    async def _maybe_show_params_or_finish(
+        self,
+        session: SetupSession,
+        message: IncomingMessage | None = None,
+    ) -> None:
         from mai_gram.response_templates.registry import get_template as _get_tpl
 
         tpl = _get_tpl(session.selected_template)
         if tpl.get_params():
-            await self._show_template_params_summary(session, tpl)
+            await show_template_params_summary(session, tpl, self._messenger)
         else:
             await self._finish_setup_from_session(session, message=message)
-
-    async def _show_template_params_summary(
-        self,
-        session: SetupSession,
-        tpl: object,
-    ) -> None:
-        """Show current template param defaults and let the user accept or configure."""
-        session.state = SetupState.CONFIGURING_TEMPLATE_PARAMS
-        from mai_gram.response_templates.base import ResponseTemplate
-
-        if not isinstance(tpl, ResponseTemplate):
-            return
-        params = tpl.get_params()
-        lines = [f"Template: {tpl.description}\n\nConfigurable parameters:"]
-        for p in params:
-            hint = ""
-            if p.suggestions:
-                hint = f"\n  options: {', '.join(p.suggestions)}"
-            elif p.param_type == "int" and p.min_value is not None and p.max_value is not None:
-                hint = f"\n  range: {p.min_value}-{p.max_value}"
-            lines.append(f"• {p.key} = {p.default}  ({p.label}){hint}")
-
-        lines.append("\nTo customize, type key=value pairs, one per line:")
-        example_lines = "\n".join(f"{p.key}={p.default}" for p in params)
-        lines.append(example_lines)
-
-        keyboard_rows = [
-            [("Use defaults", "tpl_params:__defaults__")],
-        ]
-
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text="\n".join(lines),
-                chat_id=session.chat_id,
-                keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
-            )
-        )
 
     @staticmethod
     def _parse_kv_params(text: str) -> dict[str, str]:
@@ -492,39 +390,65 @@ class SetupWorkflow:
         template_name: str | None = None,
         template_params: dict[str, str] | None = None,
     ) -> None:
-        import json as _json
-
         chat_id = self._resolve_chat_id(message)
         prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
+        params_json = json.dumps(template_params, ensure_ascii=False) if template_params else None
 
-        params_json: str | None = None
-        if template_params:
-            params_json = _json.dumps(template_params, ensure_ascii=False)
-
+        chat = self._build_chat_record(
+            chat_id,
+            message,
+            session,
+            system_prompt,
+            prompt_name=prompt_name,
+            template_name=template_name,
+            params_json=params_json,
+            prompt_cfg=prompt_cfg,
+        )
         async with get_session() as db:
-            send_dt = True
-            if prompt_cfg is not None and prompt_cfg.send_datetime is not None:
-                send_dt = prompt_cfg.send_datetime
-
-            chat = Chat(
-                id=chat_id,
-                user_id=message.user_id,
-                bot_id=message.bot_id or "",
-                llm_model=session.selected_model,
-                system_prompt=system_prompt,
-                prompt_name=prompt_name,
-                response_template=template_name,
-                template_params=params_json,
-                timezone=self._settings.default_timezone,
-                show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
-                show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
-                send_datetime=send_dt,
-            )
             db.add(chat)
             await db.commit()
 
         self.clear_setup_session(message.user_id)
+        await self._send_setup_confirmation(message, session, chat, system_prompt, template_name)
 
+    def _build_chat_record(
+        self,
+        chat_id: str,
+        message: IncomingMessage,
+        session: SetupSession,
+        system_prompt: str,
+        *,
+        prompt_name: str | None,
+        template_name: str | None,
+        params_json: str | None,
+        prompt_cfg: PromptConfig | None,
+    ) -> Chat:
+        send_dt = True
+        if prompt_cfg is not None and prompt_cfg.send_datetime is not None:
+            send_dt = prompt_cfg.send_datetime
+        return Chat(
+            id=chat_id,
+            user_id=message.user_id,
+            bot_id=message.bot_id or "",
+            llm_model=session.selected_model,
+            system_prompt=system_prompt,
+            prompt_name=prompt_name,
+            response_template=template_name,
+            template_params=params_json,
+            timezone=self._settings.default_timezone,
+            show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
+            show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
+            send_datetime=send_dt,
+        )
+
+    async def _send_setup_confirmation(
+        self,
+        message: IncomingMessage,
+        session: SetupSession,
+        chat: Chat,
+        system_prompt: str,
+        template_name: str | None,
+    ) -> None:
         reasoning_status = "ON" if chat.show_reasoning else "OFF"
         toolcalls_status = "ON" if chat.show_tool_calls else "OFF"
         datetime_status = "ON" if chat.send_datetime else "OFF"
@@ -546,7 +470,7 @@ class SetupWorkflow:
         )
         logger.info(
             "Created chat: id=%s model=%s prompt_len=%d template=%s reasoning=%s toolcalls=%s",
-            chat_id,
+            chat.id,
             session.selected_model,
             len(system_prompt),
             tpl_display,

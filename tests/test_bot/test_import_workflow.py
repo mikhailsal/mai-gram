@@ -523,11 +523,14 @@ class TestImportWorkflow:
             return replay_task
 
         with (
-            patch("mai_gram.bot.import_workflow.get_session") as mock_get_session,
+            patch("mai_gram.bot.import_workflow.get_session") as mock_wf_session,
+            patch("mai_gram.bot.import_document.get_session") as mock_doc_session,
             patch("mai_gram.bot.import_workflow.asyncio.create_task", side_effect=_capture_task),
         ):
-            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
-            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_wf_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_wf_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_doc_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_doc_session.return_value.__aexit__ = AsyncMock(return_value=False)
 
             await workflow.handle_document(
                 _make_message(
