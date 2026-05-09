@@ -251,12 +251,14 @@ class XmlTemplate(ResponseTemplate):
         expandable: bool = False,
     ) -> str:
         from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.md_to_telegram_html import flatten_inner_blockquotes
 
         descriptor = self._field_by_name(field_name)
         if descriptor is None or descriptor.display_tag == "none":
             return markdown_to_html(content.strip())
 
         inner_html = markdown_to_html(content.strip())
+        inner_html = flatten_inner_blockquotes(inner_html)
         tag = "blockquote expandable" if expandable else "blockquote"
         close_tag = tag.split()[0]
         return f"<{tag}>{descriptor.label}\n{inner_html}</{close_tag}>"

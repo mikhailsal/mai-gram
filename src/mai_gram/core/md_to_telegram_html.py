@@ -128,6 +128,25 @@ def _html_strikethrough(text: str, ph: Callable[[str], str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Nested blockquote flattening
+# ---------------------------------------------------------------------------
+
+_BLOCKQUOTE_TAG_RE = re.compile(r"</?blockquote(?:\s[^>]*)?>", re.IGNORECASE)
+
+
+def flatten_inner_blockquotes(html: str) -> str:
+    """Strip ``<blockquote>`` tags from HTML intended to be wrapped in a blockquote.
+
+    Telegram rejects nested ``<blockquote>`` tags.  When ``markdown_to_html``
+    converts ``> quoted text`` inside a thought field, the inner blockquote
+    nests inside the outer thought blockquote.  This function removes the
+    inner tags so only the outer wrapper (added by ``render_field_html``)
+    remains.
+    """
+    return _BLOCKQUOTE_TAG_RE.sub("", html)
+
+
+# ---------------------------------------------------------------------------
 # Streaming-safe markdown
 # ---------------------------------------------------------------------------
 

@@ -220,6 +220,7 @@ class ResponseTemplate(ABC):
         Subclasses can override for custom rendering per field.
         """
         from mai_gram.core.md_to_telegram import markdown_to_html
+        from mai_gram.core.md_to_telegram_html import flatten_inner_blockquotes
 
         descriptor = self._field_by_name(field_name)
         if descriptor is None:
@@ -229,6 +230,7 @@ class ResponseTemplate(ABC):
         if descriptor.display_tag == "none":
             return inner_html
 
+        inner_html = flatten_inner_blockquotes(inner_html)
         tag = "blockquote expandable" if expandable else "blockquote"
         close_tag = tag.split()[0]
         return f"<{tag}>{descriptor.label}\n{inner_html}</{close_tag}>"

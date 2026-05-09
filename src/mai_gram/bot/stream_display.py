@@ -232,27 +232,12 @@ class StreamDisplayManager:
         content_field = template.content_field_name()
         header_html = self._build_template_header(template, result, content_field, state)
 
-        active_text = ""
-        if result.active_field is not None:
-            if result.active_field == content_field:
-                active_text = result.active_content
-            else:
-                active_text = ""
-                if result.active_content.strip():
-                    stabilized = stabilize_markdown_for_streaming(result.active_content)
-                    active_header = template.render_field_html(
-                        result.active_field,
-                        stabilized,
-                        expandable=False,
-                    )
-                    if header_html:
-                        header_html = header_html + "\n\n" + active_header
-                    else:
-                        header_html = active_header
-        elif content_field in result.completed_fields:
-            active_text = result.completed_fields[content_field]
-        elif result.preamble:
-            active_text = result.preamble
+        active_text, fallback_source, header_html = self._resolve_active_field(
+            template,
+            result,
+            content_field,
+            header_html,
+        )
 
         remaining = active_text[state.committed_content_offset :]
         if remaining.strip() and result.active_field is not None:
@@ -266,9 +251,44 @@ class StreamDisplayManager:
             header_html,
             content_html,
             remaining,
-            current_content,
+            fallback_source,
             result.preamble,
         )
+
+    @staticmethod
+    def _resolve_active_field(
+        template: ResponseTemplate,
+        result: StreamingParseResult,
+        content_field: str,
+        header_html: str,
+    ) -> tuple[str, str, str]:
+        """Determine body text, fallback source, and updated header from parse result.
+
+        Returns ``(active_text, fallback_source, header_html)`` where
+        ``fallback_source`` is always derived from parsed field content
+        (never raw LLM output) so that the plain-text fallback sent when
+        Telegram rejects HTML is free of XML template tags.
+        """
+        from mai_gram.core.md_to_telegram import stabilize_markdown_for_streaming
+
+        if result.active_field is not None:
+            if result.active_field == content_field:
+                return result.active_content, result.active_content, header_html
+            if result.active_content.strip():
+                stabilized = stabilize_markdown_for_streaming(result.active_content)
+                active_header = template.render_field_html(
+                    result.active_field,
+                    stabilized,
+                    expandable=False,
+                )
+                header_html = header_html + "\n\n" + active_header if header_html else active_header
+            return "", result.active_content, header_html
+        if content_field in result.completed_fields:
+            text = result.completed_fields[content_field]
+            return text, text, header_html
+        if result.preamble:
+            return result.preamble, result.preamble, header_html
+        return "", "", header_html
 
     @staticmethod
     def _build_template_header(
@@ -293,7 +313,7 @@ class StreamDisplayManager:
         header_html: str,
         content_html: str,
         remaining: str,
-        current_content: str,
+        fallback_source: str,
         preamble: str,
     ) -> tuple[str, str, str, str] | None:
         from mai_gram.core.md_to_telegram import markdown_to_html
@@ -310,7 +330,7 @@ class StreamDisplayManager:
             return live_text, preamble[:max_len] + " ▍", "", preamble
         else:
             return None
-        fallback = (remaining or current_content)[:max_len] + " ▍"
+        fallback = (remaining or fallback_source)[:max_len] + " ▍"
         return live_text, fallback, header_html, remaining
 
     async def _send_or_edit_placeholder(
@@ -354,6 +374,11 @@ class StreamDisplayManager:
             parse_mode="html",
         )
         if not edit_result.success:
+            logger.warning(
+                "HTML edit rejected (len=%d): %s",
+                len(live_text),
+                edit_result.error,
+            )
             fb = await self._messenger.edit_message(
                 request.telegram_chat_id,
                 placeholder_msg_id,
