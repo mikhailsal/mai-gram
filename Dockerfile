@@ -7,14 +7,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files
-COPY pyproject.toml .
+# Copy package metadata and source (hatchling needs README + src to build)
+COPY pyproject.toml README.md ./
+COPY src/ src/
 
-# Install Python dependencies
+# Install Python dependencies + the package itself
 RUN pip install --no-cache-dir .
 
-# Copy source code and config
-COPY src/ src/
+# Copy runtime config
 COPY config/ config/
 COPY prompts/ prompts/
 
