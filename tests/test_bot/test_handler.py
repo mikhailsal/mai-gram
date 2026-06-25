@@ -71,6 +71,8 @@ def _make_services() -> HandlerServices:
             clear_setup_session=MagicMock(),
             handle_start=AsyncMock(),
             handle_setup_text=AsyncMock(),
+            show_model_change=AsyncMock(),
+            handle_model_change=AsyncMock(),
         ),
         callback_router=MagicMock(handle_callback=AsyncMock()),
     )
@@ -228,8 +230,8 @@ async def test_handle_message_routes_to_conversation_and_tracks_responses(monkey
     assert handler._response_message_ids["chat-42"] == ["resp-1", "resp-2"]
 
 
-async def test_handle_model_reports_missing_chat_and_current_model(monkeypatch) -> None:
-    handler, messenger, _, _, _, _ = _make_handler(monkeypatch)
+async def test_handle_model_reports_missing_chat_and_delegates_model_picker(monkeypatch) -> None:
+    handler, messenger, services, _, _, _ = _make_handler(monkeypatch)
     session = MagicMock(commit=AsyncMock())
     _patch_session(monkeypatch, session)
     handler._get_chat = AsyncMock(side_effect=[None, SimpleNamespace(llm_model="openrouter/free")])
@@ -240,7 +242,7 @@ async def test_handle_model_reports_missing_chat_and_current_model(monkeypatch) 
 
     sent_messages = [call.args[0].text for call in messenger.send_message.await_args_list]
     assert sent_messages[0] == "No chat exists yet. Use /start to create one."
-    assert sent_messages[1].startswith("Current model: openrouter/free")
+    services.setup_workflow.show_model_change.assert_awaited_once_with(message, "openrouter/free")
 
 
 async def test_handle_help_sends_help_text(monkeypatch) -> None:

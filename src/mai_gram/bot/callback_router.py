@@ -81,6 +81,11 @@ class CallbackRouter:
             return
 
         data = message.callback_data or ""
+
+        if data.startswith("setmodel:"):
+            await self._setup_workflow.handle_model_change(message, data.split(":", 1)[1])
+            return
+
         if await self._handle_stale_setup_callback(message, data):
             return
 

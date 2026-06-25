@@ -27,6 +27,7 @@ def _make_workflow(
 ) -> SetupWorkflow:
     messenger = MagicMock()
     messenger.send_message = AsyncMock(return_value=SendResult(success=True, message_id="42"))
+    messenger.delete_callback_source_message = AsyncMock(return_value=True)
     messenger.build_inline_keyboard.return_value = {
         "inline_keyboard": [[{"text": "One", "callback_data": "model:test"}]]
     }
@@ -431,6 +432,127 @@ class TestFinishSetup:
         assert stored_chat.system_prompt == "You are a careful assistant."
         assert stored_chat.send_datetime is True
         assert not workflow.is_in_setup("test-user")
+
+
+class TestModelChange:
+    """In-place model switching for an already-started chat (/model command)."""
+
+    async def test_show_model_change_lists_models_with_cancel(self) -> None:
+        workflow = _make_workflow()
+        message = _make_message(chat_id="tg-chat", message_type=MessageType.COMMAND)
+
+        await workflow.show_model_change(message, "openrouter/free")
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        build_kb.assert_called_once()
+        rows = build_kb.call_args.args[0]
+        callbacks = [row[0][1] for row in rows]
+        assert callbacks == [
+            "setmodel:openrouter/free",
+            "setmodel:openai/test-model",
+            "cancel_action",
+        ]
+        # The currently active model is marked, and the cancel row is last.
+        assert rows[0][0][0].startswith("✅")
+        assert rows[-1][0][0] == "Cancel"
+
+        sent_msg = _last_sent_message(workflow)
+        assert "Current model: openrouter/free" in sent_msg.text
+        assert "Choose a new model:" in sent_msg.text
+
+    async def test_handle_model_change_updates_model_and_keeps_history(
+        self, session: AsyncSession
+    ) -> None:
+        from mai_gram.db.models import Message
+
+        chat = Chat(
+            id="test-user@test-bot",
+            user_id="test-user",
+            bot_id="test-bot",
+            llm_model="openrouter/free",
+            system_prompt="Existing prompt",
+        )
+        session.add(chat)
+        session.add(Message(role="user", content="Remember this", chat_id="test-user@test-bot"))
+        await session.commit()
+
+        workflow = _make_workflow()
+        message = _make_message(
+            chat_id="tg-chat",
+            bot_id="test-bot",
+            callback_data="setmodel:openai/test-model",
+            message_type=MessageType.CALLBACK,
+        )
+
+        with patch("mai_gram.bot.model_picker.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_model_change(message, "openai/test-model")
+
+        stored_chat = (
+            await session.execute(select(Chat).where(Chat.id == "test-user@test-bot"))
+        ).scalar_one()
+        assert stored_chat.llm_model == "openai/test-model"
+        assert stored_chat.system_prompt == "Existing prompt"
+
+        from mai_gram.db.models import Message as MessageModel
+
+        surviving = (
+            (
+                await session.execute(
+                    select(MessageModel).where(MessageModel.chat_id == "test-user@test-bot")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [m.content for m in surviving] == ["Remember this"]
+
+        cast("AsyncMock", workflow._messenger.delete_callback_source_message).assert_awaited_once()
+        sent_msg = _last_sent_message(workflow)
+        assert "Model changed: openrouter/free → openai/test-model" in sent_msg.text
+
+    async def test_handle_model_change_rejects_disallowed_model(self) -> None:
+        settings = MagicMock()
+        settings.get_allowed_models.return_value = ["openrouter/free"]
+        settings.get_default_model.return_value = "openrouter/free"
+        settings.get_model_title.return_value = None
+        settings.get_model_id.side_effect = lambda key: key
+        settings.get_available_prompts.return_value = {"default": "Default prompt"}
+        settings.get_prompt_config.return_value = None
+        settings.get_available_templates.return_value = ["empty"]
+        settings.default_timezone = "UTC"
+
+        workflow = _make_workflow(settings=settings)
+        message = _make_message(
+            chat_id="tg-chat",
+            bot_id="test-bot",
+            callback_data="setmodel:not-allowed",
+            message_type=MessageType.CALLBACK,
+        )
+
+        await workflow.handle_model_change(message, "not-allowed")
+
+        sent_msg = _last_sent_message(workflow)
+        assert "not available for this bot" in sent_msg.text
+        cast("AsyncMock", workflow._messenger.delete_callback_source_message).assert_not_awaited()
+
+    async def test_handle_model_change_reports_missing_chat(self, session: AsyncSession) -> None:
+        workflow = _make_workflow()
+        message = _make_message(
+            chat_id="tg-chat",
+            bot_id="test-bot",
+            callback_data="setmodel:openai/test-model",
+            message_type=MessageType.CALLBACK,
+        )
+
+        with patch("mai_gram.bot.model_picker.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_model_change(message, "openai/test-model")
+
+        sent_msg = _last_sent_message(workflow)
+        assert sent_msg.text == "No chat exists yet. Use /start to create one."
 
 
 class TestTemplateGroupSelection:

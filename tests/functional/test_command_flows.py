@@ -30,6 +30,51 @@ def test_help_and_model_commands_cover_existing_and_missing_chats(shared_functio
     assert "Current model: openrouter/free" in existing_model.stdout
 
 
+def test_model_command_offers_picker_with_cancel(shared_functional_cli) -> None:
+    cli = shared_functional_cli
+    chat_id = "func-model-picker"
+    cli.start_chat(chat_id).require_ok()
+
+    picker = cli.run_command(chat_id, "model")
+
+    assert picker.returncode == 0
+    assert "Current model: openrouter/free" in picker.stdout
+    assert "Choose a new model:" in picker.stdout
+    assert "--- Buttons ---" in picker.stdout
+    assert "setmodel:openrouter/free" in picker.stdout
+    assert "setmodel:openrouter/free-alt" in picker.stdout
+    assert "Cancel  ->  cancel_action" in picker.stdout
+
+
+def test_model_switch_callback_changes_model_without_wiping_history(
+    shared_functional_cli,
+) -> None:
+    cli = shared_functional_cli
+    chat_id = "func-model-switch"
+    payload = json.dumps(
+        [
+            {"role": "user", "content": "Keep me after switch"},
+            {"role": "assistant", "content": "I will stay"},
+        ]
+    )
+    json_path = cli.write_json_fixture("model-switch-import.json", payload)
+
+    cli.start_chat(chat_id).require_ok()
+    cli.import_json(chat_id, json_path).require_ok()
+
+    switch = cli.send_callback(chat_id, "setmodel:openrouter/free-alt")
+
+    assert switch.returncode == 0
+    assert "Model changed: openrouter/free → openrouter/free-alt" in switch.stdout
+
+    chat = fetch_chat(cli.db_path, chat_id)
+    assert chat is not None
+    assert chat["llm_model"] == "openrouter/free-alt"
+    # History must survive an in-place model switch (unlike /reset + /start).
+    messages = fetch_messages(cli.db_path, chat_id)
+    assert [m["content"] for m in messages] == ["Keep me after switch", "I will stay"]
+
+
 def test_toggles_and_timezone_persist_to_chat_record(shared_functional_cli) -> None:
     cli = shared_functional_cli
     chat_id = "func-flags"

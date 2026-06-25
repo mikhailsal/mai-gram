@@ -108,6 +108,12 @@ def _build_cli_harness(root: Path, cli_path: str) -> CliHarness:
         'default = "openrouter/free"\n\n'
         '[models."openrouter/free"]\n'
         f"provider.ignore = [{ignore_toml}]\n\n"
+        # Alias routing to the same real model so live tests are unaffected,
+        # while still exercising the in-place /model switcher (distinct key).
+        '[models."openrouter/free-alt"]\n'
+        'id = "openrouter/free"\n'
+        'title = "Free (alt)"\n'
+        f"provider.ignore = [{ignore_toml}]\n\n"
         "[format_repair]\n"
         'model = "openrouter/free"\n'
         "temperature = 0.0\n"

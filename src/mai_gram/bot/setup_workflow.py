@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from mai_gram.bot import model_picker
 from mai_gram.bot.setup_templates import (
     get_available_templates_for_bot,
     show_template_group_selection,
@@ -157,11 +158,7 @@ class SetupWorkflow:
         await self._show_model_selection(session)
 
     def _get_allowed_models_for_bot(self) -> list[str]:
-        global_models = self._settings.get_allowed_models()
-        if self._bot_config and self._bot_config.allowed_models:
-            bot_set = set(self._bot_config.allowed_models)
-            return [model for model in global_models if model in bot_set]
-        return global_models
+        return model_picker.allowed_models_for_bot(self._settings, self._bot_config)
 
     def _get_available_prompts_for_bot(self) -> dict[str, str]:
         all_prompts = self._settings.get_available_prompts()
@@ -171,10 +168,7 @@ class SetupWorkflow:
         return all_prompts
 
     def _model_display_label(self, model_key: str) -> str:
-        title = self._settings.get_model_title(model_key)
-        if title:
-            return title
-        return model_key.split("/")[-1] if "/" in model_key else model_key
+        return model_picker.model_display_label(self._settings, model_key)
 
     async def _show_model_selection(self, session: SetupSession) -> None:
         session.state = SetupState.CHOOSING_MODEL
@@ -192,6 +186,26 @@ class SetupWorkflow:
                 chat_id=session.chat_id,
                 keyboard=self._messenger.build_inline_keyboard(keyboard_rows),
             )
+        )
+
+    async def show_model_change(self, message: IncomingMessage, current_model: str) -> None:
+        """Show the in-place model switcher for an already-started chat."""
+        await model_picker.show_model_picker(
+            self._messenger,
+            message,
+            current_model=current_model,
+            allowed_models=self._get_allowed_models_for_bot(),
+            label_for=self._model_display_label,
+        )
+
+    async def handle_model_change(self, message: IncomingMessage, model: str) -> None:
+        """Switch the model for an existing chat without wiping its history."""
+        await model_picker.apply_model_change(
+            self._messenger,
+            message,
+            model,
+            chat_id=self._resolve_chat_id(message),
+            allowed_models=self._get_allowed_models_for_bot(),
         )
 
     async def _show_prompt_selection(self, session: SetupSession) -> None:

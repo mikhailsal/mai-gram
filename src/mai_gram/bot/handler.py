@@ -164,7 +164,7 @@ class BotHandler:
         for name, handler, description in (
             ("start", self._handle_start, "Set up a new chat"),
             ("reset", self._handle_reset, "Delete chat and history"),
-            ("model", self._handle_model, "Show current model"),
+            ("model", self._handle_model, "Show or change the current model"),
             ("help", self._handle_help, "Show available commands"),
             ("datetime", self._handle_datetime_toggle, "Toggle date/time in messages"),
             ("timezone", self._handle_timezone, "Set timezone (e.g. /timezone Europe/Moscow)"),
@@ -227,21 +227,16 @@ class BotHandler:
 
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
-            if not chat:
-                await self._messenger.send_message(
-                    OutgoingMessage(
-                        text="No chat exists yet. Use /start to create one.",
-                        chat_id=message.chat_id,
-                    )
-                )
-                return
-
+        if not chat:
             await self._messenger.send_message(
                 OutgoingMessage(
-                    text=f"Current model: {chat.llm_model}\n\nUse /reset + /start to change.",
+                    text="No chat exists yet. Use /start to create one.",
                     chat_id=message.chat_id,
                 )
             )
+            return
+
+        await self._setup_workflow.show_model_change(message, chat.llm_model)
 
     async def _handle_help(self, message: IncomingMessage) -> None:
         self._message_logger.log_incoming(message)
@@ -253,7 +248,7 @@ class BotHandler:
             "/start - Set up a new chat (choose model + prompt + template)\n"
             "/import - Import conversation from JSON file\n"
             "/reset - Delete current chat and history\n"
-            "/model - Show current model\n"
+            "/model - Show or change the current model (keeps history)\n"
             "/timezone - Set timezone (e.g. /timezone Europe/Moscow)\n"
             "/datetime - Toggle date/time in messages sent to LLM\n"
             "/reasoning - Toggle display of LLM reasoning\n"

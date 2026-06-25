@@ -40,6 +40,7 @@ def _make_router() -> tuple[
     setup_workflow = MagicMock()
     setup_workflow.is_in_setup.return_value = False
     setup_workflow.handle_setup_callback = AsyncMock()
+    setup_workflow.handle_model_change = AsyncMock()
 
     reset_workflow = MagicMock()
     reset_workflow.execute_reset = AsyncMock()
@@ -82,6 +83,26 @@ class TestCallbackRouter:
         await_args = send_message.await_args
         assert await_args is not None
         assert "ignored" in await_args.args[0].text
+
+    async def test_setmodel_callback_delegates_to_setup_workflow(self) -> None:
+        router, _, _ = _make_router()
+
+        await router.handle_callback(_make_message("setmodel:google/gemini-2.5-flash"))
+
+        handle_model_change = cast("AsyncMock", router._setup_workflow.handle_model_change)
+        handle_model_change.assert_awaited_once()
+        await_args = handle_model_change.await_args
+        assert await_args is not None
+        assert await_args.args[1] == "google/gemini-2.5-flash"
+        # A live model switch must never be treated as a stale setup callback.
+        cast("AsyncMock", router._messenger.send_message).assert_not_awaited()
+
+    async def test_cancel_action_deletes_source_message(self) -> None:
+        router, _, _ = _make_router()
+
+        await router.handle_callback(_make_message("cancel_action"))
+
+        cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
 
     async def test_shows_regen_confirmation(self) -> None:
         router, _, _ = _make_router()
