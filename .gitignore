@@ -24,6 +24,7 @@ env/
 # Environment variables and secrets
 .env
 config/bots.toml
+config/bots.toml.old
 
 # Database
 *.db
