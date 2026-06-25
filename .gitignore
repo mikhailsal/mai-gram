@@ -26,6 +26,13 @@ env/
 config/bots.toml
 config/bots.toml.old
 
+# Deployment
+# How to deploy: see docs/deploy.md and deploy.env.example. Real server-specific
+# values (host, container, paths) live only in deploy.env, which is gitignored —
+# keep them out of this open-source repo and in your own private infra notes.
+deploy.env
+.deploy-staging/
+
 # Database
 *.db
 *.sqlite

@@ -12,6 +12,7 @@
 	lint lint-fix format format-check typecheck size-check check fix \
         precommit install-hooks \
         docker-build docker-up docker-down docker-logs docker-restart docker-shell \
+        deploy \
         clean clean-pyc clean-test clean-all
 
 # Default target
@@ -202,6 +203,11 @@ docker-restart: ## Restart Docker containers
 
 docker-shell: ## Open a shell in the running container
 	docker compose exec mai-gram /bin/bash
+
+##@ Deployment
+
+deploy: ## Deploy working tree to the remote server (configure deploy.env first)
+	./scripts/deploy.sh
 
 ##@ Cleanup
 
