@@ -15,7 +15,6 @@ and scalar values are coerced to their natural JSON types.
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -23,14 +22,8 @@ if TYPE_CHECKING:
 
 CUSTOM_MODEL_VALUE = "__custom_model__"
 CUSTOM_MODEL_LABEL = "Custom model (type your own)"
-INVALID_MODEL_MESSAGE = (
-    "That doesn't look like a valid model id. Try again, e.g. openai/gpt-5.4-mini"
-)
+INVALID_MODEL_MESSAGE = "Please type a model id on the first line, e.g. openai/gpt-5.4-mini"
 CUSTOM_MODELS_DISABLED_MESSAGE = "Custom models are not available for this bot."
-
-# A model id looks like ``vendor/model`` or ``vendor/model:tag``; keep the
-# validation permissive but reject whitespace and obviously bogus input.
-_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9._:/@\-]{2,150}$")
 
 CUSTOM_MODEL_PROMPT = (
     "Type an arbitrary model id, optionally followed by parameters "
@@ -53,8 +46,13 @@ def is_user_allowed(bot_config: BotConfig | None, user_id: str) -> bool:
 
 
 def validate_model_name(name: str) -> bool:
-    """Return whether *name* is a plausible OpenRouter model id."""
-    return bool(_MODEL_ID_RE.match(name.strip()))
+    """Return whether *name* is usable as a model id.
+
+    Model ids are treated as completely arbitrary: whatever the user typed on
+    the first line is sent to the API verbatim. The only requirement is that the
+    line is non-empty -- there is nothing to send otherwise.
+    """
+    return bool(name.strip())
 
 
 def _coerce_value(raw: str) -> Any:

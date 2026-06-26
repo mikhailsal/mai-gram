@@ -29,16 +29,18 @@ class TestIsUserAllowed:
 
 
 class TestValidateModelName:
-    def test_accepts_typical_model_ids(self) -> None:
+    def test_accepts_any_non_empty_model_id(self) -> None:
+        # Model ids are arbitrary: whatever the user types is sent verbatim.
         assert custom_model.validate_model_name("openai/gpt-5.4-mini")
         assert custom_model.validate_model_name("google/gemma-4-31b-it:free")
         assert custom_model.validate_model_name("vendor/model@alias")
+        assert custom_model.validate_model_name("moonshotai/kimi-k2.6+moonshotai")
+        assert custom_model.validate_model_name("x")
+        assert custom_model.validate_model_name("anything at all")
 
-    def test_rejects_empty_or_whitespace_or_too_short(self) -> None:
+    def test_rejects_only_empty_or_whitespace(self) -> None:
         assert not custom_model.validate_model_name("")
         assert not custom_model.validate_model_name("   ")
-        assert not custom_model.validate_model_name("openai/ gpt")  # space
-        assert not custom_model.validate_model_name("x")  # too short
 
 
 class TestParseModelParams:

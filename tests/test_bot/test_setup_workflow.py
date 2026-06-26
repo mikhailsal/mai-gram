@@ -618,7 +618,8 @@ class TestCustomModelSetup:
 
         assert "not available" in _last_sent_message(workflow).text
 
-    async def test_invalid_custom_model_text_keeps_state(self) -> None:
+    async def test_empty_custom_model_text_keeps_state(self) -> None:
+        # Model ids are arbitrary; only an empty/whitespace first line is refused.
         workflow = _make_workflow(bot_config=self._allowed_bot())
         workflow._sessions["test-user"] = SetupSession(
             user_id="test-user",
@@ -627,7 +628,7 @@ class TestCustomModelSetup:
         )
 
         await workflow.handle_setup_text(
-            _make_message(chat_id="tg-chat", text="not a model", message_type=MessageType.TEXT)
+            _make_message(chat_id="tg-chat", text="   ", message_type=MessageType.TEXT)
         )
 
         sess = workflow.get_setup_session("test-user")
