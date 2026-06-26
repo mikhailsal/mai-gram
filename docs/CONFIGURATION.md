@@ -33,6 +33,10 @@ cp config/bots.toml.example config/bots.toml
 When `config/bots.toml` exists, legacy `TELEGRAM_BOT_TOKEN*` env vars
 are ignored. See `README.md` for the full format.
 
+`config/bots.toml` is read once at startup. Under Docker the `config/`
+directory is bind-mounted, so editing it on the server takes effect with a
+`docker compose restart mai-gram` — no image rebuild required.
+
 ## Data Directory Layout
 
 The `MEMORY_DATA_DIR` (default `./data`) contains all per-companion

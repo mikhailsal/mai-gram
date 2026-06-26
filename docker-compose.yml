@@ -7,5 +7,10 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      # Live-mount runtime config so edits (e.g. config/bots.toml) take effect
+      # with a `docker compose restart` -- no image rebuild needed. models.toml
+      # is additionally hot-reloaded by the app. Read-only: the app never writes
+      # here, and the image still bakes in a copy as a standalone fallback.
+      - ./config:/app/config:ro
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/mai_gram.db

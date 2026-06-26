@@ -28,6 +28,24 @@ secrets and history are never clobbered by a deploy:
 The in-container extraction uses a plain `tar -x` (no `--delete`), so any
 server-only file inside the app directory survives a deploy.
 
+### Editing config without a rebuild
+
+The `config/` directory is **bind-mounted** into the container
+(`./config:/app/config:ro` in `docker-compose.yml`), so the bots read the live
+on-disk files rather than a copy frozen into the image. After editing a config
+file on the server you do **not** need a full rebuild:
+
+- `config/models.toml` — picked up automatically (mtime polling, ~2s), no
+  restart needed.
+- `config/bots.toml` — read once at startup, so it needs a process restart:
+
+  ```bash
+  ssh <your-host> "sudo lxc exec <container> -- sh -c 'cd <app-dir> && docker compose restart mai-gram'"
+  ```
+
+(The image still bakes in a `config/` copy via the `Dockerfile` as a standalone
+fallback; the bind mount overlays it at runtime.)
+
 ## Prerequisites
 
 - `ssh <your-host>` works and the host has passwordless `sudo` (for `lxc`).
