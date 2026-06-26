@@ -86,6 +86,29 @@ def _add_inspection_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_custom_model_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--custom-model",
+        dest="custom_model",
+        metavar="MODEL_ID",
+        help=(
+            "Arbitrary model ID for --start setup (bypasses the models.toml "
+            "registry). Requires the user to be in custom_model_allowed_users. "
+            "Combine with --custom-model-params for request overrides."
+        ),
+    )
+    parser.add_argument(
+        "--custom-model-params",
+        dest="custom_model_params",
+        metavar="KEY=VALUE",
+        nargs="*",
+        help=(
+            "Custom model request params as key=value pairs (dotted keys allowed). "
+            "Example: --custom-model-params reasoning.effort=high temperature=0.7"
+        ),
+    )
+
+
 def _add_setup_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--real",
@@ -103,6 +126,7 @@ def _add_setup_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="MODEL_ID",
         help="Model ID for --start setup (skips model selection step).",
     )
+    _add_custom_model_arguments(parser)
     parser.add_argument(
         "--prompt",
         metavar="PROMPT_NAME",

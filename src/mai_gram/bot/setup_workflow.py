@@ -6,13 +6,14 @@ import enum
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
-from mai_gram.bot import model_picker
+from mai_gram.bot import custom_model, model_picker, setup_finalizer
 from mai_gram.bot.setup_templates import (
     get_available_templates_for_bot,
+    parse_kv_params,
     show_template_group_selection,
     show_template_params_summary,
 )
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from mai_gram.config import BotConfig, Settings
-    from mai_gram.config_loaders import PromptConfig
     from mai_gram.messenger.base import Messenger
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class SetupState(str, enum.Enum):
     """States in the setup flow."""
 
     CHOOSING_MODEL = "choosing_model"
+    AWAITING_CUSTOM_MODEL = "awaiting_custom_model"
     CHOOSING_PROMPT = "choosing_prompt"
     AWAITING_CUSTOM_PROMPT = "awaiting_custom_prompt"
     CHOOSING_TEMPLATE_GROUP = "choosing_template_group"
@@ -55,6 +56,7 @@ class SetupSession:
     selected_prompt_text: str = ""
     selected_template: str | None = None
     template_params: dict[str, str] | None = None
+    custom_model_params: dict[str, Any] | None = None
     bot_id: str = ""
 
 
@@ -74,9 +76,14 @@ class SetupWorkflow:
         self._bot_config = bot_config
         self._resolve_chat_id = resolve_chat_id
         self._sessions: dict[str, SetupSession] = {}
+        # user_id -> chat_id for an in-place /model custom switch awaiting text.
+        self._pending_custom_model: dict[str, str] = {}
 
     def is_in_setup(self, user_id: str) -> bool:
         return user_id in self._sessions
+
+    def _custom_model_allowed(self, user_id: str) -> bool:
+        return custom_model.is_user_allowed(self._bot_config, user_id)
 
     def get_setup_session(self, user_id: str) -> SetupSession | None:
         return self._sessions.get(user_id)
@@ -139,6 +146,9 @@ class SetupWorkflow:
         session = self._sessions.get(message.user_id)
         if not session:
             return
+        if session.state == SetupState.AWAITING_CUSTOM_MODEL:
+            await self._handle_custom_model_text(session, message)
+            return
         if session.state == SetupState.AWAITING_CUSTOM_PROMPT:
             session.selected_prompt_text = message.text.strip()
             session.selected_prompt_name = None
@@ -146,7 +156,7 @@ class SetupWorkflow:
             await self._show_template_selection(session)
             return
         if session.state == SetupState.CONFIGURING_TEMPLATE_PARAMS:
-            parsed = self._parse_kv_params(message.text)
+            parsed = parse_kv_params(message.text)
             if parsed:
                 session.template_params = parsed
             session.bot_id = message.bot_id or session.bot_id
@@ -180,6 +190,10 @@ class SetupWorkflow:
             if model == default_model:
                 label = f"{label} [default]"
             keyboard_rows.append([(label, f"model:{model}")])
+        if self._custom_model_allowed(session.user_id):
+            keyboard_rows.append(
+                [(custom_model.CUSTOM_MODEL_LABEL, f"model:{custom_model.CUSTOM_MODEL_VALUE}")]
+            )
         await self._messenger.send_message(
             OutgoingMessage(
                 text="Choose an LLM model:",
@@ -196,16 +210,38 @@ class SetupWorkflow:
             current_model=current_model,
             allowed_models=self._get_allowed_models_for_bot(),
             label_for=self._model_display_label,
+            allow_custom=self._custom_model_allowed(message.user_id),
         )
 
     async def handle_model_change(self, message: IncomingMessage, model: str) -> None:
         """Switch the model for an existing chat without wiping its history."""
+        if model == custom_model.CUSTOM_MODEL_VALUE:
+            await model_picker.begin_custom_model_change(
+                self._messenger,
+                message,
+                allowed=self._custom_model_allowed(message.user_id),
+                chat_id=self._resolve_chat_id(message),
+                pending=self._pending_custom_model,
+            )
+            return
         await model_picker.apply_model_change(
             self._messenger,
             message,
             model,
             chat_id=self._resolve_chat_id(message),
             allowed_models=self._get_allowed_models_for_bot(),
+        )
+
+    def is_awaiting_custom_model_change(self, user_id: str) -> bool:
+        return user_id in self._pending_custom_model
+
+    async def handle_custom_model_change_text(self, message: IncomingMessage) -> None:
+        """Apply an in-place custom model switch from free-form text input."""
+        await model_picker.apply_custom_model_change_text(
+            self._messenger,
+            message,
+            chat_id=self._resolve_chat_id(message),
+            pending=self._pending_custom_model,
         )
 
     async def _show_prompt_selection(self, session: SetupSession) -> None:
@@ -224,6 +260,9 @@ class SetupWorkflow:
         )
 
     async def _handle_model_selection(self, session: SetupSession, model: str) -> None:
+        if model == custom_model.CUSTOM_MODEL_VALUE:
+            await self._prompt_custom_model(session)
+            return
         allowed = self._get_allowed_models_for_bot()
         if allowed and model not in allowed:
             await self._messenger.send_message(
@@ -234,6 +273,37 @@ class SetupWorkflow:
             )
             return
         session.selected_model = model
+        await self._show_prompt_selection(session)
+
+    async def _prompt_custom_model(self, session: SetupSession) -> None:
+        if not self._custom_model_allowed(session.user_id):
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text="Custom models are not available for this bot.",
+                    chat_id=session.chat_id,
+                )
+            )
+            return
+        session.state = SetupState.AWAITING_CUSTOM_MODEL
+        await self._messenger.send_message(
+            OutgoingMessage(text=custom_model.CUSTOM_MODEL_PROMPT, chat_id=session.chat_id)
+        )
+
+    async def _handle_custom_model_text(
+        self, session: SetupSession, message: IncomingMessage
+    ) -> None:
+        model_name, params = custom_model.parse_custom_model_input(message.text)
+        if not custom_model.validate_model_name(model_name):
+            await self._messenger.send_message(
+                OutgoingMessage(
+                    text=custom_model.INVALID_MODEL_MESSAGE,
+                    chat_id=session.chat_id,
+                )
+            )
+            return
+        session.selected_model = model_name
+        session.custom_model_params = params or None
+        session.bot_id = message.bot_id or session.bot_id
         await self._show_prompt_selection(session)
 
     async def _handle_prompt_selection(
@@ -351,21 +421,6 @@ class SetupWorkflow:
         else:
             await self._finish_setup_from_session(session, message=message)
 
-    @staticmethod
-    def _parse_kv_params(text: str) -> dict[str, str]:
-        """Parse 'key=value' lines from user text input."""
-        result: dict[str, str] = {}
-        for line in text.strip().splitlines():
-            line = line.strip()
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip()
-            if key:
-                result[key] = value
-        return result
-
     async def _finish_setup_from_session(
         self,
         session: SetupSession,
@@ -407,89 +462,30 @@ class SetupWorkflow:
         chat_id = self._resolve_chat_id(message)
         prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
         params_json = json.dumps(template_params, ensure_ascii=False) if template_params else None
+        custom_params = session.custom_model_params
+        custom_params_json = (
+            json.dumps(custom_params, ensure_ascii=False) if custom_params else None
+        )
 
-        chat = self._build_chat_record(
+        chat = setup_finalizer.build_chat_record(
             chat_id,
             message,
             session,
             system_prompt,
+            settings=self._settings,
             prompt_name=prompt_name,
             template_name=template_name,
             params_json=params_json,
             prompt_cfg=prompt_cfg,
+            custom_model_params_json=custom_params_json,
         )
         async with get_session() as db:
             db.add(chat)
             await db.commit()
 
         self.clear_setup_session(message.user_id)
-        await self._send_setup_confirmation(message, session, chat, system_prompt, template_name)
-
-    def _build_chat_record(
-        self,
-        chat_id: str,
-        message: IncomingMessage,
-        session: SetupSession,
-        system_prompt: str,
-        *,
-        prompt_name: str | None,
-        template_name: str | None,
-        params_json: str | None,
-        prompt_cfg: PromptConfig | None,
-    ) -> Chat:
-        send_dt = True
-        if prompt_cfg is not None and prompt_cfg.send_datetime is not None:
-            send_dt = prompt_cfg.send_datetime
-        return Chat(
-            id=chat_id,
-            user_id=message.user_id,
-            bot_id=message.bot_id or "",
-            llm_model=session.selected_model,
-            system_prompt=system_prompt,
-            prompt_name=prompt_name,
-            response_template=template_name,
-            template_params=params_json,
-            timezone=self._settings.default_timezone,
-            show_reasoning=prompt_cfg.show_reasoning if prompt_cfg else True,
-            show_tool_calls=prompt_cfg.show_tool_calls if prompt_cfg else True,
-            send_datetime=send_dt,
-        )
-
-    async def _send_setup_confirmation(
-        self,
-        message: IncomingMessage,
-        session: SetupSession,
-        chat: Chat,
-        system_prompt: str,
-        template_name: str | None,
-    ) -> None:
-        reasoning_status = "ON" if chat.show_reasoning else "OFF"
-        toolcalls_status = "ON" if chat.show_tool_calls else "OFF"
-        datetime_status = "ON" if chat.send_datetime else "OFF"
-        tpl_display = template_name or "empty"
-        await self._messenger.send_message(
-            OutgoingMessage(
-                text=(
-                    "Chat created!\n"
-                    f"Model: {session.selected_model}\n"
-                    f"Prompt: {system_prompt[:100]}{'...' if len(system_prompt) > 100 else ''}\n"
-                    f"Template: {tpl_display}\n"
-                    f"Reasoning: {reasoning_status} | Tool calls: {toolcalls_status} "
-                    f"| Datetime: {datetime_status}\n\n"
-                    "Send a message to start chatting.\n"
-                    "Toggle display with /reasoning, /toolcalls, /datetime, and /toggle."
-                ),
-                chat_id=message.chat_id,
-            )
-        )
-        logger.info(
-            "Created chat: id=%s model=%s prompt_len=%d template=%s reasoning=%s toolcalls=%s",
-            chat.id,
-            session.selected_model,
-            len(system_prompt),
-            tpl_display,
-            chat.show_reasoning,
-            chat.show_tool_calls,
+        await setup_finalizer.send_setup_confirmation(
+            self._messenger, message, session, chat, system_prompt, template_name
         )
 
     @staticmethod

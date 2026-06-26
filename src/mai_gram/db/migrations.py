@@ -33,7 +33,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 def register_migration(version: int, description: str) -> Callable[[MigrationFunc], MigrationFunc]:
@@ -178,6 +178,17 @@ async def _migrate_v8(conn: AsyncConnection) -> None:
     if "template_params" not in existing_cols:
         await conn.execute(text("ALTER TABLE chats ADD COLUMN template_params TEXT"))
         logger.info("Added chats.template_params column")
+
+
+@register_migration(9, "Add custom_model_params column to chats")
+async def _migrate_v9(conn: AsyncConnection) -> None:
+    """Version 9: add Chat.custom_model_params for arbitrary-model request overrides."""
+    result = await conn.execute(text("PRAGMA table_info(chats)"))
+    existing_cols = [row[1] for row in result.fetchall()]
+
+    if "custom_model_params" not in existing_cols:
+        await conn.execute(text("ALTER TABLE chats ADD COLUMN custom_model_params TEXT"))
+        logger.info("Added chats.custom_model_params column")
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

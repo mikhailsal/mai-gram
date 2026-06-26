@@ -555,6 +555,278 @@ class TestModelChange:
         assert sent_msg.text == "No chat exists yet. Use /start to create one."
 
 
+class TestCustomModelSetup:
+    """Arbitrary model selection during /start, gated by custom_model_allowed_users."""
+
+    def _allowed_bot(self) -> BotConfig:
+        return BotConfig(token=_fake_secret("bot"), custom_model_allowed_users=["test-user"])
+
+    async def test_custom_button_shown_only_when_user_allowed(self, session: AsyncSession) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        message = _make_message(chat_id="tg-chat", bot_id="test-bot")
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_start(message)
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        callbacks = [row[0][1] for row in build_kb.call_args.args[0]]
+        assert "model:__custom_model__" in callbacks
+
+    async def test_custom_button_hidden_when_not_allowed(self, session: AsyncSession) -> None:
+        workflow = _make_workflow()  # bot_config=None -> not allowed
+        message = _make_message(chat_id="tg-chat", bot_id="test-bot")
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_start(message)
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        callbacks = [row[0][1] for row in build_kb.call_args.args[0]]
+        assert "model:__custom_model__" not in callbacks
+
+    async def test_selecting_custom_model_requests_text(self) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        workflow._sessions["test-user"] = SetupSession(user_id="test-user", chat_id="tg-chat")
+
+        await workflow.handle_setup_callback(
+            _make_message(
+                chat_id="tg-chat",
+                callback_data="model:__custom_model__",
+                message_type=MessageType.CALLBACK,
+            )
+        )
+
+        sess = workflow.get_setup_session("test-user")
+        assert sess is not None
+        assert sess.state == SetupState.AWAITING_CUSTOM_MODEL
+        assert "model id" in _last_sent_message(workflow).text.lower()
+
+    async def test_custom_model_disallowed_user_is_rejected(self) -> None:
+        workflow = _make_workflow()  # not allowed
+        workflow._sessions["test-user"] = SetupSession(user_id="test-user", chat_id="tg-chat")
+
+        await workflow.handle_setup_callback(
+            _make_message(
+                chat_id="tg-chat",
+                callback_data="model:__custom_model__",
+                message_type=MessageType.CALLBACK,
+            )
+        )
+
+        assert "not available" in _last_sent_message(workflow).text
+
+    async def test_invalid_custom_model_text_keeps_state(self) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.AWAITING_CUSTOM_MODEL,
+        )
+
+        await workflow.handle_setup_text(
+            _make_message(chat_id="tg-chat", text="not a model", message_type=MessageType.TEXT)
+        )
+
+        sess = workflow.get_setup_session("test-user")
+        assert sess is not None
+        assert sess.state == SetupState.AWAITING_CUSTOM_MODEL
+        assert sess.selected_model == ""
+
+    async def test_valid_custom_model_advances_to_prompt(self) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.AWAITING_CUSTOM_MODEL,
+        )
+
+        await workflow.handle_setup_text(
+            _make_message(
+                chat_id="tg-chat",
+                bot_id="test-bot",
+                text="openai/gpt-5.4-mini\nreasoning.effort = high\ntemperature = 0.7",
+                message_type=MessageType.TEXT,
+            )
+        )
+
+        sess = workflow.get_setup_session("test-user")
+        assert sess is not None
+        assert sess.state == SetupState.CHOOSING_PROMPT
+        assert sess.selected_model == "openai/gpt-5.4-mini"
+        assert sess.custom_model_params == {
+            "reasoning": {"effort": "high"},
+            "temperature": 0.7,
+        }
+
+    async def test_full_custom_flow_persists_custom_params(self, session: AsyncSession) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        workflow._sessions["test-user"] = SetupSession(
+            user_id="test-user",
+            chat_id="tg-chat",
+            state=SetupState.AWAITING_CUSTOM_MODEL,
+        )
+
+        with patch("mai_gram.bot.setup_workflow.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            await workflow.handle_setup_text(
+                _make_message(
+                    chat_id="tg-chat",
+                    bot_id="test-bot",
+                    text="openai/gpt-5.4-mini\ntemperature = 0.7",
+                    message_type=MessageType.TEXT,
+                )
+            )
+            await workflow.handle_setup_callback(
+                _make_message(
+                    chat_id="tg-chat",
+                    bot_id="test-bot",
+                    callback_data="prompt:default",
+                    message_type=MessageType.CALLBACK,
+                )
+            )
+
+        stored = (
+            await session.execute(select(Chat).where(Chat.id == "test-user@test-bot"))
+        ).scalar_one()
+        assert stored.llm_model == "openai/gpt-5.4-mini"
+        assert stored.custom_model_params == '{"temperature": 0.7}'
+        assert "Custom params" in _last_sent_message(workflow).text
+
+
+class TestCustomModelChange:
+    """In-place /model switch to an arbitrary model (history preserved)."""
+
+    def _allowed_bot(self) -> BotConfig:
+        return BotConfig(token=_fake_secret("bot"), custom_model_allowed_users=["test-user"])
+
+    async def test_show_model_change_includes_custom_option_when_allowed(self) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        message = _make_message(chat_id="tg-chat", message_type=MessageType.COMMAND)
+
+        await workflow.show_model_change(message, "openrouter/free")
+
+        build_kb = cast("MagicMock", workflow._messenger.build_inline_keyboard)
+        callbacks = [row[0][1] for row in build_kb.call_args.args[0]]
+        assert "setmodel:__custom_model__" in callbacks
+
+    async def test_begin_custom_change_sets_pending_and_prompts(self) -> None:
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        message = _make_message(
+            chat_id="tg-chat",
+            bot_id="test-bot",
+            callback_data="setmodel:__custom_model__",
+            message_type=MessageType.CALLBACK,
+        )
+
+        await workflow.handle_model_change(message, "__custom_model__")
+
+        assert workflow.is_awaiting_custom_model_change("test-user")
+        assert "model id" in _last_sent_message(workflow).text.lower()
+
+    async def test_begin_custom_change_rejected_when_not_allowed(self) -> None:
+        workflow = _make_workflow()  # not allowed
+        message = _make_message(
+            chat_id="tg-chat",
+            callback_data="setmodel:__custom_model__",
+            message_type=MessageType.CALLBACK,
+        )
+
+        await workflow.handle_model_change(message, "__custom_model__")
+
+        assert not workflow.is_awaiting_custom_model_change("test-user")
+        assert "not available" in _last_sent_message(workflow).text
+
+    async def test_custom_change_text_updates_model_and_keeps_history(
+        self, session: AsyncSession
+    ) -> None:
+        from mai_gram.db.models import Message
+
+        chat = Chat(
+            id="test-user@test-bot",
+            user_id="test-user",
+            bot_id="test-bot",
+            llm_model="openrouter/free",
+            system_prompt="Existing prompt",
+        )
+        session.add(chat)
+        session.add(Message(role="user", content="Keep me", chat_id="test-user@test-bot"))
+        await session.commit()
+
+        workflow = _make_workflow(bot_config=self._allowed_bot())
+        workflow._pending_custom_model["test-user"] = "test-user@test-bot"
+        message = _make_message(
+            chat_id="tg-chat",
+            bot_id="test-bot",
+            text="anthropic/claude-4-haiku\nreasoning.effort = high",
+            message_type=MessageType.TEXT,
+        )
+
+        with patch("mai_gram.bot.model_picker.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_custom_model_change_text(message)
+
+        stored = (
+            await session.execute(select(Chat).where(Chat.id == "test-user@test-bot"))
+        ).scalar_one()
+        assert stored.llm_model == "anthropic/claude-4-haiku"
+        assert stored.custom_model_params == '{"reasoning": {"effort": "high"}}'
+        assert not workflow.is_awaiting_custom_model_change("test-user")
+
+        from mai_gram.db.models import Message as MessageModel
+
+        surviving = (
+            (
+                await session.execute(
+                    select(MessageModel).where(MessageModel.chat_id == "test-user@test-bot")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [m.content for m in surviving] == ["Keep me"]
+
+
+class TestRegistryModelChangeClearsCustomParams:
+    async def test_switching_to_registry_model_clears_custom_params(
+        self, session: AsyncSession
+    ) -> None:
+        chat = Chat(
+            id="test-user@test-bot",
+            user_id="test-user",
+            bot_id="test-bot",
+            llm_model="openai/gpt-5.4-mini",
+            system_prompt="Existing prompt",
+            custom_model_params='{"temperature": 0.7}',
+        )
+        session.add(chat)
+        await session.commit()
+
+        workflow = _make_workflow()
+        message = _make_message(
+            chat_id="tg-chat",
+            bot_id="test-bot",
+            callback_data="setmodel:openai/test-model",
+            message_type=MessageType.CALLBACK,
+        )
+
+        with patch("mai_gram.bot.model_picker.get_session") as mock_get_session:
+            mock_get_session.return_value.__aenter__ = AsyncMock(return_value=session)
+            mock_get_session.return_value.__aexit__ = AsyncMock(return_value=False)
+            await workflow.handle_model_change(message, "openai/test-model")
+
+        stored = (
+            await session.execute(select(Chat).where(Chat.id == "test-user@test-bot"))
+        ).scalar_one()
+        assert stored.llm_model == "openai/test-model"
+        assert stored.custom_model_params is None
+
+
 class TestTemplateGroupSelection:
     async def test_prompt_selection_shows_group_chooser(self) -> None:
         """After prompt selection, template groups should be shown (not flat list)."""

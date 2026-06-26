@@ -80,12 +80,37 @@ Define all your bots in a single `config/bots.toml` file. Each bot can have its 
 [[bots]]
 token = "123456:ABC-DEF..."
 allowed_users = [111111111]
+# Let this user type arbitrary model ids + params (see "Arbitrary models" below)
+custom_model_allowed_users = [111111111]
 
 [[bots]]
 token = "789012:GHI-JKL..."
 allowed_users = [222222222]
 allowed_models = ["google/gemini-2.5-flash"]
 allowed_prompts = ["default", "coder"]
+```
+
+### Arbitrary Models with Custom Parameters
+
+Users listed in a bot's `custom_model_allowed_users` get a **Custom model (type
+your own)** option during `/start` and `/model`. They can pick any OpenRouter
+model id that isn't in `config/models.toml` and supply request parameters in a
+chat message — the first line is the model id, each following `key = value` line
+becomes a request parameter (dotted keys nest, values are type-coerced):
+
+```
+openai/gpt-5.4-mini
+reasoning.effort = "high"
+temperature = 0.7
+provider.order = ["OpenAI"]
+```
+
+The capability is opt-in per bot and per user; if `custom_model_allowed_users`
+is omitted, the option is hidden for everyone on that bot. From the CLI:
+
+```bash
+mai-chat -c test-demo --start --custom-model openai/gpt-5.4-mini \
+  --custom-model-params reasoning.effort=high temperature=0.7 --prompt default
 ```
 
 ### Per-Prompt Configuration

@@ -67,10 +67,12 @@ def _make_services() -> HandlerServices:
         reset_workflow=MagicMock(handle_reset=AsyncMock()),
         setup_workflow=MagicMock(
             is_in_setup=MagicMock(return_value=False),
+            is_awaiting_custom_model_change=MagicMock(return_value=False),
             get_setup_session=MagicMock(return_value=None),
             clear_setup_session=MagicMock(),
             handle_start=AsyncMock(),
             handle_setup_text=AsyncMock(),
+            handle_custom_model_change_text=AsyncMock(),
             show_model_change=AsyncMock(),
             handle_model_change=AsyncMock(),
         ),

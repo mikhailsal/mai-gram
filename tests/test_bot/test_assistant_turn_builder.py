@@ -138,6 +138,58 @@ class TestAssistantTurnBuilder:
         wiki_store.sync_from_disk.assert_awaited_once_with(chat.id)
 
 
+class TestCustomModelParamsMerge:
+    """Custom (arbitrary-model) params are merged on top of registry params."""
+
+    async def test_custom_params_override_and_extend_registry_params(
+        self, session: AsyncSession
+    ) -> None:
+        builder = _make_builder(model_params={"temperature": 0.2})
+        chat = _make_chat()
+        chat.custom_model_params = '{"temperature": 1.5, "reasoning": {"effort": "high"}}'
+        session.add(chat)
+        await session.commit()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
+
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as pb_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
+            pb_cls.return_value.build_context = AsyncMock(return_value=[])
+
+            request = await builder.build_request(
+                session,
+                chat=chat,
+                telegram_chat_id="tg-chat",
+                failure_log_message="fail",
+            )
+
+        assert request.extra_params["temperature"] == 1.5
+        assert request.extra_params["reasoning"] == {"effort": "high"}
+
+    async def test_no_custom_params_leaves_registry_params(self, session: AsyncSession) -> None:
+        builder = _make_builder(model_params={"temperature": 0.2})
+        chat = _make_chat()  # custom_model_params is None by default
+        session.add(chat)
+        await session.commit()
+        wiki_store = MagicMock(sync_from_disk=AsyncMock())
+
+        with (
+            patch("mai_gram.bot.assistant_turn_builder.PromptBuilder") as pb_cls,
+            patch("mai_gram.bot.assistant_turn_builder.WikiStore", return_value=wiki_store),
+        ):
+            pb_cls.return_value.build_context = AsyncMock(return_value=[])
+
+            request = await builder.build_request(
+                session,
+                chat=chat,
+                telegram_chat_id="tg-chat",
+                failure_log_message="fail",
+            )
+
+        assert request.extra_params == {"temperature": 0.2}
+
+
 class TestMaxOutputTokensInjection:
     """Verify max_output_tokens is applied as max_tokens in extra_params."""
 

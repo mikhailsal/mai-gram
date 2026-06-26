@@ -270,6 +270,7 @@ async def _run(args: Any) -> None:
             llm=llm,
             settings=settings,
             external_mcp_pool=external_mcp_pool,
+            bot_config=_resolve_cli_bot_config(settings, user_id),
         )
 
         if logger_provider is not None:
@@ -338,6 +339,27 @@ def _build_cli_llm(
     return logger_provider, logger_provider
 
 
+def _resolve_cli_bot_config(settings: Settings, user_id: str) -> Any:
+    """Find the bots.toml config whose allowed_users contains *user_id*.
+
+    Returns ``None`` when no per-bot config matches, preserving the historical
+    "no restrictions" CLI behavior. When matched, the config is what enables the
+    custom-model capability (via ``custom_model_allowed_users``) for the session.
+    """
+    get_fn = getattr(settings, "get_bot_configs", None)
+    if get_fn is None:
+        return None
+    try:
+        configs = list(get_fn())
+    except TypeError:
+        return None
+    for bot_config in configs:
+        users = getattr(bot_config, "allowed_users", None) or []
+        if str(user_id) in {str(uid) for uid in users}:
+            return bot_config
+    return None
+
+
 async def _dispatch_console_runtime(
     args: Any,
     *,
@@ -346,6 +368,7 @@ async def _dispatch_console_runtime(
     llm: LLMProvider,
     settings: Settings,
     external_mcp_pool: ExternalMCPPool | None = None,
+    bot_config: Any = None,
 ) -> ConsoleMessenger:
     messenger = ConsoleMessenger(stream_debug=args.stream_debug)
     build_bot_handler(
@@ -354,6 +377,7 @@ async def _dispatch_console_runtime(
         settings,
         test_mode=not args.real,
         external_mcp_pool=external_mcp_pool,
+        bot_config=bot_config,
     )
 
     if args.start:
@@ -387,6 +411,14 @@ async def _dispatch_console_runtime(
     return messenger
 
 
+def _build_custom_model_text(model: str, raw_params: list[str] | None) -> str:
+    """Compose the free-form custom-model input (model id + key=value lines)."""
+    lines = [model]
+    if raw_params:
+        lines.extend(raw_params)
+    return "\n".join(lines)
+
+
 async def _dispatch_start_flow(
     messenger: ConsoleMessenger,
     args: Any,
@@ -394,7 +426,23 @@ async def _dispatch_start_flow(
     user_id: str,
 ) -> None:
     await messenger.dispatch_message(_incoming_command(chat_id, user_id, "start"))
-    if args.model:
+    custom_model_id = getattr(args, "custom_model", None)
+    if custom_model_id:
+        from mai_gram.bot.custom_model import CUSTOM_MODEL_VALUE
+
+        await messenger.dispatch_callback(
+            chat_id=chat_id,
+            user_id=user_id,
+            callback_data=f"model:{CUSTOM_MODEL_VALUE}",
+        )
+        await messenger.dispatch_text(
+            chat_id=chat_id,
+            user_id=user_id,
+            text=_build_custom_model_text(
+                custom_model_id, getattr(args, "custom_model_params", None)
+            ),
+        )
+    elif args.model:
         await messenger.dispatch_callback(
             chat_id=chat_id,
             user_id=user_id,

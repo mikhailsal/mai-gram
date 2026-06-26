@@ -23,13 +23,20 @@
 #                               from the prompts/ directory). If omitted, all
 #                               prompts are available and custom prompts are
 #                               allowed. When set, custom prompts are disabled.
+#   custom_model_allowed_users  (optional)  Subset of user IDs allowed to type an
+#                               arbitrary model name (e.g. openai/gpt-5.4-mini)
+#                               plus custom request params (reasoning.effort,
+#                               temperature, ...) during /start and /model.
+#                               If omitted, the "Custom model" option is hidden
+#                               and nobody on this bot can use arbitrary models.
 #
 # ─────────────────────────────────────────────────────────────────────
 
-# Bot for Alice — full access, all models and prompts
+# Bot for Alice — full access, all models and prompts (incl. arbitrary models)
 [[bots]]
 token = "123456:ABC-DEF..."
 allowed_users = [111111111]
+custom_model_allowed_users = [111111111]
 
 # Bot for Bob — restricted to specific models and prompts
 [[bots]]

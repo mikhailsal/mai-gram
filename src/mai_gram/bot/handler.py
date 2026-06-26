@@ -401,6 +401,10 @@ class BotHandler:
             await self._setup_workflow.handle_setup_text(message)
             return
 
+        if self._setup_workflow.is_awaiting_custom_model_change(message.user_id):
+            await self._setup_workflow.handle_custom_model_change_text(message)
+            return
+
         if self._import_workflow.is_in_import(message.user_id):
             await self._import_workflow.handle_import_text(message)
             return

@@ -754,6 +754,30 @@ class TestBotsConfigLoader:
         assert loader.get_bot_config_by_token(token) == configs[0]
         assert loader.get_bot_config_by_token("missing") is None
 
+    def test_parses_custom_model_allowed_users(self, tmp_path) -> None:
+        bots_path = tmp_path / "bots.toml"
+        bots_path.write_text(
+            "\n".join(
+                [
+                    "[[bots]]",
+                    "token = 'tok-a'",
+                    "allowed_users = [111, 222]",
+                    "custom_model_allowed_users = [111]",
+                    "",
+                    "[[bots]]",
+                    "token = 'tok-b'",
+                    "allowed_users = [333]",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        configs = BotsConfigLoader(str(bots_path)).get_bot_configs()
+
+        assert configs[0].custom_model_allowed_users == [111]
+        # Omitted field defaults to None (feature disabled for that bot).
+        assert configs[1].custom_model_allowed_users is None
+
 
 # ── PromptConfigLoader ───────────────────────────────────────────────
 

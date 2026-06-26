@@ -6,11 +6,13 @@ updates ``Chat.llm_model`` so the conversation history is preserved.
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
+from mai_gram.bot import custom_model
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat
 from mai_gram.messenger.base import OutgoingMessage
@@ -48,11 +50,13 @@ async def show_model_picker(
     current_model: str,
     allowed_models: list[str],
     label_for: Callable[[str], str],
+    allow_custom: bool = False,
 ) -> None:
     """Send an inline keyboard listing models plus a Cancel button.
 
     The currently active model is marked, and the Cancel button (which maps to
     the shared ``cancel_action`` callback) simply deletes the prompt message.
+    When *allow_custom* is set, an extra "Custom model" row is appended.
     """
     keyboard_rows: list[list[tuple[str, str]]] = []
     for model in allowed_models:
@@ -60,6 +64,10 @@ async def show_model_picker(
         if model == current_model:
             label = f"✅ {label}"
         keyboard_rows.append([(label, f"setmodel:{model}")])
+    if allow_custom:
+        keyboard_rows.append(
+            [(custom_model.CUSTOM_MODEL_LABEL, f"setmodel:{custom_model.CUSTOM_MODEL_VALUE}")]
+        )
     keyboard_rows.append([("Cancel", "cancel_action")])
     await messenger.send_message(
         OutgoingMessage(
@@ -100,6 +108,8 @@ async def apply_model_change(
             return
         old_model = chat.llm_model
         chat.llm_model = model
+        # Switching to a registry model drops any prior custom overrides.
+        chat.custom_model_params = None
         await session.commit()
 
     await messenger.delete_callback_source_message(message)
@@ -110,3 +120,92 @@ async def apply_model_change(
         )
     )
     logger.info("Changed model for chat %s: %s -> %s", chat_id, old_model, model)
+
+
+async def begin_custom_model_change(
+    messenger: Messenger,
+    message: IncomingMessage,
+    *,
+    allowed: bool,
+    chat_id: str,
+    pending: dict[str, str],
+) -> None:
+    """Prompt a privileged user for an arbitrary model id (in-place /model switch)."""
+    if not allowed:
+        await messenger.send_message(
+            OutgoingMessage(
+                text=custom_model.CUSTOM_MODELS_DISABLED_MESSAGE,
+                chat_id=message.chat_id,
+            )
+        )
+        return
+    await messenger.delete_callback_source_message(message)
+    pending[message.user_id] = chat_id
+    await messenger.send_message(
+        OutgoingMessage(text=custom_model.CUSTOM_MODEL_PROMPT, chat_id=message.chat_id)
+    )
+
+
+async def apply_custom_model_change_text(
+    messenger: Messenger,
+    message: IncomingMessage,
+    *,
+    chat_id: str,
+    pending: dict[str, str],
+) -> None:
+    """Parse free-form text and apply an in-place custom model switch."""
+    pending.pop(message.user_id, None)
+    model_name, params = custom_model.parse_custom_model_input(message.text)
+    if not custom_model.validate_model_name(model_name):
+        await messenger.send_message(
+            OutgoingMessage(
+                text=custom_model.INVALID_MODEL_MESSAGE,
+                chat_id=message.chat_id,
+            )
+        )
+        return
+    await apply_custom_model_change(messenger, message, model_name, params=params, chat_id=chat_id)
+
+
+async def apply_custom_model_change(
+    messenger: Messenger,
+    message: IncomingMessage,
+    model: str,
+    *,
+    params: dict[str, Any],
+    chat_id: str,
+) -> None:
+    """Switch an existing chat to an arbitrary model + custom params.
+
+    History is preserved; only ``llm_model`` and ``custom_model_params`` change.
+    """
+    async with get_session() as session:
+        result = await session.execute(select(Chat).where(Chat.id == chat_id))
+        chat = result.scalar_one_or_none()
+        if not chat:
+            await messenger.send_message(
+                OutgoingMessage(
+                    text="No chat exists yet. Use /start to create one.",
+                    chat_id=message.chat_id,
+                )
+            )
+            return
+        old_model = chat.llm_model
+        chat.llm_model = model
+        chat.custom_model_params = json.dumps(params, ensure_ascii=False) if params else None
+        await session.commit()
+
+    summary = custom_model.format_params_summary(params)
+    await messenger.send_message(
+        OutgoingMessage(
+            text=f"Model changed: {old_model} → {model}\nCustom params: {summary}",
+            chat_id=message.chat_id,
+        )
+    )
+    logger.info(
+        "Changed model (custom) for chat %s: %s -> %s params=%s",
+        chat_id,
+        old_model,
+        model,
+        summary,
+    )

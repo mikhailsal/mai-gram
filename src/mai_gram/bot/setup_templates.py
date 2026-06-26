@@ -13,6 +13,21 @@ if TYPE_CHECKING:
     from mai_gram.response_templates.base import ResponseTemplate, TemplateGroup
 
 
+def parse_kv_params(text: str) -> dict[str, str]:
+    """Parse 'key=value' lines from user text input into a flat dict."""
+    result: dict[str, str] = {}
+    for line in text.strip().splitlines():
+        stripped = line.strip()
+        if "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key:
+            result[key] = value
+    return result
+
+
 def get_available_templates_for_bot(settings: Settings, bot_config: BotConfig | None) -> list[str]:
     all_templates = settings.get_available_templates()
     if bot_config and bot_config.allowed_templates:

@@ -128,6 +128,16 @@ class Chat(Base):
             "NULL means all defaults. Keys match TemplateParam.key values."
         ),
     )
+    custom_model_params: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        doc=(
+            "JSON-encoded dict of OpenRouter request-body overrides for an "
+            "arbitrary (custom) model chosen by a privileged user. Merged on top "
+            "of any models.toml params at request time. NULL means no overrides."
+        ),
+    )
     hidden_template_fields: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,

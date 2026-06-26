@@ -526,7 +526,9 @@ async def test_dispatch_console_runtime_uses_shared_handler_builder(
         external_mcp_pool=external_mcp_pool,
     )
 
-    assert handler_calls == [{"test_mode": True, "external_mcp_pool": external_mcp_pool}]
+    assert handler_calls == [
+        {"test_mode": True, "external_mcp_pool": external_mcp_pool, "bot_config": None}
+    ]
     messenger.dispatch_text.assert_awaited_once()
     messenger.flush_edits.assert_called_once_with()
 
@@ -739,6 +741,64 @@ async def test_dispatch_console_runtime_covers_start_command_callbacks_and_noop(
             llm=MagicMock(),
             settings=MagicMock(),
         )
+
+
+def test_build_custom_model_text_joins_model_and_params() -> None:
+    assert console_runner._build_custom_model_text("openai/gpt-5.4-mini", None) == (
+        "openai/gpt-5.4-mini"
+    )
+    assert (
+        console_runner._build_custom_model_text(
+            "openai/gpt-5.4-mini", ["reasoning.effort=high", "temperature=0.7"]
+        )
+        == "openai/gpt-5.4-mini\nreasoning.effort=high\ntemperature=0.7"
+    )
+
+
+def test_resolve_cli_bot_config_matches_user_and_tolerates_bad_settings() -> None:
+    from mai_gram.config_loaders import BotConfig
+
+    bot_a = BotConfig(token="tok-" + "a", allowed_users=[111, 222])
+    bot_b = BotConfig(token="tok-" + "b", allowed_users=[333])
+    settings = SimpleNamespace(get_bot_configs=lambda: [bot_a, bot_b])
+
+    assert console_runner._resolve_cli_bot_config(settings, "222") is bot_a
+    assert console_runner._resolve_cli_bot_config(settings, "333") is bot_b
+    assert console_runner._resolve_cli_bot_config(settings, "999") is None
+
+    # No loader / non-iterable get_bot_configs -> None (legacy CLI behavior).
+    assert console_runner._resolve_cli_bot_config(SimpleNamespace(), "1") is None
+    assert console_runner._resolve_cli_bot_config(MagicMock(), "1") is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_start_flow_drives_custom_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messenger = MagicMock()
+    messenger.dispatch_message = AsyncMock()
+    messenger.dispatch_callback = AsyncMock()
+    messenger.dispatch_text = AsyncMock()
+
+    args = SimpleNamespace(
+        model=None,
+        custom_model="openai/gpt-5.4-mini",
+        custom_model_params=["reasoning.effort=high", "temperature=0.7"],
+        prompt="default",
+    )
+
+    await console_runner._dispatch_start_flow(messenger, args, "chat-1", "user-1")
+
+    callback_payloads = [
+        c.kwargs["callback_data"] for c in messenger.dispatch_callback.await_args_list
+    ]
+    assert "model:__custom_model__" in callback_payloads
+    assert "prompt:default" in callback_payloads
+    messenger.dispatch_text.assert_awaited_once_with(
+        chat_id="chat-1",
+        user_id="user-1",
+        text="openai/gpt-5.4-mini\nreasoning.effort=high\ntemperature=0.7",
+    )
 
 
 def test_main_parses_args_and_runs_asyncio(monkeypatch: pytest.MonkeyPatch) -> None:

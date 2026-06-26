@@ -42,6 +42,7 @@ class BotConfig:
     allowed_models: list[str] | None = None
     allowed_prompts: list[str] | None = None
     allowed_templates: list[str] | None = None
+    custom_model_allowed_users: list[int] | None = None
 
 
 _MODEL_META_KEYS = frozenset({"enabled", "title", "id", "max_context_tokens", "max_output_tokens"})
@@ -273,6 +274,7 @@ class BotsConfigLoader:
                         allowed_models=entry.get("allowed_models"),
                         allowed_prompts=entry.get("allowed_prompts"),
                         allowed_templates=entry.get("allowed_templates"),
+                        custom_model_allowed_users=entry.get("custom_model_allowed_users"),
                     )
                 )
             self._cache = configs

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from mai_gram.bot import custom_model
 from mai_gram.bot.conversation_executor import AssistantTurnRequest
 from mai_gram.core.prompt_builder import PromptBuilder
 from mai_gram.memory.knowledge_base import WikiStore
@@ -129,6 +130,8 @@ class AssistantTurnBuilder:
             image_urls=image_urls,
         )
         extra_params = self._settings.get_model_params(model_key)
+        custom_params = custom_model.load_custom_params(chat.custom_model_params)
+        extra_params = custom_model.merge_extra_params(extra_params, custom_params)
         max_output = self._settings.get_max_output_tokens(model_key)
         if max_output and "max_tokens" not in extra_params:
             extra_params["max_tokens"] = max_output
