@@ -12,6 +12,15 @@
   </p>
 </p>
 
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+  <img alt="Coverage" src="https://img.shields.io/badge/coverage-92%25%2B-brightgreen">
+  <img alt="mypy" src="https://img.shields.io/badge/mypy-strict-blue">
+  <img alt="Ruff" src="https://img.shields.io/badge/linter-ruff-orange">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-717-brightgreen">
+</p>
+
 ---
 
 **mai-gram** turns any Telegram bot into a smart AI companion backed by 200+ LLM models via [OpenRouter](https://openrouter.ai). Each user picks their own model, system prompt, and conversation style — the AI remembers facts through a built-in knowledge base (wiki), supports tool calling, and streams responses in real time. Deploy it on your own hardware and keep full control of your data.
@@ -27,7 +36,7 @@
 | **Per-prompt configuration** | Each system prompt template controls which tools are available, whether reasoning is visible, and how timestamps are displayed. |
 | **Self-hosted & private** | All data stays on your machine. No cloud dependencies beyond the LLM API itself. |
 | **Structured output** | Response template plugins (XML, JSON, markdown) constrain LLM output into validated structured formats — reasoning is preserved across turns instead of being silently truncated. |
-| **Developer-friendly** | 717 tests, 92%+ coverage, strict typing, auto-reload, Docker support, and a full CLI for debugging. |
+| **High-quality codebase** | 717 tests across 4 tiers (unit → integration → functional → live), 92%+ coverage enforced on every commit, mypy strict, ruff, code-size audit, Docker, full CLI. |
 
 ## Quick Start
 
@@ -123,9 +132,11 @@ Each system prompt template is paired with a TOML config file that controls:
 
 This means a "creative writing" prompt can hide technical tool calls, while a "coder" prompt shows everything for full transparency.
 
-### Response Template Plugins
+### Response Template Plugins Support
 
-Constrain LLM responses into structured formats with automatic validation and retries. Each template defines fields (e.g. `<thought>` and `<content>` in XML), format instructions injected into the system prompt, and per-field rendering rules for Telegram.
+Most LLM providers strip `reasoning` tokens from the conversation history before sending it back to the model. If you rely on native reasoning output, the model loses its chain of thought on every subsequent turn. This was verified empirically across multiple providers and models in [ai-thought-preserved-bench](https://github.com/mikhailsal/ai-thought-preserved-bench).
+
+Response templates solve this by moving reasoning into regular message content via a structured format. Each template injects format instructions into the system prompt, parses the response fields (e.g. `<thought>` and `<content>` in XML), validates them — retrying if malformed — and renders each field separately in Telegram. Because the reasoning is stored as content, not as a provider-specific metadata field, it survives round-trips and stays visible to the model on the next turn.
 
 Built-in templates:
 
@@ -238,45 +249,62 @@ Telegram User ──▶ Telegram Bot(s) ──▶ mai-gram ──▶ OpenRouter 
 
 Wiki entries live as markdown files on disk (`data/<chat_id>/wiki/*.md`) and are indexed in SQLite for fast querying. The files are the source of truth — the database index is automatically rebuilt from disk on every message and can be manually repaired with `mai-chat --repair-wiki`.
 
+### MCP-First Tool Architecture
+
+All AI tools are implemented as [Model Context Protocol](https://modelcontextprotocol.io/) servers — the open standard for LLM tool interfaces. This means:
+
+- **Wiki MCP server** — the AI manages its own knowledge base by calling `wiki_create`, `wiki_edit`, `wiki_search`, `wiki_list` tools
+- **Messages MCP server** — lets the AI search and reference past conversation history
+- **External MCP server** — plug in any third-party MCP-compatible tool server via config. The bot reads the same `~/.cursor/mcp.json` format that Cursor uses, so any MCP server you've already set up for Cursor is one line away from being available to the bot too:
+
+```toml
+# config/models.toml
+[mcp]
+mcp_config_path = "~/.cursor/mcp.json"
+external_servers = ["exa"]   # pick which servers to expose to the AI
+```
+
+Using MCP as the internal tool protocol means the codebase is compatible with the broader AI tooling ecosystem out of the box, and adding new capabilities follows a well-defined interface rather than custom glue code.
+
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full architecture and [docs/DEBUGGING.md](docs/DEBUGGING.md) for troubleshooting.
-
-## Make Targets
-
-Run `make help` to see all available commands. Key highlights:
-
-| Category | Command | Description |
-|----------|---------|-------------|
-| **Run** | `make run` | Run the bot (production) |
-| | `make run-dev` | Run with auto-reload |
-| **Chat CLI** | `make chat MSG="Hi"` | Send a message |
-| | `make chat-setup` | One-shot setup (model + prompt) |
-| | `make chat-list` | List all chats |
-| | `make chat-import FILE=conv.json` | Import dialogue from JSON |
-| **Quality** | `make test` | Run all tests |
-| | `make test-cov` | Tests + 90% coverage enforcement |
-| | `make check` | Lint + format + typecheck + size audit |
-| | `make precommit` | Full quality gate |
-| **Docker** | `make docker-up` | Start in Docker |
-| | `make docker-logs` | View container logs |
 
 ## Development
 
 ```bash
 make install-dev    # Install with dev dependencies + git hooks
-make test           # Run 717 tests
+make test           # Run all tests
 make check          # Lint + format + typecheck + size audit
 make precommit      # Full pre-commit quality gate
 ```
 
-The project enforces strict quality standards:
+Run `make help` to see all available targets (run, chat CLI, docker, quality gates).
 
-- **Ruff** for linting and formatting
-- **mypy** in strict mode for type checking
-- **Code-size audit** enforces 500-line file and 60-line function thresholds
-- **92%+ coverage** enforced on every commit
-- **Pre-commit hooks** run the full quality gate automatically, including live functional tests when `OPENROUTER_API_KEY` is available via the environment or `.env`
+### Test Architecture
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup, project structure, and testing.
+The test suite is organized into four tiers, ordered from fastest to slowest:
+
+| Tier | Count | What it tests |
+|------|-------|---------------|
+| **Unit** | majority | Pure logic, isolated modules with mocks |
+| **Integration** | — | Multi-module workflows with a stub LLM provider, real in-process DB |
+| **Functional (local)** | — | Black-box CLI subprocess tests — spawns the real `mai-chat` binary, no API key needed |
+| **Functional (live)** | — | End-to-end tests hitting the real OpenRouter API |
+
+The black-box functional tier deserves special mention: tests spawn `mai-chat` as an isolated subprocess and exercise the full stack through its CLI surface — no mocking of internals. This catches integration issues that unit tests miss and documents expected CLI behavior as executable specs.
+
+Parallel execution via `pytest-xdist` with work-stealing runs unit and functional tiers concurrently (~55s vs ~170s serial). Integration tests run serially in a separate step to avoid global-state conflicts.
+
+The pre-commit hook runs all four tiers in order — fast failures are caught before expensive live API calls.
+
+### Code Quality Standards
+
+- **Ruff** — linting and formatting with an extensive rule set (`E, F, I, N, W, UP, B, A, SIM, TCH, C4, PTH, DTZ, S` and more)
+- **mypy strict** — full strict type checking, no implicit `Any`, no untyped defs
+- **Code-size audit** — automated check enforces a 500-line file and 60-line function limit to keep refactoring pressure visible
+- **92%+ coverage** — enforced by `pyproject.toml` as the single source of truth, checked on every commit
+- **Pre-commit hooks** — run the full quality gate automatically, including live functional tests when `OPENROUTER_API_KEY` is available
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for setup, project structure, and the full testing guide.
 
 ## License
 
