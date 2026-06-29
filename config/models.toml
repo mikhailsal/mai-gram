@@ -65,6 +65,22 @@ reasoning.effort = "medium"
 provider.order = ["Google AI Studio"]
 provider.allow_fallbacks = false
 
+# ── Gemini 2.5 Flash Lite ────────────────────────────────────────────
+[models."google/gemini-2.5-flash-lite"]
+title = "Gemini 2.5 Flash Lite"
+reasoning.effort = "none"
+temperature = 1.2
+provider.order = ["Google AI Studio"]
+provider.allow_fallbacks = false
+
+# ── Gemini 2.5 Flash Lite (preview 09-2025) ────────────────────────────────────
+[models."google/gemini-2.5-flash-lite-preview-09-2025"]
+title = "Gemini 2.5 Flash Lite (preview 09-2025)"
+reasoning.effort = "high"
+temperature = 1.2
+provider.order = ["Google AI Studio"]
+provider.allow_fallbacks = false
+
 # ── Gemini 3.1 Flash Lite (preview) @high ────────────────────────────
 [models."google/gemini-3.1-flash-lite-preview"]
 title = "Gemini 3.1 Flash Lite @high"
@@ -75,6 +91,8 @@ provider.allow_fallbacks = false
 # ── Gemini 3 Flash (preview) ─────────────────────────────────────────
 [models."google/gemini-3-flash-preview"]
 title = "Gemini 3 Flash"
+reasoning.effort = "high"
+temperature = 1.2
 
 # ── Gemma 4 31B (free tier) ──────────────────────────────────────────
 [models."google/gemma-4-31b-it:free"]
@@ -98,13 +116,9 @@ provider.allow_fallbacks = false
 #stop = ["</content>"]
 max_output_tokens = 4096
 
-# ── Grok 4.1 Fast ────────────────────────────────────────────────────
-[models."x-ai/grok-4.1-fast"]
-title = "Grok 4.1 Fast"
-
 # ── Kimi K2.5 ─────────────────────────────────────────────────────
 [models."nvidia/moonshotai/kimi-k2.5"]
-title = "Kimi K2.5"
+title = "Kimi K2.5 (nvidia)"
 reasoning.effort = "high"
 
 # ── Gemini 3.1 Pro (preview) ─────────────────────────────────────────
@@ -113,13 +127,7 @@ title = "Gemini 3.1 Pro"
 reasoning.effort = "low"
 temperature = 1.0
 
-# ── Gemini 2.5 Pro (disabled) ────────────────────────────────────────
-#[models."google/gemini-2.5-pro"]
-#enabled = true
-#title = "Gemini 2.5 Pro"
-#reasoning.effort = "high"
-#provider.order = ["Google AI Studio"]
-#provider.allow_fallbacks = false
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Format repair -- auxiliary model for fixing malformed template output
@@ -129,7 +137,7 @@ temperature = 1.0
 # formatting (XML tags, JSON braces) without modifying content.
 
 [format_repair]
-model = "openrouter/free"                  # Routes to a capable free model
+model = "google/gemini-3.1-flash-lite" # Routes to a capable free model
 temperature = 0.0                      # Deterministic -- no creativity needed
 max_tokens = 8192                      # Must be enough to reproduce the full response
 enabled = true                         # Set to false to skip LLM repair tier

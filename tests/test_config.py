@@ -310,15 +310,14 @@ class TestSettingsLoaders:
 
 
 class TestFormatRepairConfig:
-    def test_get_format_repair_config_returns_dict(self) -> None:
+    def test_get_format_repair_config_structure_and_types(self) -> None:
         settings = Settings(_env_file=None)  # type: ignore[call-arg]
         config = settings.get_format_repair_config()
         assert isinstance(config, dict)
-        assert "model" in config
-        assert "temperature" in config
-        assert "max_tokens" in config
-        assert "enabled" in config
-        assert config["model"] == "openrouter/free"
+        assert isinstance(config.get("model"), str)
+        assert isinstance(config.get("temperature"), float)
+        assert isinstance(config.get("max_tokens"), int)
+        assert isinstance(config.get("enabled"), bool)
 
 
 class TestAllowedUsers:
