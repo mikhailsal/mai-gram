@@ -35,6 +35,7 @@ class AssistantTurnBuilder:
         wiki_context_limit: int,
         short_term_limit: int,
         test_mode: bool,
+        tool_calls_override: bool | None = None,
     ) -> None:
         self._llm = llm_provider
         self._settings = settings
@@ -43,6 +44,7 @@ class AssistantTurnBuilder:
         self._wiki_context_limit = wiki_context_limit
         self._short_term_limit = short_term_limit
         self._test_mode = test_mode
+        self._tool_calls_override = tool_calls_override
 
     async def save_user_message_and_build_request(
         self,
@@ -136,6 +138,11 @@ class AssistantTurnBuilder:
         if max_output and "max_tokens" not in extra_params:
             extra_params["max_tokens"] = max_output
 
+        show_tool_calls = (
+            self._tool_calls_override
+            if self._tool_calls_override is not None
+            else chat.show_tool_calls
+        )
         return AssistantTurnRequest(
             chat=chat,
             message_store=message_store,
@@ -145,7 +152,7 @@ class AssistantTurnBuilder:
             timezone_name=chat.timezone,
             show_datetime=chat.send_datetime,
             show_reasoning=chat.show_reasoning,
-            show_tool_calls=chat.show_tool_calls,
+            show_tool_calls=show_tool_calls,
             extra_params=extra_params,
             failure_log_message=failure_log_message,
             resolved_model=self._settings.get_model_id(model_key),

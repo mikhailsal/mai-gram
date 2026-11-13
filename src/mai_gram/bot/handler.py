@@ -161,23 +161,30 @@ class BotHandler:
         return settings.get_allowed_user_ids()
 
     def _register_handlers(self) -> None:
-        for name, handler, description in (
-            ("start", self._handle_start, "Set up a new chat"),
-            ("reset", self._handle_reset, "Delete chat and history"),
-            ("model", self._handle_model, "Show or change the current model"),
-            ("help", self._handle_help, "Show available commands"),
-            ("datetime", self._handle_datetime_toggle, "Toggle date/time in messages"),
-            ("timezone", self._handle_timezone, "Set timezone (e.g. /timezone Europe/Moscow)"),
-            ("reasoning", self._handle_reasoning_toggle, "Toggle reasoning display"),
-            ("toolcalls", self._handle_toolcalls_toggle, "Toggle tool call display"),
-            ("import", self._handle_import, "Import conversation from JSON file"),
-            ("toggle", self._handle_toggle, "Toggle template field visibility"),
-            (
-                "resend_last",
-                self._handle_resend_last,
-                "Re-send last AI message (if truncated)",
-            ),
-        ):
+        if getattr(self._bot_config, "guest_mode", False):
+            commands = [
+                ("start", self._handle_start, "Start a new chat"),
+                ("reset", self._handle_reset, "Reset chat and history"),
+            ]
+        else:
+            commands = [
+                ("start", self._handle_start, "Set up a new chat"),
+                ("reset", self._handle_reset, "Delete chat and history"),
+                ("model", self._handle_model, "Show or change the current model"),
+                ("help", self._handle_help, "Show available commands"),
+                ("datetime", self._handle_datetime_toggle, "Toggle date/time in messages"),
+                ("timezone", self._handle_timezone, "Set timezone (e.g. /timezone Europe/Moscow)"),
+                ("reasoning", self._handle_reasoning_toggle, "Toggle reasoning display"),
+                ("toolcalls", self._handle_toolcalls_toggle, "Toggle tool call display"),
+                ("import", self._handle_import, "Import conversation from JSON file"),
+                ("toggle", self._handle_toggle, "Toggle template field visibility"),
+                (
+                    "resend_last",
+                    self._handle_resend_last,
+                    "Re-send last AI message (if truncated)",
+                ),
+            ]
+        for name, handler, description in commands:
             self._messenger.register_command_handler(
                 name,
                 handler,

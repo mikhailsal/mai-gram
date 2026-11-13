@@ -54,11 +54,15 @@ class ConversationExecutor:
         tool_max_iterations: int,
         renderer: ConversationRenderer,
         format_repair_config: dict[str, Any] | None = None,
+        show_buttons: bool = True,
+        show_usage: bool = True,
     ) -> None:
         self._messenger = messenger
         self._llm = llm_provider
         self._tool_max_iterations = tool_max_iterations
         self._renderer = renderer
+        self._show_buttons = show_buttons
+        self._show_usage = show_usage
         self._tool_activity = ToolActivityNotifier(messenger)
         self._format_repair_config = format_repair_config or {
             "model": "openrouter/free",
@@ -316,6 +320,8 @@ class ConversationExecutor:
         sent_msg_ids: list[str],
         error_text: str,
     ) -> None:
+        # Always offer Regenerate on errors (even when show_buttons is False)
+        # so the user can retry without resending a duplicate message.
         kb = self._messenger.build_inline_keyboard([[("🔄 Regenerate", "regen")]])
         await self._renderer._deliver_error(
             request.telegram_chat_id,
@@ -335,8 +341,12 @@ class ConversationExecutor:
         parsed: ParsedResponse | None = None,
         template: ResponseTemplate | None = None,
     ) -> None:
-        kb = self._build_action_keyboard(saved_msg_id)
-        footer = self._renderer._format_usage_footer(outcome.usage, outcome.cost, outcome.is_byok)
+        kb = self._build_action_keyboard(saved_msg_id) if self._show_buttons else None
+        footer = (
+            self._renderer._format_usage_footer(outcome.usage, outcome.cost, outcome.is_byok)
+            if self._show_usage
+            else ""
+        )
         has_structured = (
             template is not None
             and parsed is not None

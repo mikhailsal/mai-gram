@@ -1,0 +1,4 @@
+# Per-prompt config for "independent-short".
+show_reasoning = false
+show_tool_calls = false
+send_datetime = true

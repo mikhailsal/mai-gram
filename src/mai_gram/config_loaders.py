@@ -43,6 +43,35 @@ class BotConfig:
     allowed_prompts: list[str] | None = None
     allowed_templates: list[str] | None = None
     custom_model_allowed_users: list[int] | None = None
+    guest_mode: bool = False
+    default_model: str | None = None
+    default_prompt: str | None = None
+    default_template: str | None = None
+    welcome_message: str | None = None
+    show_buttons: bool | None = None
+    show_usage: bool | None = None
+    show_tool_calls: bool | None = None
+
+    @property
+    def buttons_enabled(self) -> bool:
+        """Return whether inline action buttons should be attached to responses."""
+        if self.show_buttons is not None:
+            return self.show_buttons
+        return not self.guest_mode
+
+    @property
+    def usage_enabled(self) -> bool:
+        """Return whether token/cost usage footers should be appended to responses."""
+        if self.show_usage is not None:
+            return self.show_usage
+        return not self.guest_mode
+
+    @property
+    def tool_calls_override(self) -> bool | None:
+        """Return an optional bot-level override for tool-call display."""
+        if self.show_tool_calls is not None:
+            return self.show_tool_calls
+        return False if self.guest_mode else None
 
 
 _MODEL_META_KEYS = frozenset({"enabled", "title", "id", "max_context_tokens", "max_output_tokens"})
@@ -275,6 +304,14 @@ class BotsConfigLoader:
                         allowed_prompts=entry.get("allowed_prompts"),
                         allowed_templates=entry.get("allowed_templates"),
                         custom_model_allowed_users=entry.get("custom_model_allowed_users"),
+                        guest_mode=bool(entry.get("guest_mode", False)),
+                        default_model=entry.get("default_model"),
+                        default_prompt=entry.get("default_prompt"),
+                        default_template=entry.get("default_template"),
+                        welcome_message=entry.get("welcome_message"),
+                        show_buttons=entry.get("show_buttons"),
+                        show_usage=entry.get("show_usage"),
+                        show_tool_calls=entry.get("show_tool_calls"),
                     )
                 )
             self._cache = configs

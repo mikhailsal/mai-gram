@@ -106,6 +106,7 @@ def build_handler_services(
         short_term_limit=short_term_limit,
         tool_max_iterations=tool_max_iterations,
         test_mode=test_mode,
+        bot_config=bot_config,
         external_mcp_pool=external_mcp_pool,
     )
     workflows = _build_workflow_services(
@@ -138,6 +139,7 @@ def _build_conversation_services(
     short_term_limit: int,
     tool_max_iterations: int,
     test_mode: bool,
+    bot_config: BotConfig | None,
     external_mcp_pool: ExternalMCPPool | None,
 ) -> _ConversationServices:
     response_renderer = ResponseRenderer(messenger, message_logger=message_logger)
@@ -153,6 +155,7 @@ def _build_conversation_services(
         wiki_context_limit=wiki_context_limit,
         short_term_limit=short_term_limit,
         test_mode=test_mode,
+        tool_calls_override=getattr(bot_config, "tool_calls_override", None),
     )
     conversation_executor = ConversationExecutor(
         messenger,
@@ -160,6 +163,8 @@ def _build_conversation_services(
         tool_max_iterations=tool_max_iterations,
         renderer=response_renderer,
         format_repair_config=settings.get_format_repair_config(),
+        show_buttons=getattr(bot_config, "buttons_enabled", True),
+        show_usage=getattr(bot_config, "usage_enabled", True),
     )
     conversation_service = ConversationService(
         messenger,

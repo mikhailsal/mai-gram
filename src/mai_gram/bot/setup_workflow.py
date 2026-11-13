@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import enum
-import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -96,6 +95,19 @@ class SetupWorkflow:
         chat_id = self._resolve_chat_id(message)
         async with get_session() as session:
             chat = await self._get_chat(session, chat_id)
+        if getattr(self._bot_config, "guest_mode", False) and self._bot_config is not None:
+            await setup_finalizer.handle_guest_start(
+                self._messenger,
+                message,
+                chat=chat,
+                chat_id=chat_id,
+                bot_config=self._bot_config,
+                settings=self._settings,
+                allowed_models=self._get_allowed_models_for_bot(),
+                allowed_prompts=self._get_available_prompts_for_bot(),
+                session_factory=get_session,
+            )
+            return
         if chat:
             await self._messenger.send_message(
                 OutgoingMessage(
@@ -459,34 +471,19 @@ class SetupWorkflow:
         template_name: str | None = None,
         template_params: dict[str, str] | None = None,
     ) -> None:
-        chat_id = self._resolve_chat_id(message)
-        prompt_cfg = self._settings.get_prompt_config(prompt_name) if prompt_name else None
-        params_json = json.dumps(template_params, ensure_ascii=False) if template_params else None
-        custom_params = session.custom_model_params
-        custom_params_json = (
-            json.dumps(custom_params, ensure_ascii=False) if custom_params else None
-        )
-
-        chat = setup_finalizer.build_chat_record(
-            chat_id,
+        await setup_finalizer.complete_setup(
+            self._messenger,
             message,
             session,
             system_prompt,
+            chat_id=self._resolve_chat_id(message),
             settings=self._settings,
             prompt_name=prompt_name,
             template_name=template_name,
-            params_json=params_json,
-            prompt_cfg=prompt_cfg,
-            custom_model_params_json=custom_params_json,
+            template_params=template_params,
+            session_factory=get_session,
         )
-        async with get_session() as db:
-            db.add(chat)
-            await db.commit()
-
         self.clear_setup_session(message.user_id)
-        await setup_finalizer.send_setup_confirmation(
-            self._messenger, message, session, chat, system_prompt, template_name
-        )
 
     @staticmethod
     async def _get_chat(session: AsyncSession, chat_id: str) -> Chat | None:
