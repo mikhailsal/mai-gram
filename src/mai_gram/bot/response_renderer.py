@@ -7,6 +7,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from mai_gram.bot.executor_types import ResponseDelivery
 from mai_gram.llm.provider import (
     LLMAuthenticationError,
     LLMContextLengthError,
@@ -253,13 +254,20 @@ class ResponseRenderer:
         *,
         keyboard: object = None,
     ) -> str | None:
+        """Send a part and return its last accepted message ID."""
+        delivery = await self._deliver_part(chat_id, text, keyboard=keyboard)
+        return delivery.sent_message_ids[-1] if delivery.sent_message_ids else None
+
+    async def _deliver_part(
+        self, chat_id: str, text: str, *, keyboard: object = None
+    ) -> ResponseDelivery:
         """Send one message part, falling back to plain text if HTML fails."""
         max_len = self._messenger.max_message_length
         result = await self._messenger.send_message(
             OutgoingMessage(text=text, chat_id=chat_id, parse_mode="html", keyboard=keyboard)
         )
-        if result.success:
-            return result.message_id
+        if result.success and result.message_id:
+            return ResponseDelivery([result.message_id], True)
 
         error = (result.error or "").lower()
         if "too long" in error or "message is too long" in error:
@@ -271,9 +279,9 @@ class ResponseRenderer:
             result = await self._messenger.send_message(
                 OutgoingMessage(text=plain, chat_id=chat_id, keyboard=keyboard)
             )
-            if result.success:
-                return result.message_id
-        return None
+            if result.success and result.message_id:
+                return ResponseDelivery([result.message_id], True)
+        return ResponseDelivery([])
 
     async def _send_part_split(
         self,
@@ -281,14 +289,14 @@ class ResponseRenderer:
         text: str,
         *,
         keyboard: object = None,
-    ) -> str | None:
+    ) -> ResponseDelivery:
         """Emergency split when a rendered part still exceeds the platform limit."""
         from mai_gram.core.telegram_limits import split_html_safe
 
         max_len = self._messenger.max_message_length
         plain = re.sub(r"<[^>]+>", "", text)
         chunks = split_html_safe(plain, max_len=max_len)
-        last_id: str | None = None
+        sent_ids: list[str] = []
         for index, chunk in enumerate(chunks):
             is_last = index == len(chunks) - 1
             result = await self._messenger.send_message(
@@ -299,8 +307,8 @@ class ResponseRenderer:
                 )
             )
             if result.success and result.message_id:
-                last_id = result.message_id
-        return last_id
+                sent_ids.append(result.message_id)
+        return ResponseDelivery(sent_ids, bool(chunks) and len(sent_ids) == len(chunks))
 
     async def _send_long_message(
         self,
@@ -309,38 +317,45 @@ class ResponseRenderer:
         *,
         header_html: str = "",
         keyboard: object = None,
-    ) -> list[str]:
-        """Send markdown content as one or more independently rendered HTML parts."""
+        placeholder_msg_id: str | None = None,
+    ) -> ResponseDelivery:
+        """Deliver answer chunks, optionally editing an existing placeholder first."""
         from mai_gram.core.md_to_telegram import markdown_to_html
 
         max_len = self._messenger.max_message_length
-        sent_ids: list[str] = []
-        header_sent = False
         raw_parts = self._split_raw_parts(raw_text, max_len=max_len, header_html=header_html)
+        sent_ids: list[str] = []
+        content_delivered = bool(raw_text.strip())
 
         for index, raw_part in enumerate(raw_parts):
-            is_last = index == len(raw_parts) - 1
             html_part = markdown_to_html(raw_part)
-
-            if index == 0 and header_html and not header_sent:
+            if index == 0 and header_html:
                 combined = header_html + "\n\n" + html_part
                 if len(combined) <= max_len:
                     html_part = combined
-                    header_sent = True
                 else:
-                    header_id = await self._send_part(chat_id, header_html)
-                    if header_id:
-                        sent_ids.append(header_id)
-                    header_sent = True
+                    header_edited = placeholder_msg_id and await self._edit_part(
+                        chat_id, placeholder_msg_id, header_html
+                    )
+                    if not header_edited:
+                        header_id = await self._send_part(chat_id, header_html)
+                        if header_id:
+                            sent_ids.append(header_id)
+                    placeholder_msg_id = None
 
-            message_id = await self._send_part(
-                chat_id,
-                html_part,
-                keyboard=keyboard if is_last else None,
-            )
-            if message_id:
-                sent_ids.append(message_id)
-        return sent_ids
+            is_last = index == len(raw_parts) - 1
+            part_keyboard = keyboard if is_last else None
+            edited = False
+            if placeholder_msg_id is not None:
+                edited = await self._edit_part(
+                    chat_id, placeholder_msg_id, html_part, keyboard=part_keyboard
+                )
+                placeholder_msg_id = None
+            if not edited:
+                delivery = await self._deliver_part(chat_id, html_part, keyboard=part_keyboard)
+                sent_ids.extend(delivery.sent_message_ids)
+                content_delivered &= delivery.content_delivered
+        return ResponseDelivery(sent_ids, content_delivered)
 
     async def _edit_part(
         self,
@@ -373,29 +388,6 @@ class ResponseRenderer:
             return result.success
         return False
 
-    async def _send_raw_parts(
-        self,
-        chat_id: str,
-        raw_parts: list[str],
-        *,
-        keyboard: object = None,
-    ) -> list[str]:
-        """Render and send a list of raw text parts, attaching keyboard to the last."""
-        from mai_gram.core.md_to_telegram import markdown_to_html
-
-        ids: list[str] = []
-        for index, raw_part in enumerate(raw_parts):
-            is_last = index == len(raw_parts) - 1
-            html_part = markdown_to_html(raw_part)
-            msg_id = await self._send_part(
-                chat_id,
-                html_part,
-                keyboard=keyboard if is_last else None,
-            )
-            if msg_id:
-                ids.append(msg_id)
-        return ids
-
     async def _finalize_placeholder(
         self,
         chat_id: str,
@@ -404,48 +396,15 @@ class ResponseRenderer:
         *,
         header_html: str = "",
         keyboard: object = None,
-    ) -> list[str]:
-        """Edit the placeholder with the first chunk and send the remainder."""
-        from mai_gram.core.md_to_telegram import markdown_to_html
-
-        max_len = self._messenger.max_message_length
-        raw_parts = self._split_raw_parts(raw_text, max_len=max_len, header_html=header_html)
-
-        first_html = markdown_to_html(raw_parts[0])
-        if header_html:
-            combined = header_html + "\n\n" + first_html
-            if len(combined) <= max_len:
-                first_html = combined
-            else:
-                result: list[str] = []
-                edited = await self._edit_part(chat_id, placeholder_msg_id, header_html)
-                if not edited:
-                    header_id = await self._send_part(chat_id, header_html)
-                    if header_id:
-                        result.append(header_id)
-                result.extend(await self._send_raw_parts(chat_id, raw_parts, keyboard=keyboard))
-                return result
-
-        if len(raw_parts) == 1:
-            edited = await self._edit_part(
-                chat_id,
-                placeholder_msg_id,
-                first_html,
-                keyboard=keyboard,
-            )
-            if not edited:
-                msg_id = await self._send_part(chat_id, first_html, keyboard=keyboard)
-                return [msg_id] if msg_id else []
-            return []
-
-        edited = await self._edit_part(chat_id, placeholder_msg_id, first_html)
-        extra_ids: list[str] = []
-        if not edited:
-            first_id = await self._send_part(chat_id, first_html)
-            if first_id:
-                extra_ids.append(first_id)
-        extra_ids.extend(await self._send_raw_parts(chat_id, raw_parts[1:], keyboard=keyboard))
-        return extra_ids
+    ) -> ResponseDelivery:
+        """Finalize the placeholder and report whether Telegram accepted answer text."""
+        return await self._send_long_message(
+            chat_id,
+            raw_text,
+            header_html=header_html,
+            keyboard=keyboard,
+            placeholder_msg_id=placeholder_msg_id,
+        )
 
     @staticmethod
     def _split_raw_parts(raw_text: str, *, max_len: int, header_html: str) -> list[str]:
@@ -467,9 +426,28 @@ class ResponseRenderer:
         show_reasoning: bool = False,
         keyboard: object = None,
     ) -> list[str]:
-        """Send the final assistant response, splitting it if needed."""
+        """Send the final assistant response and return its new message IDs."""
+        delivery = await self._deliver_response(
+            chat_id,
+            response_text=response_text,
+            response_reasoning=response_reasoning,
+            show_reasoning=show_reasoning,
+            keyboard=keyboard,
+        )
+        return delivery.sent_message_ids
+
+    async def _deliver_response(
+        self,
+        chat_id: str,
+        *,
+        response_text: str | None,
+        response_reasoning: str | None = None,
+        show_reasoning: bool = False,
+        keyboard: object = None,
+    ) -> ResponseDelivery:
+        """Deliver the final response and report acceptance of answer content."""
         if not response_text or not response_text.strip():
-            return []
+            return ResponseDelivery([])
 
         from mai_gram.core.md_to_telegram import format_reasoning_html
 
@@ -477,7 +455,7 @@ class ResponseRenderer:
         if show_reasoning and response_reasoning and response_reasoning.strip():
             header_html = format_reasoning_html(response_reasoning, expandable=True)
 
-        sent_ids = await self._send_long_message(
+        delivery = await self._send_long_message(
             chat_id,
             response_text,
             header_html=header_html,
@@ -486,7 +464,7 @@ class ResponseRenderer:
         self._message_logger.log_outgoing(
             chat_id,
             response_text,
-            success=bool(sent_ids),
-            message_id=sent_ids[-1] if sent_ids else None,
+            success=delivery.content_delivered,
+            message_id=delivery.sent_message_ids[-1] if delivery.sent_message_ids else None,
         )
-        return sent_ids
+        return delivery

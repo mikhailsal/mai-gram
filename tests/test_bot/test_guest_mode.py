@@ -10,6 +10,7 @@ import pytest
 
 from mai_gram.bot import setup_workflow as setup_workflow_module
 from mai_gram.bot.conversation_executor import ConversationExecutor, StreamOutcome
+from mai_gram.bot.executor_types import ResponseDelivery
 from mai_gram.bot.handler import BotHandler
 from mai_gram.bot.setup_workflow import SetupWorkflow
 from mai_gram.config import Settings
@@ -213,8 +214,8 @@ async def test_executor_hides_buttons_and_usage_when_disabled() -> None:
         show_buttons=False,
         show_usage=False,
     )
-    executor._finalize_fresh = AsyncMock()
-    request = SimpleNamespace(telegram_chat_id="chat-1")
+    renderer._deliver_response = AsyncMock(return_value=ResponseDelivery(["final"], True))
+    request = SimpleNamespace(telegram_chat_id="chat-1", show_reasoning=False)
     outcome = StreamOutcome(
         response_text="Hello!",
         response_reasoning="",
@@ -226,9 +227,16 @@ async def test_executor_hides_buttons_and_usage_when_disabled() -> None:
         is_byok=False,
     )
 
-    await executor._finalize_response(request, [], outcome, saved_msg_id=42)
+    await executor._finalize_response(request, [], outcome, history_ref="a" * 32)
 
-    executor._finalize_fresh.assert_awaited_once_with(request, [], outcome, "", None)
+    renderer._deliver_response.assert_awaited_once_with(
+        "chat-1",
+        response_text="Hello!",
+        response_reasoning="",
+        show_reasoning=False,
+        keyboard=None,
+    )
+    messenger.build_inline_keyboard.assert_not_called()
     renderer._format_usage_footer.assert_not_called()
 
 
@@ -247,12 +255,14 @@ async def test_executor_keeps_regenerate_button_on_error_when_buttons_disabled()
         show_buttons=False,
         show_usage=False,
     )
-    request = SimpleNamespace(telegram_chat_id="chat-1")
+    request = SimpleNamespace(telegram_chat_id="chat-1", regenerate_target_id=None)
     sent_ids: list[str] = []
 
-    await executor._deliver_error(request, sent_ids, "AI provider error.")
+    await executor._deliver_error(request, sent_ids, "AI provider error.", "a" * 32)
 
-    messenger.build_inline_keyboard.assert_called_once_with([[("🔄 Regenerate", "regen")]])
+    messenger.build_inline_keyboard.assert_called_once_with(
+        [[("🔄 Regenerate", "retry:" + "a" * 32)]]
+    )
     renderer._deliver_error.assert_awaited_once_with(
         "chat-1",
         "AI provider error.",

@@ -133,6 +133,9 @@ class StreamDisplayManager:
     ) -> None:
         live_text, fallback, header_html, remaining_content = rendered
         if len(live_text) > self._messenger.max_message_length:
+            # Targeted rewrites need a delivery result for the full replacement body.
+            if request.regenerate_target_id is not None:
+                return
             await self._handle_overflow(
                 request,
                 state,

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from mai_gram.bot.conversation_executor import AssistantTurnRequest
+    from mai_gram.db.models import Message
     from mai_gram.llm.provider import ToolCall
     from mai_gram.messenger.base import Messenger
 
@@ -25,12 +26,14 @@ class ToolActivityNotifier:
         self,
         request: AssistantTurnRequest,
         sent_msg_ids: list[str],
+        *,
+        on_persisted: Callable[[Message], None] | None = None,
     ) -> tuple[
         Callable[..., Awaitable[None]],
         Callable[..., Awaitable[None]],
     ]:
         async def _on_tool_call_display(*, content: str, tool_calls: list[ToolCall]) -> None:
-            await request.message_store.save_message(
+            stored = await request.message_store.save_message(
                 request.chat.id,
                 "assistant",
                 content or "",
@@ -38,6 +41,8 @@ class ToolActivityNotifier:
                 timezone_name=request.timezone_name,
                 show_datetime=request.show_datetime,
             )
+            if on_persisted is not None:
+                on_persisted(stored)
             await self._maybe_send_tool_call_display(request, sent_msg_ids, tool_calls)
 
         async def _on_tool_result_display(
@@ -51,7 +56,7 @@ class ToolActivityNotifier:
             server_name: str | None,
         ) -> None:
             del arguments, server_name
-            await request.message_store.save_message(
+            stored = await request.message_store.save_message(
                 request.chat.id,
                 "tool",
                 content,
@@ -59,6 +64,8 @@ class ToolActivityNotifier:
                 timezone_name=request.timezone_name,
                 show_datetime=request.show_datetime,
             )
+            if on_persisted is not None:
+                on_persisted(stored)
             await self._maybe_send_tool_result_display(
                 request,
                 sent_msg_ids,

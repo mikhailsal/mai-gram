@@ -135,8 +135,9 @@ class MessageStore:
         reasoning: str | None = None,
         timezone_name: str = "UTC",
         show_datetime: bool = True,
+        commit: bool = False,
     ) -> Message:
-        """Persist a message and return the saved ORM object."""
+        """Persist a message and optionally commit before exposing its ID."""
         if timestamp is not None:
             result = await self._session.execute(
                 select(Message.timestamp)
@@ -169,6 +170,8 @@ class MessageStore:
 
         self._session.add(message)
         await self._session.flush()
+        if commit:
+            await self._session.commit()
         return message
 
     async def get_recent(

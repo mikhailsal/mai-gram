@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from mai_gram.db.models import SchemaVersion
+from mai_gram.db.models import HistoryActionConfirmation, SchemaVersion
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class Migration:
 
 _MIGRATIONS: list[Migration] = []
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 11
 
 
 def register_migration(version: int, description: str) -> Callable[[MigrationFunc], MigrationFunc]:
@@ -189,6 +189,89 @@ async def _migrate_v9(conn: AsyncConnection) -> None:
     if "custom_model_params" not in existing_cols:
         await conn.execute(text("ALTER TABLE chats ADD COLUMN custom_model_params TEXT"))
         logger.info("Added chats.custom_model_params column")
+
+
+@register_migration(10, "Prevent SQLite from recycling message IDs")
+async def _migrate_v10(conn: AsyncConnection) -> None:
+    """Keep existing message IDs and switch the table to SQLite AUTOINCREMENT."""
+    # Start a write transaction even with sqlite3's legacy transaction control.
+    await conn.execute(text("UPDATE messages SET id = id WHERE 0"))
+    schema = await conn.scalar(
+        text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'")
+    )
+    if "AUTOINCREMENT" in schema.upper():
+        return
+
+    await _rebuild_messages(conn, include_history_ref=False)
+
+    # Reserve headroom above IDs allocated by the legacy schema in normal use.
+    # The surviving rows do not tell us which IDs were already recycled.
+    await conn.execute(text("DELETE FROM sqlite_sequence WHERE name = 'messages'"))
+    await conn.execute(
+        text(
+            "INSERT INTO sqlite_sequence (name, seq) "
+            "SELECT 'messages', MAX(COALESCE(MAX(id), 0), :legacy_id_floor) FROM messages"
+        ),
+        {"legacy_id_floor": 2**40},
+    )
+
+
+@register_migration(11, "Bind history actions to random message identities")
+async def _migrate_v11(conn: AsyncConnection) -> None:
+    """Backfill identities without changing IDs, history, or the allocation floor."""
+    await conn.execute(text("UPDATE messages SET id = id WHERE 0"))
+    columns = await conn.execute(text("PRAGMA table_info(messages)"))
+    if "history_ref" not in {row[1] for row in columns}:
+        sequence = await conn.scalar(
+            text("SELECT seq FROM sqlite_sequence WHERE name = 'messages'")
+        )
+        await _rebuild_messages(conn, include_history_ref=True)
+        await conn.execute(
+            text("UPDATE sqlite_sequence SET seq = MAX(seq, :seq) WHERE name = 'messages'"),
+            {"seq": sequence or 0},
+        )
+        await conn.execute(
+            text("CREATE UNIQUE INDEX ix_messages_history_ref ON messages (history_ref)")
+        )
+    receipts = HistoryActionConfirmation.metadata.tables[HistoryActionConfirmation.__tablename__]
+    await conn.run_sync(receipts.create, checkfirst=True)
+
+
+async def _rebuild_messages(conn: AsyncConnection, *, include_history_ref: bool) -> None:
+    token_column = (
+        ", history_ref VARCHAR(32) DEFAULT (lower(hex(randomblob(16)))) NOT NULL"
+        if include_history_ref
+        else ""
+    )
+    await conn.execute(
+        text(
+            f"""CREATE TABLE messages_next (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role VARCHAR(20) NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                chat_id VARCHAR(100) NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+                tool_calls TEXT,
+                tool_call_id VARCHAR(100),
+                reasoning TEXT,
+                timezone VARCHAR(50) DEFAULT 'UTC' NOT NULL,
+                show_datetime BOOLEAN DEFAULT 1 NOT NULL
+                {token_column}
+            )"""
+        )
+    )
+    await conn.execute(
+        text(
+            """INSERT INTO messages_next (
+                id, role, content, timestamp, chat_id, tool_calls, tool_call_id,
+                reasoning, timezone, show_datetime
+            )
+            SELECT id, role, content, timestamp, chat_id, tool_calls, tool_call_id,
+                reasoning, timezone, show_datetime FROM messages"""
+        )
+    )
+    await conn.execute(text("DROP TABLE messages"))
+    await conn.execute(text("ALTER TABLE messages_next RENAME TO messages"))
 
 
 async def get_current_version(engine: AsyncEngine) -> int:

@@ -88,6 +88,7 @@ class TestAssistantTurnBuilder:
         )
         assert [item.role for item in saved_messages] == ["user"]
         assert saved_messages[0].content == "Hello there"
+        assert request.retry_ref == saved_messages[0].history_ref
         assert request.chat.id == chat.id
         assert request.llm_messages == ["ctx"]
         assert request.telegram_chat_id == "telegram-chat"

@@ -149,6 +149,9 @@ class CallbackSourceMessage:
     message_id: str
     text: str
     parse_mode: str | None = None
+    plain_text: str | None = None
+    sent_at: datetime | None = None
+    edited_at: datetime | None = None
 
 
 class MessengerError(Exception):

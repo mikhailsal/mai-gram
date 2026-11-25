@@ -42,6 +42,8 @@ class AssistantTurnRequest:
     extra_params: dict[str, Any] | None
     failure_log_message: str
     resolved_model: str | None = None
+    retry_ref: str | None = None
+    regenerate_target_id: int | str | None = None
 
     @property
     def model_for_api(self) -> str:
@@ -54,6 +56,15 @@ class AssistantTurnResult:
     """Result of running one assistant response generation pass."""
 
     sent_message_ids: list[str]
+    saved_message_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseDelivery:
+    """Track sent IDs separately from acceptance of final answer content."""
+
+    sent_message_ids: list[str]
+    content_delivered: bool = False
 
 
 @dataclass(slots=True)
@@ -130,9 +141,9 @@ class ConversationRenderer(Protocol):
         *,
         header_html: str = "",
         keyboard: object = None,
-    ) -> list[str]: ...
+    ) -> ResponseDelivery: ...
 
-    async def _send_response(
+    async def _deliver_response(
         self,
         chat_id: str,
         *,
@@ -140,7 +151,7 @@ class ConversationRenderer(Protocol):
         response_reasoning: str | None = None,
         show_reasoning: bool = False,
         keyboard: object = None,
-    ) -> list[str]: ...
+    ) -> ResponseDelivery: ...
 
 
 def replace_response_text(outcome: StreamOutcome, new_text: str) -> StreamOutcome:

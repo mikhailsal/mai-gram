@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from mai_gram.db.models import Chat
+from mai_gram.db.models import Chat, Message
 from mai_gram.llm.provider import MessageRole, ToolCall
 from mai_gram.memory.messages import (
     MessageStore,
@@ -44,6 +44,17 @@ class TestSaveMessage:
         assert msg.role == "user"
         assert msg.content == "Hello!"
         assert msg.chat_id == chat.id
+
+    async def test_commit_keeps_published_id_after_rollback(
+        self, store: MessageStore, chat: Chat, session: AsyncSession
+    ) -> None:
+        saved = await store.save_message(chat.id, "assistant", "Visible reply", commit=True)
+        message_id = saved.id
+        await session.rollback()
+
+        persisted = await session.get(Message, message_id)
+        assert persisted is not None
+        assert persisted.content == "Visible reply"
 
     async def test_save_with_timestamp(self, store: MessageStore, chat: Chat) -> None:
         ts = datetime(2025, 6, 15, 12, 0, tzinfo=timezone.utc)

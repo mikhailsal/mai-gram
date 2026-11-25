@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -14,7 +16,11 @@ from mai_gram.db.database import (
     init_db,
     reset_db_state,
 )
-from mai_gram.db.models import Chat
+from mai_gram.db.migrations import get_current_version, run_migrations
+from mai_gram.db.models import Chat, Message
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -127,6 +133,104 @@ class TestInitDb:
 
         await engine1.dispose()
         await engine2.dispose()
+
+
+async def test_message_ids_are_not_recycled_when_upgrading_v9(tmp_path: Path) -> None:
+    url = f"sqlite+aiosqlite:///{tmp_path / 'history.db'}"
+    engine = await init_db(url)
+    async with engine.begin() as conn:
+        schema = await conn.scalar(
+            text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'")
+        )
+        await conn.execute(text("DROP TABLE messages"))
+        await conn.exec_driver_sql(schema.replace(" AUTOINCREMENT", ""))
+        await conn.execute(
+            text("INSERT INTO schema_versions (version, description) VALUES (9, 'v9')")
+        )
+
+    async with get_session() as session:
+        chat = Chat(
+            id="user@bot",
+            user_id="user",
+            bot_id="bot",
+            llm_model="test/model",
+            system_prompt="test",
+        )
+        session.add(chat)
+        surviving = Message(
+            chat_id=chat.id,
+            role="assistant",
+            content="Keep this",
+            reasoning="Keep this too",
+            timezone="Europe/Istanbul",
+            show_datetime=False,
+        )
+        rolled_back = Message(chat_id=chat.id, role="assistant", content="Gone before migration")
+        session.add_all([surviving, rolled_back])
+        await session.flush()
+        chat.cut_above_message_id = surviving.id
+        await session.delete(rolled_back)
+
+    await run_migrations(engine)
+    assert await get_current_version(engine) == 11
+    await close_db()
+    engine = await init_db(url)
+    await run_migrations(engine)
+    async with get_session() as session:
+        preserved = await session.get(Message, surviving.id)
+        assert preserved is not None
+        assert len(preserved.history_ref) == 32
+        preserved_ref = preserved.history_ref
+        assert preserved.content == surviving.content
+        assert preserved.timestamp == surviving.timestamp
+        assert preserved.reasoning == surviving.reasoning
+        assert preserved.timezone == surviving.timezone
+        assert preserved.show_datetime is False
+        preserved_chat = await session.get(Chat, chat.id)
+        assert preserved_chat is not None
+        assert preserved_chat.cut_above_message_id == surviving.id
+        replacement = Message(chat_id=chat.id, role="assistant", content="New reply")
+        session.add(replacement)
+        await session.flush()
+        assert replacement.id > rolled_back.id
+        assert replacement.history_ref != preserved_ref
+        await session.delete(replacement)
+
+    async with get_session() as session:
+        later = Message(chat_id=chat.id, role="assistant", content="Later reply")
+        session.add(later)
+        await session.flush()
+        assert later.id > replacement.id
+    await close_db()
+
+
+async def test_v10_upgrade_keeps_empty_table_sequence_and_gives_raw_inserts_tokens(
+    tmp_path: Path,
+) -> None:
+    engine = await init_db(f"sqlite+aiosqlite:///{tmp_path / 'v10.db'}")
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP INDEX ix_messages_history_ref"))
+        await conn.execute(text("ALTER TABLE messages DROP COLUMN history_ref"))
+        await conn.execute(
+            text("INSERT INTO schema_versions (version, description) VALUES (10, 'v10')")
+        )
+        await conn.execute(
+            text("INSERT INTO sqlite_sequence (name, seq) VALUES ('messages', 5000)")
+        )
+    await run_migrations(engine)
+    async with engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "INSERT INTO messages (chat_id, role, content, timezone, show_datetime)"
+                    " VALUES ('manual', 'assistant', 'Answer', 'UTC', 1)"
+                    " RETURNING id, history_ref"
+                )
+            )
+        ).one()
+        assert row.id == 5001
+        assert len(row.history_ref) == 32
+    await close_db()
 
 
 class TestCloseDb:

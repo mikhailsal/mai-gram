@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from sqlalchemy import select
 
+from mai_gram.bot.history_buttons import history_buttons
 from mai_gram.db.database import get_session
 from mai_gram.db.models import Chat, Message
 from mai_gram.messenger.base import IncomingMessage, OutgoingMessage
@@ -74,9 +75,7 @@ class ResendService:
         for old_id in previous_response_ids:
             await self._messenger.delete_message(tg_chat_id, old_id)
 
-        kb_buttons = [[("🔄 Regenerate", f"regen:{last_msg.id}")]]
-        kb_buttons[0].append(("✂ Cut this & above", f"cut:{last_msg.id}"))
-        action_kb = self._messenger.build_inline_keyboard(kb_buttons)
+        action_kb = self._messenger.build_inline_keyboard(history_buttons(last_msg.history_ref))
 
         reasoning = last_msg.reasoning if last_msg.reasoning else None
         sent_ids = await self._renderer._send_response(

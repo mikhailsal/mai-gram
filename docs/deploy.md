@@ -8,8 +8,9 @@ server with `make deploy`. The workflow assumes a specific (but common) topology
   (compose service `mai-gram`).
 
 `make deploy` ships your local working tree to the server, takes a backup first,
-rebuilds the image, and restarts the bots — **without touching** the production
-config or the live chat database.
+rebuilds the image, and restarts the bots. File sync preserves the production
+config and database. On startup, pending migrations 10 and 11 rebuild the SQLite
+messages table and assign stable history identifiers to existing rows.
 
 > If your topology is different (e.g. plain Docker on a bare host, no LXD), the
 > ideas still apply but you'll want to adapt `scripts/deploy.sh`: the LXD

@@ -517,7 +517,9 @@ def test_get_callback_source_message_prefers_html_snapshot() -> None:
 
     result = messenger.get_callback_source_message(incoming)
 
-    assert result == CallbackSourceMessage(message_id="77", text="<b>Hello</b>", parse_mode="html")
+    assert result == CallbackSourceMessage(
+        message_id="77", text="<b>Hello</b>", parse_mode="html", plain_text="Hello"
+    )
 
 
 @pytest.mark.asyncio

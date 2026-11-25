@@ -31,7 +31,7 @@ class ResetPresenter(Protocol):
         *,
         confirm_data: str,
         cancel_data: str,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class ResetWorkflow:
