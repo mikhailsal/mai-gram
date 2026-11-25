@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -177,8 +178,16 @@ class Message(Base):
     """
 
     __tablename__ = "messages"
+    __table_args__ = ({"sqlite_autoincrement": True},)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    history_ref: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        unique=True,
+        index=True,
+        server_default=text("(lower(hex(randomblob(16))))"),
+    )
     role: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -241,6 +250,18 @@ class Message(Base):
     def __repr__(self) -> str:
         preview = self.content[:40] + "..." if len(self.content) > 40 else self.content
         return f"<Message(role={self.role!r}, content={preview!r})>"
+
+
+class HistoryActionConfirmation(Base):
+    """Telegram history confirmations already consumed."""
+
+    __tablename__ = "history_action_confirmations"
+
+    chat_id: Mapped[str] = mapped_column(
+        ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True
+    )
+    telegram_chat_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    telegram_message_id: Mapped[str] = mapped_column(String(19), primary_key=True)
 
 
 class KnowledgeEntry(Base):

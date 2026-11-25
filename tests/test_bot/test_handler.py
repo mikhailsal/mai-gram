@@ -52,7 +52,6 @@ def _make_services() -> HandlerServices:
             is_in_import=MagicMock(return_value=False),
         ),
         history_actions=MagicMock(
-            get_message_preview=AsyncMock(return_value="preview"),
             handle_cut_above=AsyncMock(),
         ),
         regenerate_service=MagicMock(handle_regenerate=AsyncMock(return_value=["regen-1"])),
@@ -316,7 +315,7 @@ async def test_handle_timezone_reports_current_invalid_and_valid_values(monkeypa
     session.commit.assert_awaited_once_with()
 
 
-async def test_resend_regenerate_confirmation_cut_and_preview_helpers(monkeypatch) -> None:
+async def test_resend_regenerate_confirmation_and_cut_helpers(monkeypatch) -> None:
     handler, messenger, services, _, _, _ = _make_handler(monkeypatch)
     services.resend_service.handle_resend.return_value = SimpleNamespace(
         replaced_previous=True,
@@ -339,8 +338,6 @@ async def test_resend_regenerate_confirmation_cut_and_preview_helpers(monkeypatc
         7,
         original_tg_msg_id="orig-1",
     )
-    preview = await handler._get_message_preview(7, max_len=20)
-
     assert handler._response_message_ids["chat-1"] == ["regen-1"]
     assert messenger.build_inline_keyboard.call_args.args[0] == [[("Yes", "yes"), ("Cancel", "no")]]
     services.history_actions.handle_cut_above.assert_awaited_once_with(
@@ -349,7 +346,6 @@ async def test_resend_regenerate_confirmation_cut_and_preview_helpers(monkeypatc
         original_tg_msg_id="orig-1",
         cached_original=("<b>cached</b>", "html"),
     )
-    assert preview == "preview"
 
 
 async def test_get_chat_and_chat_id_for_bot_scoped_messages(monkeypatch) -> None:

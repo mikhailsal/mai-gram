@@ -2,6 +2,11 @@
 
 All notable changes to mai-gram are documented here.
 
+## Unreleased
+
+- Keep Cut and Regenerate usable on older Telegram messages. Opening a legacy action shows the selected turn before changing history.
+- Document Telegram Bot API support in the installed SDK and add a repeatable offline audit.
+
 ## [1.2.0] - 2026-05-03
 
 ### Response Template Plugin System

@@ -11,6 +11,7 @@ import pytest
 from mai_gram.bot.conversation_executor import ConversationExecutor
 from mai_gram.bot.executor_types import (
     AssistantTurnRequest,
+    ResponseDelivery,
 )
 from mai_gram.bot.executor_types import (
     StreamOutcome as _StreamOutcome,
@@ -45,7 +46,9 @@ def _make_request(
         show_tool_calls=show_tool_calls,
     )
     if message_store is None:
-        message_store = MagicMock(save_message=AsyncMock(return_value=SimpleNamespace(id=7)))
+        message_store = MagicMock(
+            save_message=AsyncMock(return_value=SimpleNamespace(id=7, history_ref="a" * 32))
+        )
     if mcp_manager is None:
         mcp_manager = MagicMock()
     llm_messages_value: Any = llm_messages or []
@@ -74,8 +77,8 @@ def _make_executor() -> tuple[ConversationExecutor, MagicMock, MagicMock]:
     messenger.edit_message = AsyncMock(return_value=SendResult(success=True, message_id="edited-1"))
 
     renderer = MagicMock()
-    renderer._send_response = AsyncMock(return_value=["final-id"])
-    renderer._finalize_placeholder = AsyncMock(return_value=["overflow-id"])
+    renderer._deliver_response = AsyncMock(return_value=ResponseDelivery(["final-id"], True))
+    renderer._finalize_placeholder = AsyncMock(return_value=ResponseDelivery(["overflow-id"], True))
     renderer._deliver_error = AsyncMock()
     renderer._commit_overflow = AsyncMock(return_value=(5, "placeholder-2"))
     renderer._build_intermediate_display = MagicMock(return_value="intermediate")
@@ -94,7 +97,7 @@ def _make_executor() -> tuple[ConversationExecutor, MagicMock, MagicMock]:
 class TestConversationExecutor:
     async def test_execute_success_saves_final_message(self) -> None:
         executor, _, renderer = _make_executor()
-        save_message = AsyncMock(return_value=SimpleNamespace(id=7))
+        save_message = AsyncMock(return_value=SimpleNamespace(id=7, history_ref="a" * 32))
         request = _make_request(message_store=MagicMock(save_message=save_message))
 
         with patch.object(
@@ -122,9 +125,11 @@ class TestConversationExecutor:
             reasoning=None,
             timezone_name="UTC",
             show_datetime=True,
+            commit=True,
         )
-        renderer._send_response.assert_awaited_once()
+        renderer._deliver_response.assert_awaited_once()
         assert result.sent_message_ids == ["final-id"]
+        assert result.saved_message_id == 7
 
     async def test_execute_delivers_user_friendly_error_on_empty_response(self) -> None:
         executor, _, renderer = _make_executor()
@@ -139,6 +144,7 @@ class TestConversationExecutor:
 
         renderer._deliver_error.assert_awaited_once()
         assert result.sent_message_ids == []
+        assert result.saved_message_id is None
 
     async def test_execute_propagates_unexpected_exceptions(self) -> None:
         executor, _, renderer = _make_executor()
@@ -502,10 +508,10 @@ class TestConversationExecutor:
         renderer._format_usage_footer.return_value = "1/2 tokens"
         sent_msg_ids: list[str] = []
 
-        await executor._finalize_response(request, sent_msg_ids, outcome, 11)
+        await executor._finalize_response(request, sent_msg_ids, outcome, "a" * 32)
 
         renderer._finalize_placeholder.assert_awaited_once()
-        renderer._send_response.assert_not_called()
+        renderer._deliver_response.assert_not_called()
         assert sent_msg_ids == ["overflow-id", "placeholder-1"]
 
     async def test_finalize_response_appends_usage_footer_without_placeholder(self) -> None:
@@ -524,9 +530,9 @@ class TestConversationExecutor:
         renderer._format_usage_footer.return_value = "1/2 tokens"
         sent_msg_ids: list[str] = []
 
-        await executor._finalize_response(request, sent_msg_ids, outcome, 11)
+        await executor._finalize_response(request, sent_msg_ids, outcome, "a" * 32)
 
-        renderer._send_response.assert_awaited_once_with(
+        renderer._deliver_response.assert_awaited_once_with(
             request.telegram_chat_id,
             response_text="Final answer\n\n1/2 tokens",
             response_reasoning=None,

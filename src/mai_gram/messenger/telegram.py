@@ -268,17 +268,14 @@ class TelegramMessenger(Messenger):
             return None
 
         original_html = getattr(callback_message, "text_html", None)
-        if original_html is not None:
-            return CallbackSourceMessage(
-                message_id=str(callback_message.message_id),
-                text=original_html,
-                parse_mode="html",
-            )
-
+        plain_text = getattr(callback_message, "text", None)
         return CallbackSourceMessage(
             message_id=str(callback_message.message_id),
-            text=getattr(callback_message, "text", "") or "",
-            parse_mode=None,
+            text=original_html if original_html is not None else plain_text or "",
+            parse_mode="html" if original_html is not None else None,
+            plain_text=plain_text,
+            sent_at=getattr(callback_message, "date", None),
+            edited_at=getattr(callback_message, "edit_date", None),
         )
 
     async def set_profile_photo(self, photo_path: str) -> bool:

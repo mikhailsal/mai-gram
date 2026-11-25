@@ -13,10 +13,13 @@ from mai_gram.bot.executor_types import (
     StreamOutcome,
     StreamState,
     build_structured_parts,
+    final_header_html,
     parse_hidden_fields,
     parse_template_params,
     replace_response_text,
+    sanitize_and_validate,
 )
+from mai_gram.bot.history_buttons import history_buttons, retry_buttons
 from mai_gram.bot.tool_activity_notifier import ToolActivityNotifier
 from mai_gram.llm.provider import LLMError, LLMProviderError
 from mai_gram.mcp_servers.bridge import run_with_tools_stream
@@ -27,6 +30,7 @@ from mai_gram.response_templates.registry import get_template
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from mai_gram.db.models import Message
     from mai_gram.llm.provider import LLMProvider
     from mai_gram.messenger.base import Messenger
     from mai_gram.response_templates.base import ParsedResponse, ResponseTemplate
@@ -45,6 +49,8 @@ __all__ = [
 
 class ConversationExecutor:
     """Execute one assistant turn against the shared LLM/tool pipeline."""
+
+    _final_header_html = staticmethod(final_header_html)
 
     def __init__(
         self,
@@ -81,17 +87,22 @@ class ConversationExecutor:
         max_format_retries: int = 2,
     ) -> AssistantTurnResult:
         sent_msg_ids: list[str] = []
-        tool_call_cb, tool_result_cb = self._tool_activity.build_callbacks(request, sent_msg_ids)
-        tpl_params = parse_template_params(request.chat)
-        template = get_template(request.chat.response_template, tpl_params)
-        total_attempts = 1 + max_format_retries
+        retry_ref = request.retry_ref
 
+        def record_tool_activity(stored: Message) -> None:
+            nonlocal retry_ref
+            retry_ref = stored.history_ref if stored.role == "tool" else None
+
+        tool_call_cb, tool_result_cb = self._tool_activity.build_callbacks(
+            request, sent_msg_ids, on_persisted=record_tool_activity
+        )
+        template = get_template(request.chat.response_template, parse_template_params(request.chat))
         try:
             outcome, parsed = await self._stream_with_validation(
                 request,
                 sent_msg_ids,
                 template=template,
-                total_attempts=total_attempts,
+                total_attempts=1 + max_format_retries,
                 on_tool_call_display=tool_call_cb,
                 on_tool_result_display=tool_result_cb,
             )
@@ -102,22 +113,56 @@ class ConversationExecutor:
                 reasoning=outcome.response_reasoning,
                 timezone_name=request.timezone_name,
                 show_datetime=request.show_datetime,
+                commit=self._show_buttons and request.regenerate_target_id is None,
             )
         except (LLMError, RuntimeError, OSError, asyncio.TimeoutError) as exc:
             logger.exception(request.failure_log_message)
+            if request.regenerate_target_id is not None:
+                await self._discard_delivery(request.telegram_chat_id, sent_msg_ids)
             error_text = self._renderer._user_friendly_error(exc)
-            await self._deliver_error(request, sent_msg_ids, error_text)
-            return AssistantTurnResult(sent_message_ids=sent_msg_ids)
-
-        await self._finalize_response(
-            request,
-            sent_msg_ids,
-            outcome,
-            saved_msg.id,
-            parsed=parsed,
-            template=template,
-        )
+        else:
+            return await self._complete_turn(
+                request, sent_msg_ids, outcome, saved_msg, parsed, template
+            )
+        persist = request.persist_generated
+        if request.regenerate_target_id is not None or persist is None or await persist():
+            await self._deliver_error(request, sent_msg_ids, error_text, retry_ref)
         return AssistantTurnResult(sent_message_ids=sent_msg_ids)
+
+    async def _complete_turn(
+        self,
+        request: AssistantTurnRequest,
+        sent_msg_ids: list[str],
+        outcome: StreamOutcome,
+        saved_msg: Message,
+        parsed: ParsedResponse,
+        template: ResponseTemplate,
+    ) -> AssistantTurnResult:
+        persist = request.persist_generated
+        delivered = await self._finalize_response(
+            request, sent_msg_ids, outcome, saved_msg.history_ref, parsed=parsed, template=template
+        )
+        if persist is not None and not delivered:
+            await self._discard_delivery(request.telegram_chat_id, sent_msg_ids)
+            await self._deliver_error(
+                request,
+                sent_msg_ids,
+                "Could not deliver the regenerated response.",
+                request.retry_ref,
+            )
+            return AssistantTurnResult(sent_message_ids=sent_msg_ids)
+        if persist is not None:
+            sent_msg_ids = list(dict.fromkeys(sent_msg_ids))
+            if not await persist():
+                return AssistantTurnResult(sent_message_ids=sent_msg_ids)
+        return AssistantTurnResult(sent_message_ids=sent_msg_ids, saved_message_id=saved_msg.id)
+
+    async def _discard_delivery(self, chat_id: str, sent_msg_ids: list[str]) -> None:
+        """Remove messages created by a failed replacement before sending its retry notice."""
+        for message_id in dict.fromkeys(sent_msg_ids):
+            if not await self._messenger.delete_message(chat_id, message_id):
+                logger.warning("Could not remove failed replacement message %s", message_id)
+        sent_msg_ids.clear()
 
     async def _stream_with_validation(
         self,
@@ -153,7 +198,7 @@ class ConversationExecutor:
                 )
                 continue
 
-            outcome, parsed, errors = self._apply_tier1(request, outcome, template)
+            outcome, parsed, errors = sanitize_and_validate(request, outcome, template)
             if not errors:
                 return outcome, parsed
 
@@ -188,19 +233,6 @@ class ConversationExecutor:
                 "\u26a0\ufe0f Response truncated, retrying...",
             )
         return ["response truncated by token limit (finish_reason=length)"]
-
-    def _apply_tier1(
-        self,
-        request: AssistantTurnRequest,
-        outcome: StreamOutcome,
-        template: ResponseTemplate,
-    ) -> tuple[StreamOutcome, ParsedResponse, list[str]]:
-        sanitized = template.sanitize(outcome.response_text)
-        if sanitized != outcome.response_text:
-            logger.info("Tier 1 (regex) corrected format for chat %s", request.chat.id)
-            outcome = replace_response_text(outcome, sanitized)
-        parsed = template.parse(outcome.response_text)
-        return outcome, parsed, template.validate(parsed)
 
     async def _apply_tier2(
         self,
@@ -319,10 +351,10 @@ class ConversationExecutor:
         request: AssistantTurnRequest,
         sent_msg_ids: list[str],
         error_text: str,
+        retry_ref: str | None,
     ) -> None:
-        # Always offer Regenerate on errors (even when show_buttons is False)
-        # so the user can retry without resending a duplicate message.
-        kb = self._messenger.build_inline_keyboard([[("🔄 Regenerate", "regen")]])
+        buttons = retry_buttons(request.regenerate_target_id, retry_ref)
+        kb = self._messenger.build_inline_keyboard(buttons) if buttons else None
         await self._renderer._deliver_error(
             request.telegram_chat_id,
             error_text,
@@ -336,25 +368,28 @@ class ConversationExecutor:
         request: AssistantTurnRequest,
         sent_msg_ids: list[str],
         outcome: StreamOutcome,
-        saved_msg_id: int,
+        history_ref: str,
         *,
         parsed: ParsedResponse | None = None,
         template: ResponseTemplate | None = None,
-    ) -> None:
-        kb = self._build_action_keyboard(saved_msg_id) if self._show_buttons else None
+    ) -> bool:
+        kb = (
+            self._messenger.build_inline_keyboard(history_buttons(history_ref))
+            if self._show_buttons
+            else None
+        )
         footer = (
             self._renderer._format_usage_footer(outcome.usage, outcome.cost, outcome.is_byok)
             if self._show_usage
             else ""
         )
-        has_structured = (
+        if (
             template is not None
             and parsed is not None
             and template.name != "empty"
             and len(parsed.fields) > 1
-        )
-        if has_structured and template is not None and parsed is not None:
-            await self._finalize_structured(
+        ):
+            return await self._finalize_structured(
                 request,
                 sent_msg_ids,
                 outcome,
@@ -363,20 +398,18 @@ class ConversationExecutor:
                 usage_footer=footer,
                 keyboard=kb,
             )
-        elif outcome.placeholder_msg_id and outcome.response_text.strip():
-            await self._finalize_with_placeholder(request, sent_msg_ids, outcome, footer, kb)
-        else:
-            await self._finalize_fresh(request, sent_msg_ids, outcome, footer, kb)
-
-    def _build_action_keyboard(self, saved_msg_id: int) -> object:
-        return self._messenger.build_inline_keyboard(
-            [
-                [
-                    ("🔄 Regenerate", f"regen:{saved_msg_id}"),
-                    ("✂ Cut this & above", f"cut:{saved_msg_id}"),
-                ]
-            ]
+        if outcome.placeholder_msg_id and outcome.response_text.strip():
+            return await self._finalize_with_placeholder(request, sent_msg_ids, outcome, footer, kb)
+        text = outcome.response_text + (f"\n\n{footer}" if footer else "")
+        delivery = await self._renderer._deliver_response(
+            request.telegram_chat_id,
+            response_text=text,
+            response_reasoning=outcome.response_reasoning,
+            show_reasoning=request.show_reasoning,
+            keyboard=kb,
         )
+        sent_msg_ids.extend(delivery.sent_message_ids)
+        return delivery.content_delivered
 
     async def _finalize_with_placeholder(
         self,
@@ -385,38 +418,20 @@ class ConversationExecutor:
         outcome: StreamOutcome,
         footer: str,
         kb: object,
-    ) -> None:
+    ) -> bool:
         remaining = outcome.response_text[outcome.committed_content_offset :]
-        if footer:
-            remaining += f"\n\n{footer}"
+        text = remaining + (f"\n\n{footer}" if footer else "")
         header = self._final_header_html(request, outcome)
-        extra = await self._renderer._finalize_placeholder(
+        delivery = await self._renderer._finalize_placeholder(
             request.telegram_chat_id,
             outcome.placeholder_msg_id,  # type: ignore[arg-type]
-            remaining,
+            text,
             header_html=header,
             keyboard=kb,
         )
-        sent_msg_ids.extend(extra)
+        sent_msg_ids.extend(delivery.sent_message_ids)
         sent_msg_ids.append(outcome.placeholder_msg_id)  # type: ignore[arg-type]
-
-    async def _finalize_fresh(
-        self,
-        request: AssistantTurnRequest,
-        sent_msg_ids: list[str],
-        outcome: StreamOutcome,
-        footer: str,
-        kb: object,
-    ) -> None:
-        text = outcome.response_text + (f"\n\n{footer}" if footer else "")
-        ids = await self._renderer._send_response(
-            request.telegram_chat_id,
-            response_text=text,
-            response_reasoning=outcome.response_reasoning,
-            show_reasoning=request.show_reasoning,
-            keyboard=kb,
-        )
-        sent_msg_ids.extend(ids)
+        return bool(remaining.strip()) and delivery.content_delivered
 
     async def _finalize_structured(
         self,
@@ -428,22 +443,23 @@ class ConversationExecutor:
         template: ResponseTemplate,
         usage_footer: str,
         keyboard: object,
-    ) -> None:
+    ) -> bool:
         hidden = parse_hidden_fields(request.chat.hidden_template_fields)
         header_html, content_text = build_structured_parts(template, parsed, hidden)
         if outcome.placeholder_msg_id:
             sent_msg_ids.append(outcome.placeholder_msg_id)
-        if content_text:
-            if usage_footer:
-                content_text += f"\n\n{usage_footer}"
-            await self._send_structured(
-                request,
-                sent_msg_ids,
-                outcome,
-                header_html=header_html,
-                content_text=content_text,
-                keyboard=keyboard,
-            )
+        if not content_text:
+            return False
+        if usage_footer:
+            content_text += f"\n\n{usage_footer}"
+        return await self._send_structured(
+            request,
+            sent_msg_ids,
+            outcome,
+            header_html=header_html,
+            content_text=content_text,
+            keyboard=keyboard,
+        )
 
     async def _send_structured(
         self,
@@ -454,25 +470,22 @@ class ConversationExecutor:
         header_html: str,
         content_text: str,
         keyboard: object,
-    ) -> None:
+    ) -> bool:
         if outcome.placeholder_msg_id:
-            extra = await self._renderer._finalize_placeholder(
+            delivery = await self._renderer._finalize_placeholder(
                 request.telegram_chat_id,
                 outcome.placeholder_msg_id,
                 content_text,
                 header_html=header_html,
                 keyboard=keyboard,
             )
-            sent_msg_ids.extend(extra)
         else:
-            ids = await self._renderer._send_response(
+            delivery = await self._renderer._deliver_response(
                 request.telegram_chat_id,
                 response_text=content_text,
-                response_reasoning=None,
-                show_reasoning=False,
                 keyboard=keyboard,
             )
-            if header_html and ids:
+            if header_html and delivery.sent_message_ids:
                 r = await self._messenger.send_message(
                     OutgoingMessage(
                         text=header_html,
@@ -482,16 +495,5 @@ class ConversationExecutor:
                 )
                 if r.success and r.message_id:
                     sent_msg_ids.append(r.message_id)
-            sent_msg_ids.extend(ids)
-
-    @staticmethod
-    def _final_header_html(request: AssistantTurnRequest, outcome: StreamOutcome) -> str:
-        if not request.show_reasoning:
-            return ""
-        if not outcome.response_reasoning or not outcome.response_reasoning.strip():
-            return ""
-        if outcome.reasoning_committed:
-            return ""
-        from mai_gram.core.md_to_telegram import format_reasoning_html
-
-        return format_reasoning_html(outcome.response_reasoning, expandable=True)
+        sent_msg_ids.extend(delivery.sent_message_ids)
+        return delivery.content_delivered

@@ -52,9 +52,22 @@ def _escape_like_pattern(query: str) -> str:
 class WikiStore:
     """File-backed knowledge entry store with DB metadata."""
 
-    def __init__(self, session: AsyncSession, data_dir: str | Path = "./data") -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        data_dir: str | Path = "./data",
+        *,
+        commit_writes: bool = False,
+    ) -> None:
         self._session = session
         self._data_dir = Path(data_dir)
+        self._commit_writes = commit_writes
+
+    async def _flush_write(self) -> None:
+        if self._commit_writes:
+            await self._session.commit()
+        else:
+            await self._session.flush()
 
     @property
     def data_dir(self) -> Path:
@@ -92,7 +105,7 @@ class WikiStore:
             importance=float(normalized_importance),
         )
         self._session.add(entry)
-        await self._session.flush()
+        await self._flush_write()
         return entry
 
     async def edit_entry(
@@ -131,7 +144,7 @@ class WikiStore:
             # If file didn't exist (and we didn't rename one to here), restore from DB value
             target_file.write_text(entry.value, encoding="utf-8")
 
-        await self._session.flush()
+        await self._flush_write()
         return entry
 
     async def read_entry(self, chat_id: str, key: str) -> str | None:
@@ -227,6 +240,8 @@ class WikiStore:
         wiki_dir = self._wiki_dir(chat_id)
         if not wiki_dir.exists():
             await self._delete_db_entries(await self._all_entries_map(chat_id), report)
+            if self._commit_writes:
+                await self._session.commit()
             return report
 
         disk_entries = self._load_disk_entries(wiki_dir, report)
@@ -234,7 +249,7 @@ class WikiStore:
         self._sync_disk_entries(chat_id, disk_entries, db_entries, report)
         await self._delete_db_entries(db_entries, report)
 
-        await self._session.flush()
+        await self._flush_write()
         return report
 
     def _load_disk_entries(
@@ -324,7 +339,7 @@ class WikiStore:
             file_path.unlink()
         if entry is not None:
             await self._session.delete(entry)
-            await self._session.flush()
+            await self._flush_write()
             return True
         return False
 

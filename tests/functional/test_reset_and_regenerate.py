@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from tests.functional.helpers.artifacts import list_backups
+from tests.functional.helpers.artifacts import fetch_messages, list_backups
 from tests.functional.helpers.parsing import extract_last_response_body, find_callback
 
 pytestmark = pytest.mark.functional_local
@@ -82,13 +82,8 @@ def test_regenerate_on_older_message_removes_subsequent_history(
 ) -> None:
     """Pressing Regenerate on a non-last assistant message should delete all
     messages that came after the user message preceding that response, then
-    regenerate from that point.
-
-    This test builds a three-turn conversation, discovers the DB message ID of
-    the first assistant response via resend_last (which surfaces regen:<id>
-    buttons), computes the first assistant's ID, then triggers regenerate
-    targeting that older response.  Afterwards it verifies that turns 2 and 3
-    have been removed from the persisted history.
+    regenerate from that point. Use the historical numeric callback format
+    to target the first response in the imported conversation.
     """
     cli = shared_functional_cli
     chat_id = "func-regen-older"
@@ -112,10 +107,9 @@ def test_regenerate_on_older_message_removes_subsequent_history(
     assert "BETA" in history_before.stdout
     assert "GAMMA" in history_before.stdout
 
-    resend = cli.run_command(chat_id, "resend_last")
-    last_regen_cb = find_callback(resend.stdout, "regen:")
-    last_assistant_id = int(last_regen_cb.split(":")[1])
-    first_assistant_id = last_assistant_id - 4
+    first_assistant_id = next(
+        row["id"] for row in fetch_messages(cli.db_path, chat_id) if row["role"] == "assistant"
+    )
 
     regen_prompt = cli.send_callback(chat_id, f"regen:{first_assistant_id}")
     assert "Regenerate this response?" in regen_prompt.stdout
@@ -172,5 +166,8 @@ def test_cut_above_hides_old_messages_from_prompt_but_keeps_history(shared_funct
     history = cli.read_history(chat_id)
     assert "[HISTORY NOTE]" in preview.stdout
     assert "search_messages" in preview.stdout
+    assert "First imported question" not in preview.stdout
+    assert "Second imported answer" not in preview.stdout
     assert "First imported question" in history.stdout
     assert "Second imported question" in history.stdout
+    assert "Second imported answer" in history.stdout

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from mai_gram.bot.callback_router import CallbackRouter
+from mai_gram.bot.history_actions import HistoryPreview
 from mai_gram.messenger.base import CallbackSourceMessage, IncomingMessage, MessageType, SendResult
+
+_TOKEN = "a" * 32
 
 
 def _make_message(
@@ -15,9 +22,10 @@ def _make_message(
     chat_id: str = "tg-chat",
     user_id: str = "test-user",
     raw: object | None = None,
+    platform: str = "telegram",
 ) -> IncomingMessage:
     return IncomingMessage(
-        platform="telegram",
+        platform=platform,
         user_id=user_id,
         chat_id=chat_id,
         message_id="msg-1",
@@ -46,7 +54,16 @@ def _make_router() -> tuple[
     reset_workflow.execute_reset = AsyncMock()
 
     history_actions = MagicMock()
-    history_actions.get_message_preview = AsyncMock(return_value="preview text")
+    history_actions.get_message_preview = AsyncMock(
+        return_value=HistoryPreview(
+            _TOKEN, datetime(2026, 4, 26, tzinfo=timezone.utc), "Question", "Original text"
+        )
+    )
+    history_actions.get_retry_preview = AsyncMock(
+        return_value=HistoryPreview(
+            _TOKEN, datetime(2026, 4, 26, tzinfo=timezone.utc), "Question", "Question", "user"
+        )
+    )
     history_actions.handle_cut_above = AsyncMock()
 
     regenerate_service = MagicMock()
@@ -103,17 +120,69 @@ class TestCallbackRouter:
         await router.handle_callback(_make_message("cancel_action"))
 
         cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
+        router._history_actions.handle_cut_above.assert_not_awaited()
+        router._regenerate_service.handle_regenerate.assert_not_awaited()
 
     async def test_shows_regen_confirmation(self) -> None:
         router, _, _ = _make_router()
 
-        await router.handle_callback(_make_message("regen"))
+        await router.handle_callback(_make_message("regen", platform="console"))
 
         show_confirmation = cast("AsyncMock", router._show_confirmation)
         await_args = show_confirmation.await_args
         assert await_args is not None
         assert await_args.args[1] == "Regenerate this response?"
         assert await_args.kwargs["confirm_data"] == "confirm_regen"
+
+    @pytest.mark.parametrize(
+        ("sibling", "expected"), [("cut:12", f"confirm_regen:{_TOKEN}"), ("cut:", None)]
+    )
+    async def test_legacy_regen_uses_sibling_target_when_present(
+        self, sibling: str, expected: str | None
+    ) -> None:
+        router, _, _ = _make_router()
+        markup = SimpleNamespace(inline_keyboard=[[SimpleNamespace(callback_data=sibling)]])
+        raw = SimpleNamespace(
+            callback_query=SimpleNamespace(message=SimpleNamespace(reply_markup=markup))
+        )
+        message = _make_message("regen", raw=raw)
+
+        await router.handle_callback(message)
+
+        confirmation = cast("AsyncMock", router._show_confirmation)
+        if expected is None:
+            confirmation.assert_not_awaited()
+            router._messenger.send_message.assert_awaited_once()
+        else:
+            router._history_actions.get_message_preview.assert_awaited_once_with(message, 12)
+            assert confirmation.await_args is not None
+            assert "Question: Question" in confirmation.await_args.args[1]
+            assert "Response: Original text" in confirmation.await_args.args[1]
+            assert confirmation.await_args.kwargs["confirm_data"] == expected
+
+    @pytest.mark.parametrize("action", ["cut", "regen", "confirm_cut", "confirm_regen"])
+    @pytest.mark.parametrize("target", ["", "invalid", "-2", "0", "9223372036854775808"])
+    async def test_malformed_targets_never_dispatch(self, action: str, target: str) -> None:
+        router, response_ids, _ = _make_router()
+
+        await router.handle_callback(_make_message(f"{action}:{target}"))
+
+        cast("AsyncMock", router._show_confirmation).assert_not_awaited()
+        router._history_actions.get_message_preview.assert_not_awaited()
+        router._history_actions.handle_cut_above.assert_not_awaited()
+        router._regenerate_service.handle_regenerate.assert_not_awaited()
+        router._messenger.send_message.assert_awaited_once()
+        assert response_ids["tg-chat"] == ["old-msg"]
+
+    @pytest.mark.parametrize("action", ["cut", "regen"])
+    async def test_unavailable_target_does_not_open_confirmation(self, action: str) -> None:
+        router, _, _ = _make_router()
+        router._history_actions.get_message_preview.return_value = None
+
+        await router.handle_callback(_make_message(f"{action}:12"))
+
+        cast("AsyncMock", router._show_confirmation).assert_not_awaited()
+        router._messenger.send_message.assert_awaited_once()
 
     async def test_cut_callback_caches_original_message_and_confirms(self) -> None:
         router, _, cut_original_html = _make_router()
@@ -125,33 +194,77 @@ class TestCallbackRouter:
 
         await router.handle_callback(_make_message("cut:12"))
 
-        assert cut_original_html["tg-chat:77"] == ("Original text", None)
+        assert cut_original_html[f"tg-chat:77:{_TOKEN}"] == ("Original text", None)
         show_confirmation = cast("AsyncMock", router._show_confirmation)
         await_args = show_confirmation.await_args
         assert await_args is not None
-        assert await_args.kwargs["confirm_data"] == "confirm_cut:12:77"
+        assert await_args.kwargs["confirm_data"] == f"confirm_cut:{_TOKEN}:77"
 
     async def test_confirm_regen_deletes_callback_and_updates_response_ids(self) -> None:
         router, response_message_ids, _ = _make_router()
 
-        await router.handle_callback(_make_message("confirm_regen"))
+        await router.handle_callback(_make_message("confirm_regen", platform="console"))
 
         cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
         cast("AsyncMock", router._regenerate_service.handle_regenerate).assert_awaited_once()
         assert response_message_ids["tg-chat"] == ["new-msg"]
 
-    async def test_confirm_cut_deletes_callback_and_runs_history_action(self) -> None:
+    async def test_rejected_targeted_regen_preserves_response_ids(self) -> None:
+        router, response_ids, _ = _make_router()
+        router._regenerate_service.handle_regenerate.return_value = None
+        message = _make_message(f"confirm_regen:{_TOKEN}")
+
+        await router.handle_callback(message)
+
+        router._regenerate_service.handle_regenerate.assert_awaited_once_with(
+            message,
+            previous_response_ids=["old-msg"],
+            target_assistant_msg_id=None,
+            target_ref=_TOKEN,
+            retry_ref=None,
+        )
+        assert response_ids["tg-chat"] == ["old-msg"]
+
+    @pytest.mark.parametrize(
+        ("data", "replacement"),
+        [
+            ("confirm_cut:12:77", f"confirm_cut:{_TOKEN}"),
+            ("confirm_regen:12", f"confirm_regen:{_TOKEN}"),
+            ("confirm_regen", f"confirm_retry:{_TOKEN}"),
+        ],
+    )
+    async def test_old_telegram_yes_requires_a_bound_confirmation(
+        self, data: str, replacement: str
+    ) -> None:
+        router, response_ids, _ = _make_router()
+        router._messenger.delete_callback_source_message.return_value = False
+
+        await router.handle_callback(_make_message(data))
+
+        assert router._show_confirmation.await_args.kwargs["confirm_data"] == replacement
+        router._history_actions.handle_cut_above.assert_not_awaited()
+        router._regenerate_service.handle_regenerate.assert_not_awaited()
+        assert response_ids["tg-chat"] == ["old-msg"]
+
+    async def test_confirm_cut_passes_source_for_transactional_cleanup(self) -> None:
         router, _, cut_original_html = _make_router()
-        cut_original_html["tg-chat:77"] = ("Original text", None)
+        cut_original_html[f"tg-chat:77:{_TOKEN}"] = ("Original text", None)
+        router._messenger.get_callback_source_message.return_value = CallbackSourceMessage(
+            message_id="88", text="Confirmation"
+        )
+        message = _make_message(f"confirm_cut:{_TOKEN}:77")
 
-        await router.handle_callback(_make_message("confirm_cut:12:77"))
+        await router.handle_callback(message)
 
-        cast("AsyncMock", router._messenger.delete_callback_source_message).assert_awaited_once()
-        history_actions = cast("AsyncMock", router._history_actions.handle_cut_above)
-        await_args = history_actions.await_args
-        assert await_args is not None
-        assert await_args.args[1] == 12
-        assert await_args.kwargs["cached_original"] == ("Original text", None)
+        router._messenger.delete_callback_source_message.assert_not_awaited()
+        router._history_actions.handle_cut_above.assert_awaited_once_with(
+            message,
+            _TOKEN,
+            original_tg_msg_id="77",
+            cached_original=("Original text", None),
+            confirmation_message_id="88",
+        )
+        assert not cut_original_html
 
     async def test_confirm_reset_deletes_callback_and_runs_reset(self) -> None:
         router, _, _ = _make_router()

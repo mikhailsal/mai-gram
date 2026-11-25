@@ -59,7 +59,7 @@ class AssistantTurnBuilder:
     ) -> AssistantTurnRequest:
         now = current_time or datetime.now(timezone.utc)
         message_store, wiki_store = self._make_stores(session)
-        await message_store.save_message(
+        saved = await message_store.save_message(
             chat.id,
             "user",
             user_text,
@@ -74,6 +74,7 @@ class AssistantTurnBuilder:
             telegram_chat_id=telegram_chat_id,
             failure_log_message=failure_log_message,
             current_time=now,
+            retry_ref=saved.history_ref,
             image_urls=image_urls,
         )
 
@@ -85,9 +86,15 @@ class AssistantTurnBuilder:
         telegram_chat_id: str,
         failure_log_message: str,
         current_time: datetime | None = None,
+        through_message_id: int | None = None,
     ) -> AssistantTurnRequest:
         now = current_time or datetime.now(timezone.utc)
-        message_store, wiki_store = self._make_stores(session)
+        message_store = MessageStore(session, through_message_id=through_message_id)
+        wiki_store = WikiStore(
+            session, data_dir=self._memory_data_dir, commit_writes=through_message_id is not None
+        )
+        recent = await message_store.get_recent(chat.id, limit=1)
+        pending = recent[0] if recent and recent[0].role in ("user", "tool") else None
         return await self._build_request(
             chat=chat,
             message_store=message_store,
@@ -95,6 +102,7 @@ class AssistantTurnBuilder:
             telegram_chat_id=telegram_chat_id,
             failure_log_message=failure_log_message,
             current_time=now,
+            retry_ref=pending.history_ref if pending is not None else None,
         )
 
     def _make_stores(self, session: AsyncSession) -> tuple[MessageStore, WikiStore]:
@@ -109,6 +117,7 @@ class AssistantTurnBuilder:
         telegram_chat_id: str,
         failure_log_message: str,
         current_time: datetime,
+        retry_ref: str | None,
         image_urls: list[str] | None = None,
     ) -> AssistantTurnRequest:
         model_key = chat.llm_model
@@ -156,4 +165,5 @@ class AssistantTurnBuilder:
             extra_params=extra_params,
             failure_log_message=failure_log_message,
             resolved_model=self._settings.get_model_id(model_key),
+            retry_ref=retry_ref,
         )

@@ -65,6 +65,8 @@ make run-dev
 
 Responses stream token-by-token with real-time message editing in Telegram — just like ChatGPT, but in your messenger. Long responses automatically overflow into multiple messages with progressive streaming across message boundaries. Tool calls are displayed as separate blockquote messages for transparency. LaTeX symbols, headers, and nested lists are rendered with proper Unicode formatting.
 
+Older Telegram replies retain their **Cut** and **Regenerate** buttons after an upgrade. The confirmation shows excerpts from the stored question and reply, plus the time. Check that preview before choosing **Yes**, especially after restoring a backup. A missing reply or a clear mismatch leaves conversation history intact. On an old error message, **Regenerate** shows the pending turn for confirmation. See the [Telegram backlog](TODO.md) for the SDK audit and remaining work.
+
 ### Wiki Knowledge Base
 
 The AI automatically saves important facts about each user into a personal wiki. Entries are stored as plain `.md` files on disk (the source of truth) and indexed in SQLite for fast querying. You can browse, search, or edit wiki files manually — changes are picked up automatically.

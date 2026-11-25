@@ -133,6 +133,9 @@ class StreamDisplayManager:
     ) -> None:
         live_text, fallback, header_html, remaining_content = rendered
         if len(live_text) > self._messenger.max_message_length:
+            # Targeted rewrites need a delivery result for the full replacement body.
+            if request.persist_generated is not None:
+                return
             await self._handle_overflow(
                 request,
                 state,
@@ -142,12 +145,19 @@ class StreamDisplayManager:
                 current_content,
             )
         else:
+            creating_placeholder = state.placeholder_msg_id is None
             state.placeholder_msg_id = await self._send_or_edit_placeholder(
                 request,
                 placeholder_msg_id=state.placeholder_msg_id,
                 live_text=live_text,
                 fallback=fallback,
             )
+            if (
+                request.persist_generated is not None
+                and creating_placeholder
+                and state.placeholder_msg_id is not None
+            ):
+                sent_msg_ids.append(state.placeholder_msg_id)
 
     async def _handle_overflow(
         self,

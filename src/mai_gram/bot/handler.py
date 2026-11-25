@@ -439,20 +439,17 @@ class BotHandler:
         *,
         confirm_data: str,
         cancel_data: str,
-    ) -> None:
+    ) -> bool:
         """Send a confirmation dialog with Yes/Cancel buttons."""
         kb = self._messenger.build_inline_keyboard(
             [
                 [("Yes", confirm_data), ("Cancel", cancel_data)],
             ]
         )
-        await self._messenger.send_message(
+        result = await self._messenger.send_message(
             OutgoingMessage(text=text, chat_id=message.chat_id, keyboard=kb)
         )
-
-    async def _get_message_preview(self, db_message_id: int, max_len: int = 80) -> str:
-        """Fetch a truncated preview of a stored message by its DB id."""
-        return await self._history_actions.get_message_preview(db_message_id, max_len=max_len)
+        return result.success
 
     async def _handle_cut_above(
         self,
@@ -482,7 +479,8 @@ class BotHandler:
             message,
             previous_response_ids=self._response_message_ids.get(message.chat_id, []),
         )
-        self._response_message_ids[message.chat_id] = sent_message_ids
+        if sent_message_ids is not None:
+            self._response_message_ids[message.chat_id] = sent_message_ids
 
     # -- DB helpers --
 
