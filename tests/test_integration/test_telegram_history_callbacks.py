@@ -442,14 +442,20 @@ async def test_targeted_regen_removes_preview_after_stream_failure(flow, monkeyp
 
 
 @pytest.mark.parametrize("partial", [False, True], ids=["total_failure", "partial_delivery"])
-async def test_targeted_regen_preserves_history_until_full_delivery(flow, monkeypatch, partial):
+@pytest.mark.parametrize("retry", [False, True], ids=["regen", "retry"])
+async def test_bound_turn_preserves_history_until_full_delivery(flow, monkeypatch, partial, retry):
     question = await add_row("user", "Original question.")
-    original = await add_row("assistant", "Original answer.")
-    await add_row("user", "Later question.")
-    await add_row("assistant", "Later answer.")
+    if retry:
+        action = f"retry:{question.history_ref}"
+        source = flow.message(301, "Generation failed.", buttons=[action])
+    else:
+        original = await add_row("assistant", "Original answer.")
+        await add_row("user", "Later question.")
+        await add_row("assistant", "Later answer.")
+        action = f"regen:{original.history_ref}"
+        source = flow.message(301, original.content, buttons=[action])
     before = [row.history_ref for row in await rows()]
-    action = f"regen:{original.history_ref}"
-    await flow.press(action, flow.message(301, original.content, buttons=[action]))
+    await flow.press(action, source)
     yes, dialog = flow.last_dialog(401)
 
     async def generate(*args, on_assistant_tool_call, on_tool_result, **kwargs):
@@ -507,6 +513,11 @@ async def test_targeted_regen_preserves_history_until_full_delivery(flow, monkey
     assert attempt_ids
     assert sorted(message_id for message_id in deleted if message_id != 401) == sorted(attempt_ids)
 
+    if retry:
+        new_action, notice = flow.last_dialog(502)
+        assert new_action == action
+        await flow.press(new_action, notice)
+        yes, dialog = flow.last_dialog(503)
     reject_first_part = False
     await flow.press(yes, dialog)
     history = await rows()

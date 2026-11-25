@@ -122,7 +122,7 @@ class ConversationExecutor:
             error_text = self._renderer._user_friendly_error(exc)
         else:
             return await self._complete_turn(
-                request, sent_msg_ids, outcome, saved_msg, parsed, template, retry_ref
+                request, sent_msg_ids, outcome, saved_msg, parsed, template
             )
         persist = request.persist_generated
         if request.regenerate_target_id is not None or persist is None or await persist():
@@ -137,25 +137,24 @@ class ConversationExecutor:
         saved_msg: Message,
         parsed: ParsedResponse,
         template: ResponseTemplate,
-        retry_ref: str | None,
     ) -> AssistantTurnResult:
         persist = request.persist_generated
-        targeted = request.regenerate_target_id is not None
-        if not targeted and persist is not None and not await persist():
-            return AssistantTurnResult(sent_message_ids=sent_msg_ids)
         delivered = await self._finalize_response(
             request, sent_msg_ids, outcome, saved_msg.history_ref, parsed=parsed, template=template
         )
-        if targeted and not delivered:
+        if persist is not None and not delivered:
             await self._discard_delivery(request.telegram_chat_id, sent_msg_ids)
             await self._deliver_error(
-                request, sent_msg_ids, "Could not deliver the regenerated response.", retry_ref
+                request,
+                sent_msg_ids,
+                "Could not deliver the regenerated response.",
+                request.retry_ref,
             )
             return AssistantTurnResult(sent_message_ids=sent_msg_ids)
-        if targeted:
+        if persist is not None:
             sent_msg_ids = list(dict.fromkeys(sent_msg_ids))
-        if targeted and persist is not None and not await persist():
-            return AssistantTurnResult(sent_message_ids=sent_msg_ids)
+            if not await persist():
+                return AssistantTurnResult(sent_message_ids=sent_msg_ids)
         return AssistantTurnResult(sent_message_ids=sent_msg_ids, saved_message_id=saved_msg.id)
 
     async def _discard_delivery(self, chat_id: str, sent_msg_ids: list[str]) -> None:
