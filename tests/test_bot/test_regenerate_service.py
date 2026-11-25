@@ -87,7 +87,8 @@ async def regen_db(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSess
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory.begin() as session:
             session.add(_make_chat(_CHAT_ID, "test-bot"))
-        yield factory
+        with patch("mai_gram.db.database.get_session_factory", return_value=factory):
+            yield factory
     finally:
         await engine.dispose()
 
@@ -164,7 +165,7 @@ class TestRegenerateService:
             )
             target = await store.save_message(_CHAT_ID, "assistant", "Old reply")
             await store.save_message(_CHAT_ID, "user", "Later question")
-            other_answer = await store.save_message(other_chat_id, "assistant", "Other bot")
+            await store.save_message(other_chat_id, "assistant", "Other bot")
             later_answer = await store.save_message(_CHAT_ID, "assistant", "Later reply")
 
         before = await _history(regen_db)
@@ -181,13 +182,20 @@ class TestRegenerateService:
             yield StreamChunk(content="Replacement reply")
 
         with (
-            patch("mai_gram.bot.regenerate_service.get_session", regen_db.begin),
             patch(_STREAM, side_effect=stream) as mock_stream,
         ):
             generation = asyncio.create_task(_targeted_regen(service, target.id))
             try:
                 await asyncio.wait_for(started.wait(), timeout=2)
                 assert await _history(regen_db) == before
+
+                async def write_other_chat() -> None:
+                    async with regen_db.begin() as session:
+                        await MessageStore(session).save_message(
+                            other_chat_id, "user", "Concurrent"
+                        )
+
+                await asyncio.wait_for(write_other_chat(), timeout=1)
                 duplicates = await asyncio.gather(
                     *(_targeted_regen(service, target.id) for _ in range(7))
                 )
@@ -226,13 +234,119 @@ class TestRegenerateService:
             (new_question.id, "user", "New question"),
             (new_reply.id, "assistant", "New reply"),
         ]
-        assert await _history(regen_db, other_chat_id) == [
-            (other_answer.id, "assistant", "Other bot")
+        assert [
+            (role, content) for _, role, content in await _history(regen_db, other_chat_id)
+        ] == [
+            ("assistant", "Other bot"),
+            ("user", "Concurrent"),
         ]
         mock_stream.assert_called_once()
         messenger.delete_message.assert_not_awaited()
         messenger.send_typing_indicator.assert_awaited_once()
         assert "no longer available" in _last_outgoing_text(messenger)
+
+    @pytest.mark.parametrize("action", ["target", "retry"])
+    async def test_bound_generation_discards_rows_when_chat_advances(
+        self,
+        regen_db: async_sessionmaker[AsyncSession],
+        real_regen: tuple[RegenerateService, MagicMock, AssistantTurnBuilder],
+        action: str,
+    ) -> None:
+        async with regen_db.begin() as session:
+            store = MessageStore(session)
+            pending = await store.save_message(_CHAT_ID, "user", "Question")
+            target = None
+            if action == "target":
+                target = await store.save_message(_CHAT_ID, "assistant", "Original answer")
+        before = await _history(regen_db)
+        service, messenger, _ = real_regen
+        messenger.get_callback_source_message.return_value.message_id = "77"
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stream(
+            *_: object,
+            on_assistant_tool_call: Callable[..., Awaitable[None]],
+            on_tool_result: Callable[..., Awaitable[None]],
+            **__: object,
+        ) -> AsyncIterator[StreamChunk]:
+            await on_assistant_tool_call(
+                content="", tool_calls=[ToolCall(id="call", name="lookup", arguments="{}")]
+            )
+            await on_tool_result(
+                tool_call_id="call",
+                tool_name="lookup",
+                arguments="{}",
+                result="found",
+                content="found",
+                error=None,
+                server_name=None,
+            )
+            started.set()
+            await release.wait()
+            yield StreamChunk(content="Stale answer")
+
+        async def append() -> int:
+            async with regen_db.begin() as session:
+                row = await MessageStore(session).save_message(_CHAT_ID, "user", "New question")
+                return row.id
+
+        with patch(_STREAM, side_effect=stream):
+            if target is None:
+                generation = service.handle_regenerate(
+                    _make_message(chat_id="tg-chat", callback_data="confirm_retry"),
+                    previous_response_ids=[],
+                    retry_ref=pending.history_ref,
+                )
+            else:
+                generation = _targeted_regen(service, target.id)
+            task = asyncio.create_task(generation)
+            try:
+                await asyncio.wait_for(started.wait(), timeout=2)
+                assert await _history(regen_db) == before
+                new_id = await asyncio.wait_for(append(), timeout=1)
+            finally:
+                release.set()
+                result = await task
+
+        assert result is None
+        assert await _history(regen_db) == [*before, (new_id, "user", "New question")]
+        assert "no longer available" in _last_outgoing_text(messenger)
+
+    async def test_targeted_regen_allows_writes_during_final_delivery(
+        self,
+        regen_db: async_sessionmaker[AsyncSession],
+        real_regen: tuple[RegenerateService, MagicMock, AssistantTurnBuilder],
+    ) -> None:
+        other_chat_id = "test-user@other-bot"
+        async with regen_db.begin() as session:
+            session.add(_make_chat(other_chat_id, "other-bot"))
+            store = MessageStore(session)
+            await store.save_message(_CHAT_ID, "user", "Question")
+            target = await store.save_message(_CHAT_ID, "assistant", "Original answer")
+        before = await _history(regen_db)
+        service, messenger, _ = real_regen
+
+        async def stream(*_: object, **__: object) -> AsyncIterator[StreamChunk]:
+            yield StreamChunk(content="Replacement")
+
+        async def send(*_: object) -> SendResult:
+            assert await _history(regen_db) == before
+
+            async def append() -> None:
+                async with regen_db.begin() as session:
+                    await MessageStore(session).save_message(other_chat_id, "user", "Concurrent")
+
+            await asyncio.wait_for(append(), timeout=1)
+            return SendResult(success=True, message_id="42")
+
+        messenger.send_message.side_effect = send
+        with patch(_STREAM, side_effect=stream):
+            assert await _targeted_regen(service, target.id) == ["42"]
+        assert [(role, content) for _, role, content in await _history(regen_db)] == [
+            ("user", "Question"),
+            ("assistant", "Replacement"),
+        ]
 
     @pytest.mark.parametrize("history", ["opener", "cut", "cut_tool_call"])
     async def test_targeted_regen_without_visible_input_preserves_history(
@@ -266,7 +380,6 @@ class TestRegenerateService:
         before = await _history(regen_db)
         service, messenger, _ = real_regen
         with (
-            patch("mai_gram.bot.regenerate_service.get_session", regen_db.begin),
             patch(_STREAM) as stream,
         ):
             result = await _targeted_regen(service, target.id)
@@ -290,7 +403,6 @@ class TestRegenerateService:
         before = await _history(regen_db)
         service, _, builder = real_regen
         with (
-            patch("mai_gram.bot.regenerate_service.get_session", regen_db.begin),
             patch.object(builder, "build_request", side_effect=OSError("build failed")),
             pytest.raises(OSError, match="build failed"),
         ):
@@ -339,17 +451,16 @@ class TestRegenerateService:
         async def success_stream(*_: object, **__: object) -> AsyncIterator[StreamChunk]:
             yield StreamChunk(content="Replacement")
 
-        with patch("mai_gram.bot.regenerate_service.get_session", regen_db.begin):
-            with patch(_STREAM, side_effect=fail_stream):
-                result = await _targeted_regen(service, target.id)
-            assert await _history(regen_db) == before
-            assert result is None
-            assert "AI provider error" in _last_outgoing_text(messenger)
-            messenger.build_inline_keyboard.assert_called_once_with(
-                [[("🔄 Regenerate", f"regen:{target.id}")]]
-            )
-            with patch(_STREAM, side_effect=success_stream):
-                assert await _targeted_regen(service, target.id) == ["42"]
+        with patch(_STREAM, side_effect=fail_stream):
+            result = await _targeted_regen(service, target.id)
+        assert await _history(regen_db) == before
+        assert result is None
+        assert "AI provider error" in _last_outgoing_text(messenger)
+        messenger.build_inline_keyboard.assert_called_once_with(
+            [[("🔄 Regenerate", f"regen:{target.id}")]]
+        )
+        with patch(_STREAM, side_effect=success_stream):
+            assert await _targeted_regen(service, target.id) == ["42"]
 
         assert [(role, content) for _, role, content in await _history(regen_db)] == [
             ("user", "Question"),

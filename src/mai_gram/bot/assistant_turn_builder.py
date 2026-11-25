@@ -86,9 +86,13 @@ class AssistantTurnBuilder:
         telegram_chat_id: str,
         failure_log_message: str,
         current_time: datetime | None = None,
+        through_message_id: int | None = None,
     ) -> AssistantTurnRequest:
         now = current_time or datetime.now(timezone.utc)
-        message_store, wiki_store = self._make_stores(session)
+        message_store = MessageStore(session, through_message_id=through_message_id)
+        wiki_store = WikiStore(
+            session, data_dir=self._memory_data_dir, commit_writes=through_message_id is not None
+        )
         recent = await message_store.get_recent(chat.id, limit=1)
         pending = recent[0] if recent and recent[0].role in ("user", "tool") else None
         return await self._build_request(

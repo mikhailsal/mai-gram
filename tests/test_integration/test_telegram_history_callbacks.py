@@ -412,6 +412,35 @@ async def test_bound_confirmations_survive_restart_but_reject_a_restored_id_alia
     assert "no longer available" in restarted.api.send_message.await_args.kwargs["text"]
 
 
+async def test_targeted_regen_removes_preview_after_stream_failure(flow, monkeypatch):
+    await add_row("user", "Original question.")
+    original = await add_row("assistant", "Original answer.")
+    action = f"regen:{original.history_ref}"
+    await flow.press(action, flow.message(301, original.content, buttons=[action]))
+    yes, dialog = flow.last_dialog(401)
+
+    async def generate(*args, **kwargs):
+        yield StreamChunk(content="Replacement preview.")
+        raise LLMProviderError("Offline test failure after preview")
+
+    monkeypatch.setattr("mai_gram.bot.conversation_executor.run_with_tools_stream", generate)
+    preview_id = next(flow.ids)
+
+    async def send(**kwargs):
+        if kwargs["text"].endswith("▍"):
+            return SimpleNamespace(message_id=preview_id)
+        return SimpleNamespace(message_id=next(flow.ids))
+
+    flow.api.send_message.side_effect = send
+    await flow.press(yes, dialog)
+
+    assert (await rows())[-1].history_ref == original.history_ref
+    deleted = [call.kwargs["message_id"] for call in flow.api.delete_message.await_args_list]
+    assert [message_id for message_id in deleted if message_id != 401] == [preview_id]
+    retry, _ = flow.last_dialog(402)
+    assert retry == action
+
+
 @pytest.mark.parametrize("partial", [False, True], ids=["total_failure", "partial_delivery"])
 async def test_targeted_regen_preserves_history_until_full_delivery(flow, monkeypatch, partial):
     question = await add_row("user", "Original question.")
@@ -443,6 +472,7 @@ async def test_targeted_regen_preserves_history_until_full_delivery(flow, monkey
     monkeypatch.setattr("mai_gram.bot.conversation_executor.run_with_tools_stream", generate)
     replacement_actions = []
     accepted_body = []
+    attempt_ids = []
     reject_first_part = True
 
     async def send(**kwargs):
@@ -455,7 +485,10 @@ async def test_targeted_regen_preserves_history_until_full_delivery(flow, monkey
             if reject_first_part and "Replacement begins." in text:
                 raise BadRequest("Final answer send rejected")
             accepted_body.append(text)
-        return SimpleNamespace(message_id=next(flow.ids))
+        message_id = next(flow.ids)
+        if "Could not deliver" not in text:
+            attempt_ids.append(message_id)
+        return SimpleNamespace(message_id=message_id)
 
     async def edit(**kwargs):
         if "Replacement" in kwargs["text"]:
@@ -470,6 +503,9 @@ async def test_targeted_regen_preserves_history_until_full_delivery(flow, monkey
     assert any("Replacement ends." in text for text in accepted_body) is partial
     assert any("🔧 lookup" in call.kwargs["text"] for call in flow.api.send_message.await_args_list)
     assert "Could not deliver" in flow.api.send_message.await_args.kwargs["text"]
+    deleted = [call.kwargs["message_id"] for call in flow.api.delete_message.await_args_list]
+    assert attempt_ids
+    assert sorted(message_id for message_id in deleted if message_id != 401) == sorted(attempt_ids)
 
     reject_first_part = False
     await flow.press(yes, dialog)

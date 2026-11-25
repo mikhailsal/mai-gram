@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from mai_gram.db.models import Chat
     from mai_gram.llm.provider import ChatMessage
     from mai_gram.mcp_servers.manager import MCPManager
@@ -44,6 +47,7 @@ class AssistantTurnRequest:
     resolved_model: str | None = None
     retry_ref: str | None = None
     regenerate_target_id: int | str | None = None
+    persist_generated: Callable[[], Awaitable[bool]] | None = None
 
     @property
     def model_for_api(self) -> str:
@@ -209,3 +213,27 @@ def build_structured_parts(
 
     header_html = "\n\n".join(header_parts) if header_parts else ""
     return header_html, content_text
+
+
+def final_header_html(request: AssistantTurnRequest, outcome: StreamOutcome) -> str:
+    reasoning = outcome.response_reasoning
+    if not request.show_reasoning or not reasoning or outcome.reasoning_committed:
+        return ""
+    from mai_gram.core.md_to_telegram import format_reasoning_html
+
+    return format_reasoning_html(reasoning, expandable=True) if reasoning.strip() else ""
+
+
+def sanitize_and_validate(
+    request: AssistantTurnRequest,
+    outcome: StreamOutcome,
+    template: ResponseTemplate,
+) -> tuple[StreamOutcome, ParsedResponse, list[str]]:
+    sanitized = template.sanitize(outcome.response_text)
+    if sanitized != outcome.response_text:
+        logging.getLogger(__name__).info(
+            "Tier 1 (regex) corrected format for chat %s", request.chat.id
+        )
+        outcome = replace_response_text(outcome, sanitized)
+    parsed = template.parse(outcome.response_text)
+    return outcome, parsed, template.validate(parsed)

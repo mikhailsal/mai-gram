@@ -78,19 +78,53 @@ async def cut_history(
     return int(count or 0)
 
 
-async def rollback_history(session: AsyncSession, chat_id: str, target: int | str) -> bool:
-    """Delete the exact target and its suffix within the caller's transaction."""
+def latest_history_ref(chat_id: str) -> ColumnElement[str]:
+    return (
+        select(Message.history_ref)
+        .where(Message.chat_id == chat_id)
+        .order_by(Message.id.desc())
+        .limit(1)
+        .correlate(None)
+        .scalar_subquery()
+    )
+
+
+async def save_generated_history(
+    session: AsyncSession,
+    chat_id: str,
+    *,
+    expected_tail: str,
+    expected_cut: int | None,
+    rows: list[Message],
+    target: Message | None,
+) -> bool:
+    """Check the generation's input under the writer lock, then apply its rows."""
     connection = await session.connection()
-    message_id = await connection.scalar(
-        delete(Message)
-        .where(assistant_message_target(chat_id, target), Message.chat.has())
-        .returning(Message.id)
+    current = await connection.execute(
+        update(Chat)
+        .where(
+            Chat.id == chat_id,
+            Chat.cut_above_message_id.is_not_distinct_from(expected_cut),
+            latest_history_ref(chat_id) == expected_tail,
+        )
+        .values(id=Chat.id)
     )
-    if message_id is None:
+    if current.rowcount != 1:
         return False
-    await connection.execute(
-        delete(Message).where(Message.chat_id == chat_id, Message.id > message_id)
-    )
+
+    if target is not None:
+        matching_id = await connection.scalar(
+            select(Message.id).where(
+                Message.id == target.id, assistant_message_target(chat_id, target.history_ref)
+            )
+        )
+        if matching_id is None:
+            return False
+        await connection.execute(
+            delete(Message).where(Message.chat_id == chat_id, Message.id >= target.id)
+        )
+    session.add_all(rows)
+    await session.flush()
     return True
 
 
@@ -100,19 +134,11 @@ async def claim_retry(
     token: str,
     confirmation: tuple[str, str] | None,
 ) -> bool:
-    """Start a write transaction only for a still-current pending turn."""
-    latest_id = (
-        select(Message.id)
-        .where(Message.chat_id == chat_id)
-        .order_by(Message.id.desc())
-        .limit(1)
-        .correlate(None)
-        .scalar_subquery()
-    )
+    """Claim the confirmation only while its pending turn is current."""
     eligible = (
         select(Message.id)
         .where(
-            Message.id == latest_id,
+            Message.history_ref == latest_history_ref(chat_id),
             Message.history_ref == token,
             Message.role.in_(("user", "tool")),
         )

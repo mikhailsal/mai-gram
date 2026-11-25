@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from sqlalchemy import and_, asc, desc, func, select
 
@@ -15,6 +16,7 @@ from mai_gram.llm.provider import MessageRole, ToolCall
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql import ColumnElement
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +122,16 @@ def _to_utc_naive(dt: datetime) -> datetime:
 class MessageStore:
     """Data access layer for conversation messages."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, through_message_id: int | None = None) -> None:
         self._session = session
+        self._through_message_id = through_message_id
+        self.staged: list[Message] = []
+
+    def _chat_history(self, chat_id: str) -> ColumnElement[bool]:
+        match = Message.chat_id == chat_id
+        if self._through_message_id is not None:
+            match &= Message.id <= self._through_message_id
+        return match
 
     async def save_message(
         self,
@@ -137,11 +147,11 @@ class MessageStore:
         show_datetime: bool = True,
         commit: bool = False,
     ) -> Message:
-        """Persist a message and optionally commit before exposing its ID."""
+        """Save a message, staging it when the store is bound to a history prefix."""
         if timestamp is not None:
             result = await self._session.execute(
                 select(Message.timestamp)
-                .where(Message.chat_id == chat_id)
+                .where(self._chat_history(chat_id))
                 .order_by(desc(Message.timestamp), desc(Message.id))
                 .limit(1)
             )
@@ -168,6 +178,13 @@ class MessageStore:
         if timestamp is not None:
             message.timestamp = timestamp
 
+        if self._through_message_id is not None:
+            message.history_ref = uuid4().hex
+            if timestamp is None:
+                message.timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
+            self.staged.append(message)
+            return message
+
         self._session.add(message)
         await self._session.flush()
         if commit:
@@ -186,7 +203,7 @@ class MessageStore:
         If *after_message_id* is set, only messages with id > that value
         are returned (used by the "cut this & above" feature).
         """
-        conditions = [Message.chat_id == chat_id]
+        conditions = [self._chat_history(chat_id)]
         if after_message_id is not None:
             conditions.append(Message.id > after_message_id)
         result = await self._session.execute(
@@ -200,7 +217,7 @@ class MessageStore:
     ) -> list[Message]:
         """Return all messages for a chat ordered by id ascending."""
         result = await self._session.execute(
-            select(Message).where(Message.chat_id == chat_id).order_by(asc(Message.id))
+            select(Message).where(self._chat_history(chat_id)).order_by(asc(Message.id))
         )
         return list(result.scalars().all())
 
@@ -220,7 +237,7 @@ class MessageStore:
             select(Message)
             .where(
                 and_(
-                    Message.chat_id == chat_id,
+                    self._chat_history(chat_id),
                     func.unicode_lower(Message.content).like(pattern, escape="\\"),
                 )
             )
@@ -241,7 +258,7 @@ class MessageStore:
             select(Message)
             .where(
                 and_(
-                    Message.chat_id == chat_id,
+                    self._chat_history(chat_id),
                     Message.timestamp >= start,
                     Message.timestamp < end,
                 )
@@ -259,7 +276,10 @@ class MessageStore:
         """Return distinct dates that have messages, ordered chronologically."""
         date_col = func.date(Message.timestamp)
         query = (
-            select(date_col).where(Message.chat_id == chat_id).group_by(date_col).order_by(date_col)
+            select(date_col)
+            .where(self._chat_history(chat_id))
+            .group_by(date_col)
+            .order_by(date_col)
         )
         if before_date is not None:
             query = query.where(Message.timestamp < datetime.combine(before_date, time.min))
@@ -275,7 +295,7 @@ class MessageStore:
         result = await self._session.execute(
             select(Message).where(
                 and_(
-                    Message.chat_id == chat_id,
+                    self._chat_history(chat_id),
                     Message.id == message_id,
                 )
             )
@@ -299,7 +319,7 @@ class MessageStore:
             select(Message)
             .where(
                 and_(
-                    Message.chat_id == chat_id,
+                    self._chat_history(chat_id),
                     Message.id < message_id,
                 )
             )
@@ -313,7 +333,7 @@ class MessageStore:
             select(Message)
             .where(
                 and_(
-                    Message.chat_id == chat_id,
+                    self._chat_history(chat_id),
                     Message.id > message_id,
                 )
             )
@@ -335,7 +355,7 @@ class MessageStore:
         end_date: date | None = None,
     ) -> tuple[list[Message], int]:
         """Return paginated messages with optional date filtering."""
-        conditions = [Message.chat_id == chat_id]
+        conditions = [self._chat_history(chat_id)]
 
         if start_date is not None:
             start = datetime.combine(start_date, time.min)

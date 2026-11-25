@@ -338,9 +338,8 @@ class ResponseRenderer:
                         chat_id, placeholder_msg_id, header_html
                     )
                     if not header_edited:
-                        header_id = await self._send_part(chat_id, header_html)
-                        if header_id:
-                            sent_ids.append(header_id)
+                        header_delivery = await self._deliver_part(chat_id, header_html)
+                        sent_ids.extend(header_delivery.sent_message_ids)
                     placeholder_msg_id = None
 
             is_last = index == len(raw_parts) - 1
